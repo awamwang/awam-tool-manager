@@ -487,9 +487,9 @@ async def list_resources() -> list[Resource]:
     log("收到 list_resources 请求")
     return [
         Resource(
-            uri="awam://launchers",
-            name="启动器列表",
-            description="所有已接入的启动器（工具集）",
+            uri="awam://mcp-servers",
+            name="MCP 服务器列表",
+            description="所有已接入的 MCP 服务器",
             mimeType="application/json"
         ),
         Resource(
