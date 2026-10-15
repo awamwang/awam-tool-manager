@@ -4,12 +4,14 @@
 只验证状态机、清理顺序、超时与缓存保护四件事。
 """
 import asyncio
+import shutil
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+import backend_client  # noqa: E402  —— monkeypatch 需要模块对象本身
 from backend_client import BackendClient, BackendManager, BackendBusyError  # noqa: E402
 
 
@@ -496,3 +498,358 @@ def test_call_backend_tool_reports_busy():
     assert result["errorType"] == "backend_busy"
     assert result["success"] is False
     assert "正在处理其他调用" in result["error"]
+
+
+# ---- A6：后端依赖自动安装（ensure_installed）与启动预热 ----
+#
+# 背景：tools/*.json 的 install 字段此前是死元数据，包没全局安装时
+# start_backend 必然失败且永不自愈。这里把「检测缺失 → 自动安装一次 →
+# 装完复检」的逻辑固化成用例，安装命令全部用替身执行，不碰真实 npm。
+
+
+class FakeInstallProcess:
+    """模拟 create_subprocess_shell 返回的进程对象"""
+
+    def __init__(self, returncode: int = 0, stderr: bytes = b""):
+        self.returncode = returncode
+        self._stderr = stderr
+        self.killed = False
+
+    async def communicate(self):
+        return (b"", self._stderr)
+
+    def kill(self):
+        self.killed = True
+
+    async def wait(self):
+        return self.returncode
+
+
+def _fake_install_factory(calls, returncode: int = 0, stderr: bytes = b""):
+    """记录安装命令并返回可控的假进程"""
+
+    async def factory(command, **kwargs):
+        calls.append(command)
+        return FakeInstallProcess(returncode, stderr)
+
+    return factory
+
+
+class _FakeStdioContext:
+    """假装 stdio_client(params)：不进真实子进程，__aenter__ 给出两个流"""
+
+    def __init__(self, tracker: list):
+        self.tracker = tracker
+
+    async def __aenter__(self):
+        self.tracker.append("enter:stdio")
+        return (object(), object())
+
+    async def __aexit__(self, *args):
+        self.tracker.append("exit:stdio")
+
+
+class _FakeSession:
+    """假装 ClientSession：initialize / list_tools 都成功"""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        pass
+
+    async def initialize(self):
+        pass
+
+    async def list_tools(self):
+        class _Result:
+            tools = []
+
+        return _Result()
+
+
+def test_resolved_command_unwraps_shell_wrappers():
+    """which 必须盯着壳后面的真实目标，否则 cmd.exe 永远命中，
+    「没安装」会被误判成「已安装」"""
+    c = BackendClient("x", {})
+    assert c._resolved_command({"command": "cmd.exe", "args": ["/c", "foo"]}) == "foo"
+    assert c._resolved_command({"command": "cmd", "args": ["/k", "foo"]}) == "foo"
+    assert c._resolved_command({"command": "powershell.exe", "args": ["-Command", "foo"]}) == "foo"
+    assert c._resolved_command({"command": "pwsh", "args": ["-c", "foo"]}) == "foo"
+    assert c._resolved_command({"command": "bash", "args": ["-c", "foo"]}) == "foo"
+    assert c._resolved_command({"command": "sh", "args": ["-c", "foo"]}) == "foo"
+
+
+def test_resolved_command_edge_cases():
+    """直接形式、参数不够、非壳程序、引号、缺 command"""
+    c = BackendClient("x", {})
+    # 直接形式：command 自身就是目标（绝对路径 which 也认）
+    assert c._resolved_command({"command": "everything-search-mcp"}) == "everything-search-mcp"
+    assert c._resolved_command({"command": r"C:\tools\foo.exe"}) == r"C:\tools\foo.exe"
+    # 壳包裹但参数不够：没有目标可剥，退回 command 自身
+    assert c._resolved_command({"command": "cmd.exe", "args": ["/c"]}) == "cmd.exe"
+    # 非壳程序的 /c 不算开关
+    assert c._resolved_command({"command": "foo", "args": ["/c", "bar"]}) == "foo"
+    # 引号包裹的目标要剥掉（路径带空格的常见写法）
+    assert c._resolved_command({"command": "cmd.exe", "args": ["/c", '"foo bar"']}) == "foo bar"
+    # 没有 command
+    assert c._resolved_command({}) is None
+    assert c._resolved_command({"args": ["/c", "foo"]}) is None
+
+
+def test_ensure_installed_skips_when_target_on_path(monkeypatch):
+    """已在 PATH 上：不执行安装，也不读 install 配置"""
+    monkeypatch.setattr(shutil, "which", lambda name: f"C:\\bin\\{name}")
+    calls = []
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_install_factory(calls))
+
+    client = BackendClient(
+        "x",
+        {"command": "cmd.exe", "args": ["/c", "foo"]},
+        {"method": "npm", "command": "npm i -g foo"},
+    )
+    result = asyncio.run(client.ensure_installed())
+
+    assert result == {"success": True, "available": True, "installed": False}
+    assert calls == []
+
+
+def test_ensure_installed_without_install_config_does_not_block(monkeypatch):
+    """没有 install.command：如实报告不可用但不阻塞，由 spawn 产出原生错误"""
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    calls = []
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_install_factory(calls))
+
+    client = BackendClient("x", {"command": "cmd.exe", "args": ["/c", "foo"]})
+    result = asyncio.run(client.ensure_installed())
+
+    assert result["success"] is True
+    assert result["available"] is False
+    assert result["installed"] is False
+    assert result["note"] == "未配置安装命令"
+    assert calls == []
+
+
+def test_ensure_installed_reports_unavailable_when_command_missing(monkeypatch):
+    """没配 command：解析不出目标，如实报告不可用但不阻塞（spawn 会原生报错）"""
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    calls = []
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_install_factory(calls))
+
+    client = BackendClient("x", {"type": "stdio"}, {"command": "npm i -g foo"})
+    result = asyncio.run(client.ensure_installed())
+
+    assert result["success"] is True
+    assert result["available"] is False
+    assert result["note"] == "无法解析启动命令"
+    assert calls == []  # 没有目标可检测，安装无从谈起
+
+
+def test_ensure_installed_ignores_malformed_install_config(monkeypatch):
+    """install 是坏数据（字符串/数字）时不能炸掉启动路径"""
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    calls = []
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_install_factory(calls))
+
+    client = BackendClient("x", {"command": "cmd.exe", "args": ["/c", "foo"]}, "npm i -g foo")
+    result = asyncio.run(client.ensure_installed())
+
+    assert result["success"] is True
+    assert result["available"] is False
+    assert calls == []  # 解析不出安装命令，与「没配」同等对待
+
+
+def test_ensure_installed_installs_once_then_short_circuits(monkeypatch):
+    """装一次：安装后目标出现在 PATH 上；之后再调用直接短路，不重复装"""
+    state = {"which": None}
+    monkeypatch.setattr(shutil, "which", lambda name: state["which"])
+    calls = []
+
+    async def factory(command, **kwargs):
+        calls.append(command)
+        state["which"] = f"C:\\bin\\{command}"  # 安装后 which 命中
+        return FakeInstallProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", factory)
+
+    client = BackendClient(
+        "x",
+        {"command": "cmd.exe", "args": ["/c", "foo"]},
+        {"method": "npm", "command": "npm i -g foo"},
+    )
+
+    first = asyncio.run(client.ensure_installed())
+    assert first == {"success": True, "available": True, "installed": True}
+    assert calls == ["npm i -g foo"]
+
+    second = asyncio.run(client.ensure_installed())
+    assert second == {"success": True, "available": True, "installed": False}
+    assert calls == ["npm i -g foo"]  # available 短路，根本不进安装分支
+
+
+def test_ensure_installed_does_not_retry_after_failure(monkeypatch):
+    """安装失败后不重复锤 npm；重试路径是重启服务或改配置触发重建"""
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    calls = []
+    monkeypatch.setattr(
+        asyncio,
+        "create_subprocess_shell",
+        _fake_install_factory(calls, returncode=1, stderr=b"npm ERR! network"),
+    )
+
+    client = BackendClient(
+        "x",
+        {"command": "cmd.exe", "args": ["/c", "foo"]},
+        {"command": "npm i -g foo"},
+    )
+
+    first = asyncio.run(client.ensure_installed())
+    assert first["success"] is False
+    assert first["installed"] is False
+    assert "退出码 1" in first["error"]
+    assert "npm ERR! network" in first["error"]  # stderr 尾部要带回，便于排障
+
+    second = asyncio.run(client.ensure_installed())
+    assert second["success"] is False
+    assert "跳过重复" in second["error"]
+    assert calls == ["npm i -g foo"]  # 只执行过一次
+
+
+def test_ensure_installed_reports_when_command_ok_but_target_missing(monkeypatch):
+    """安装退出码 0 但目标仍不在 PATH：如实报告，不谎报成功"""
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    calls = []
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_install_factory(calls))
+
+    client = BackendClient(
+        "x",
+        {"command": "cmd.exe", "args": ["/c", "foo"]},
+        {"command": "npm i -g foo"},
+    )
+    result = asyncio.run(client.ensure_installed())
+
+    assert result["success"] is False
+    assert result["installed"] is True
+    assert "仍不在 PATH" in result["error"]
+
+
+def test_ensure_installed_times_out_and_kills_process(monkeypatch):
+    """安装超时：杀进程、报错，不会无限等下去"""
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    procs = []
+
+    class HangingProcess(FakeInstallProcess):
+        async def communicate(self):
+            await asyncio.sleep(3600)  # 永远不返回
+
+    async def factory(command, **kwargs):
+        proc = HangingProcess()
+        procs.append(proc)
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", factory)
+
+    client = BackendClient(
+        "x",
+        {"command": "cmd.exe", "args": ["/c", "foo"]},
+        {"command": "npm i -g foo"},
+    )
+    client.INSTALL_TIMEOUT = 0.05
+    result = asyncio.run(client.ensure_installed())
+
+    assert result["success"] is False
+    assert "超时" in result["error"]
+    assert procs[0].killed is True  # 超时不是干等，子进程必须被收掉
+
+
+def test_start_installs_missing_dependency_before_spawn(monkeypatch):
+    """A6：start() 在 spawn 之前先自装缺失依赖；装完继续走正常启动流程"""
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    calls = []
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_install_factory(calls))
+
+    tracker = []
+    monkeypatch.setattr(backend_client, "stdio_client", lambda params: _FakeStdioContext(tracker))
+    monkeypatch.setattr(backend_client, "ClientSession", lambda r, w: _FakeSession())
+
+    client = BackendClient(
+        "x",
+        {"command": "cmd.exe", "args": ["/c", "foo"], "timeout": 5},
+        {"command": "npm i -g foo"},
+    )
+
+    async def run():
+        result = await client.start()
+        await client.stop()  # 收掉心跳任务，避免 loop 关闭时的 pending 警告
+        return result
+
+    result = asyncio.run(run())
+
+    assert calls == ["npm i -g foo"], "spawn 之前必须先安装"
+    assert result["success"] is True
+    assert "enter:stdio" in tracker  # 安装后继续走了正常启动流程
+    assert any("依赖已自动安装" in log["message"] for log in client.logs)
+
+
+def test_get_client_passes_and_tracks_install_config():
+    """install 元数据必须透传给客户端，否则 ensure_installed 无从装起"""
+    store = FakeStore({
+        "mcp1": {
+            "id": "mcp1",
+            "kind": "mcp",
+            "connection": {"type": "stdio"},
+            "install": {"command": "npm i -g x"},
+        }
+    })
+    manager = BackendManager(store)
+    client = manager.get_client("mcp1")
+    assert client.install_config == {"command": "npm i -g x"}
+
+
+def test_get_client_rebuilds_when_only_install_changed():
+    """只改 install 也要重建客户端，否则新的安装命令不生效"""
+    store = FakeStore({"mcp1": _mcp_tool({"type": "stdio"})})
+    store.tools["mcp1"]["install"] = {"command": "old"}
+    manager = BackendManager(store)
+
+    first = manager.get_client("mcp1")
+    assert first.install_config == {"command": "old"}
+    first.status = BackendClient.STATUS_STOPPED  # 空闲才允许热替换
+
+    store.tools["mcp1"]["install"] = {"command": "new"}
+    second = manager.get_client("mcp1")
+    assert second is not first
+    assert second.install_config == {"command": "new"}
+
+
+def test_ensure_all_installed_warms_every_mcp_tool(monkeypatch):
+    """预热遍历所有 MCP 工具：只装不启；无 install 的不阻塞；app 类不参与"""
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    calls = []
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_install_factory(calls))
+
+    store = FakeStore({
+        "mcp1": {
+            "id": "mcp1",
+            "kind": "mcp",
+            "connection": {"type": "stdio", "command": "cmd.exe", "args": ["/c", "tool-a"]},
+            "install": {"command": "npm i -g a"},
+        },
+        "mcp2": {
+            "id": "mcp2",
+            "kind": "mcp",
+            "connection": {"type": "stdio", "command": "cmd.exe", "args": ["/c", "tool-b"]},
+        },  # 无 install
+        "mcp3": {"id": "mcp3", "kind": "mcp"},  # 缺 connection，预热时跳过
+        "app1": {"id": "app1", "kind": "app"},  # 非 mcp，不预热
+    })
+    manager = BackendManager(store)
+    result = asyncio.run(manager.ensure_all_installed())
+
+    assert result["total"] == 2
+    assert result["available"] == 0
+    assert result["installed"] == 1  # 只有 mcp1 有安装命令
+    assert calls == ["npm i -g a"]
+
+    by_id = {d["tool_id"]: d for d in result["details"]}
+    assert by_id["mcp2"]["available"] is False  # 没配 install：不阻塞，如实报告

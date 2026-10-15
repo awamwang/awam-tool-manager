@@ -311,3 +311,53 @@ def test_call_tool_returns_structured_result():
     assert res.structuredContent["success"] is True
     # 文本通道保留（向后兼容）
     assert "tools" in json.loads(res.content[0].text)
+
+
+# ---- A6：启动预热 ----
+#
+# _prewarm_backends 在服务启动时后台执行：只装不启、异常全吞。
+# 最坏情况必须退化为「首次 start_backend 时现场装」，绝不能拖垮服务。
+
+
+def test_prewarm_logs_install_summary(monkeypatch, capsys):
+    """预热装了什么要在启动日志里说清楚"""
+
+    async def fake_ensure_all_installed():
+        return {"success": True, "total": 3, "available": 2, "installed": 1, "details": []}
+
+    monkeypatch.setattr(
+        server.backend_manager, "ensure_all_installed", fake_ensure_all_installed
+    )
+    run(server._prewarm_backends())
+
+    err = capsys.readouterr().err
+    assert "已自动安装 1 个后端依赖" in err
+    assert "共 3 个 MCP 工具" in err
+
+
+def test_prewarm_logs_when_everything_ready(monkeypatch, capsys):
+    """全部就绪时也留一行日志，避免「静默成功」无法确认预热跑过"""
+
+    async def fake_ensure_all_installed():
+        return {"success": True, "total": 2, "available": 2, "installed": 0, "details": []}
+
+    monkeypatch.setattr(
+        server.backend_manager, "ensure_all_installed", fake_ensure_all_installed
+    )
+    run(server._prewarm_backends())
+
+    assert "依赖均已就绪" in capsys.readouterr().err
+
+
+def test_prewarm_swallows_failures(monkeypatch, capsys):
+    """预热异常必须被吞掉：服务照常就绪，退化为首次调用时按需安装"""
+
+    async def boom():
+        raise RuntimeError("模拟预热炸了")
+
+    monkeypatch.setattr(server.backend_manager, "ensure_all_installed", boom)
+    run(server._prewarm_backends())  # 不抛异常即通过
+
+    err = capsys.readouterr().err
+    assert "启动预热失败" in err
+    assert "不影响服务" in err

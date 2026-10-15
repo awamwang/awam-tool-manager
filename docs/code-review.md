@@ -6,7 +6,35 @@
 
 ---
 
-## 0. 第八次更新：structuredContent / outputSchema 启用（最新）
+## 0. 第九次更新：A6 —— 后端依赖自动安装 + 启动预热（最新）
+
+**起因（用户实测反馈）**：`everything-search-mcp` 经 toolport 调用 `start_backend` 总是超时。
+逐阶段计时定位到耗时全在 `npx -y` 的 registry 往返（9–26s 波动），与后端 initialize 无关；
+修复为全局安装后直接调 shim（`27e0fea`）。但紧接着暴露一个更根本的问题：
+**`install` 字段从来只是死元数据** —— schema 声明了它，没有任何代码读取。
+包没全局安装时 `start_backend` 必然失败，且每次重试都一样失败（命令缺失是秒级失败，
+不会卡住，但也永远不会自愈）。本轮把它接成真能力：
+
+| 变更 | 说明 |
+|---|---|
+| `src/backend_client.py` | `BackendClient.__init__` 新增 `install_config`；新增 `ensure_installed()`（按需、幂等、只装一次）：`_resolved_command()` 先对壳包裹命令（`cmd /c foo`）剥壳解包出真实目标——不剥壳 `which("cmd.exe")` 永远命中，「没装」会被误判成「已装」；再 `shutil.which` 检测，缺失且配了 `install.command` 才执行安装（`create_subprocess_shell`，限时 `INSTALL_TIMEOUT=300s`，超时杀进程），装完复检。`_install_lock` + `_install_attempted` 保证不重复锤 npm |
+| `src/backend_client.py` | `start()` 在 spawn 前调用 `ensure_installed()`；**安装失败不阻断**——照旧 spawn 让原生错误说话，行为与接入前完全一致，不会把「本来能起」的配置误判死 |
+| `src/backend_client.py` | `BackendManager.get_client` 透传 `install` 配置（只改 `install` 也触发客户端重建）；新增 `ensure_all_installed()`：遍历所有 MCP 工具**只装不启** |
+| `src/server.py` | `main()` 启动时创建后台任务 `_prewarm_backends()`：把安装成本提前到服务启动阶段，首个 `start_backend` 不再被拖慢；异常全吞——最坏退化为「首次调用时现场装」，与没有预热完全一致；`finally` 里取消任务（取消路径会杀掉安装子进程，不留孤儿 npm） |
+| `src/schema.py` + `docs/format.md` | `install` 字段描述更新为「缺失时自动执行一次」，文档由生成器重新产出 |
+
+**设计边界**：没有 command / 解不出目标 → 不装不阻塞，交给 spawn 报原生错误；
+没有 `install.command` → 同样不阻塞。自装只会让启动更容易成功，不会让任何
+原本能启动的配置变得更糟。
+
+**实测**（临时探针工具，验证后已删除）：启动预热真实执行安装命令、复检后
+`which` 解析到 shim；已安装的 `everything-search-mcp` 无冗余安装；
+随后 `start_backend` 越过自装阶段进入 spawn（失败在连接层 `Connection closed`，
+而非依赖缺失）。合计 **106 passed**（7 个测试文件）。
+
+---
+
+## 0. 第八次更新：structuredContent / outputSchema 启用
 
 最后一项可选增强落地：把 `mcp` 依赖下限从 `>=1.9.0` 提到 `>=1.30.0`（structuredContent /
 outputSchema 是 1.30 起稳定的能力），并真正用上它们：
@@ -153,7 +181,7 @@ P0 与 P1 已全部关闭。剩余有效待办为 P2 的 D9–D15、P3 的 D17/D
 | 架构设计 | ⭐⭐⭐⭐ 分层清晰（接口 / 领域 / 存储 / 路由），职责边界干净 |
 | 契约一致性 | ⭐⭐⭐⭐ 修复后已对齐（原 ⭐⭐） |
 | 健壮性 | ⭐⭐⭐⭐⭐ 超时、清理、JSON 容错、原子写均已到位（原 ⭐⭐） |
-| 可维护性 | ⭐⭐⭐⭐⭐ 7 个测试文件共 89 个用例，含协议层回环与文档漂移检测（原 ⭐⭐） |
+| 可维护性 | ⭐⭐⭐⭐⭐ 7 个测试文件共 106 个用例，含协议层回环与文档漂移检测（原 ⭐⭐） |
 | 协议合规 | ⭐⭐⭐⭐⭐ annotations 已下发、destructive 门禁已落地、structuredContent / outputSchema 已启用（mcp>=1.30） |
 | 文档一致性 | ⭐⭐⭐⭐⭐ 字段表由 schema 生成，示例与 data/ 真实文件均入校验（原 ⭐⭐） |
 
@@ -162,7 +190,8 @@ P0 与 P1 已全部关闭。剩余有效待办为 P2 的 D9–D15、P3 的 D17/D
 **P0 / P1 / P2（D9–D15）/ P3 的 D17/D18/D19/D21/D22 已全部修复**；
 架构议题中 **A1（schema 校验）、A2（annotations + destructive 门禁）、
 A3（单后端串行 + 超限报 busy）、A4（由 schema 反向生成文档）均已落地**，
-最后一项可选增强 **A5（structuredContent / outputSchema，依赖下限提到 mcp>=1.30）** 也已完成。
+可选增强 **A5（structuredContent / outputSchema，依赖下限提到 mcp>=1.30）** 与
+**A6（`install` 元数据接入执行 + 启动预热，见 §0 第九次更新）** 也已完成。
 审核发现的问题与协议增强至此全部收口。
 
 > **A3 的收口方式（方案 2）**：同一后端任意时刻只允许一个 `call_tool` 在飞，
@@ -729,7 +758,12 @@ GetPromptResult"）→ **prompts/get 全部失败**。
     `list_tools` 给每个工具挂统一 `outputSchema`，合计 **89 passed**（见 §0 第八次更新）；
     协议回环已验证输出校验不报错。
 
-> 原先 §8 里有一个重复编号的「第三批（迭代，一致性）」小节，已合并到上面的批次。
+**第九批（已完成 ✅）**
+
+24. ~~**A6** —— `install` 元数据接入执行 + 启动预热~~ → `ensure_installed()`
+    （剥壳解包 → `shutil.which` 检测 → 限时装一次 → 复检）+ `start()` 前置调用 +
+    服务启动时 `ensure_all_installed()` 后台预热（只装不启），合计 **106 passed**
+    （见 §0 第九次更新）；已用临时探针工具实测「预热自装 → 复检可用 → start 越过自装」全链路。
 
 > 原先 §8 里有一个重复编号的「第三批（迭代，一致性）」小节，已合并到上面的批次。
 
@@ -744,8 +778,8 @@ pip install "mcp>=1.30.0,<2.0.0" pytest
 # 2) 静态检查
 python -m py_compile src/*.py tests/*.py scripts/*.py
 
-# 3) 单元测试（82 项：store/registry + backend_client 稳定性 + store 容错/原子写
-#    + server 分发 + 搜索语义/schema 校验/annotations/destructive 门禁 + 协议层回环
+# 3) 单元测试（106 项：store/registry + backend_client 稳定性与依赖自装 + store 容错/原子写
+#    + server 分发与启动预热 + 搜索语义/schema 校验/annotations/destructive 门禁 + 协议层回环
 #    + 文档与 schema 的一致性）
 python -m pytest tests/ -q
 
@@ -799,6 +833,41 @@ p = Path('data/backend-tools')
 print('残留:', [f.name for f in p.iterdir() if f.name.startswith('.')])
 (p/'_selftest.json').unlink()
 "
+
+# 9) A6 依赖自装复现（自包含：建临时探针 -> 预热自装 -> which 复检 -> 启动 -> 自动清理）
+python - <<'PY'
+import sys, asyncio, shutil
+from pathlib import Path
+sys.path.insert(0, 'src')
+from store import JsonStore
+from backend_client import BackendManager
+
+PROBE_ID = "awam-install-probe"
+probe = {
+    "id": PROBE_ID, "name": "A6 探针", "kind": "mcp",
+    "description": "临时探针，验证后由本脚本删除",
+    "connection": {"type": "stdio", "command": "cmd.exe", "args": ["/c", PROBE_ID]},
+    "install": {"method": "manual",
+                "command": "type NUL > %USERPROFILE%\\.local\\npm-global\\awam-install-probe.cmd"},
+}
+
+async def main():
+    m = BackendManager(JsonStore("data"))
+    m.store.save_tool(PROBE_ID, probe)  # 落盘探针条目
+    try:
+        assert shutil.which(PROBE_ID) is None, "探针目标应初始不存在"
+        print("预热:", await m.ensure_all_installed())   # 应真实执行 install
+        print("which:", shutil.which(PROBE_ID))          # 应解析到 .CMD shim
+        r = await m.start_backend(PROBE_ID)              # 越过自装进入 spawn，连接层失败属预期
+        print("start:", r["success"], r.get("error"))
+        await m.close_all()
+    finally:
+        (Path("data/tools") / f"{PROBE_ID}.json").unlink(missing_ok=True)
+
+asyncio.run(main())
+PY
+#   跑完记得删掉安装命令生成的 shim：
+#   %USERPROFILE%\.local\npm-global\awam-install-probe.cmd
 ```
 
 本次审核中 **D2、D9、D23、D24** 均通过上述方式实测确认；
@@ -808,6 +877,10 @@ D9 / D10 / D12 / D13 / D14 / D15 由新增的 `tests/test_store.py`、`test_back
 D17 / D18 / A1 / A2 由 `tests/test_registry_policy.py` 覆盖，
 D24 / D25 / D26 由 `tests/test_protocol_roundtrip.py`（真实 MCP 会话）覆盖，
 A4 由 `tests/test_docs_sync.py` 覆盖，A5（structuredContent / outputSchema）由
-`tests/test_protocol_roundtrip.py` + `tests/test_server_dispatch.py` 覆盖（合计 `89 passed`），
+`tests/test_protocol_roundtrip.py` + `tests/test_server_dispatch.py` 覆盖，
+A6（依赖自装 + 启动预热）由 `tests/test_backend_client.py`（剥壳解包 / 安装各分支 /
+超时杀进程 / start 前置调用 / 预热遍历）与 `tests/test_server_dispatch.py`
+（预热日志与异常吞掉）覆盖，并用上述探针脚本做过真实安装链路复现
+（合计 `106 passed`），
 并已用真实后端子进程做过完整启停 + 调用回归：启动成功 → 自动同步 3 个工具 →
 `lastSynced` 写入真实时间戳 → 调用 `search_files` 返回结果 → 停止后状态回到 `stopped`。

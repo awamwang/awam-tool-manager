@@ -51,7 +51,7 @@
 | `update` | `object` | - | 更新方式 |
 | `update.method` | `string` | - | 更新渠道（取值：`winget` / `scoop` / `npm` / `manual`） |
 | `update.packageId` | `string` | - | 包管理器中的包 ID |
-| `install` | `object` | - | 安装方式（与 `update` 并存，`everything-search-mcp` 用的是这个） |
+| `install` | `object` | - | 安装方式；`start_backend` 检测到启动命令缺失时会自动执行一次 `command`（服务启动时也会后台预热），与 `update` 并存 |
 | `install.method` | `string` | - | 安装渠道（取值：`npm` / `winget` / `scoop` / `manual`） |
 | `install.command` | `string` | - | 安装命令 |
 | `tags` | `array<string>` | - | 标签分类（参与搜索匹配） |

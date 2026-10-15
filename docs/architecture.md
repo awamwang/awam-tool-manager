@@ -39,6 +39,7 @@
 | 后端进程生命周期管理（启停 / 状态 / 日志） | `backend_client.py` | ✅ |
 | 心跳检测（30s） | `backend_client.py` | ✅ |
 | 工具目录自动同步到磁盘 | `backend_client.py` | ✅ |
+| 后端依赖自动安装 + 启动预热 | `backend_client.py` | ✅ 已实测跑通 |
 | MCP Resources / Prompts | `server.py` | ✅ |
 
 ### 2.2 已废弃、不应再参照的旧概念
@@ -62,7 +63,7 @@ awam-tool-manager/
 ├── SKILL.md                  # 技能声明（对外契约，已过期）
 ├── README.md                 # 项目说明（已过期）
 ├── TASKS.md                  # 任务清单
-├── requirements.txt          # mcp>=1.0.0, pytest>=7.0.0
+├── requirements.txt          # mcp>=1.30.0,<2.0.0, pytest>=7.0.0
 ├── docs/
 │   ├── format.md             # 数据格式规范（部分过期）
 │   ├── architecture.md       # 本文档
@@ -78,10 +79,10 @@ awam-tool-manager/
 │   ├── store.py              # JSON 存储层（139 行，读容错 + 原子写）
 │   ├── registry.py           # 工具注册中心（140 行，含条目校验过滤）
 │   ├── schema.py             # 两层数据的 JSON Schema 与校验（240 行，**文档生成源**）
-│   └── backend_client.py     # 后端 MCP 客户端与连接池（547 行）
+│   └── backend_client.py     # 后端 MCP 客户端与连接池（842 行）
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表（148 行）
-└── tests/                    # 7 个文件，89 个用例（含真实 MCP 会话与文档漂移检测）
+└── tests/                    # 7 个文件，106 个用例（含真实 MCP 会话与文档漂移检测）
 ```
 
 > 根目录下的 `test_*.py`、`test_output.txt` 是调试期临时脚本，已被 `.gitignore` 排除。
@@ -113,9 +114,9 @@ awam-tool-manager/
   "connection": {                // kind=mcp 时有效，BackendClient 读取
     "type": "stdio",
     "command": "cmd.exe",
-    "args": ["/c", "npx", "-y", "everything-search-mcp"]
+    "args": ["/c", "everything-search-mcp"]
   },
-  "install": { "method": "npm", "command": "npm i -g ..." },
+  "install": { "method": "npm", "command": "npm i -g ..." },  // 启动命令缺失时自动执行一次
   "update": { "method": "winget", "packageId": "voidtools.Everything" },
   "tags": ["文件搜索", "系统工具", "效率"],
   "actions": ["launch", "search"],
@@ -191,8 +192,8 @@ awam-tool-manager/
 | `store.py` | 139 | JSON 文件的读写与目录遍历，读有容错、写走原子替换，无缓存 | 标准库 |
 | `schema.py` | 240 | 两层数据的 JSON Schema 与校验（`jsonschema` 可选，缺失时降级）；**同时是 `docs/format.md` 字段表的唯一生成源** | `jsonschema`(可选) |
 | `registry.py` | 140 | 工具查询语义（列表 / 搜索含 `id` / 详情 / 启动信息），加载时过滤不合规条目 | `store`、`schema` |
-| `backend_client.py` | 547 | 后端 MCP 子进程的连接管理、调用转发、缓存、心跳、日志 | `mcp`、`store` |
-| `server.py` | 707 | MCP 协议入口，定义并分发全部对外能力（含 annotations 与 destructive 门禁） | `mcp`、`store`、`registry`、`backend_client`、`schema` |
+| `backend_client.py` | 842 | 后端 MCP 子进程的连接管理、调用转发、缓存、心跳、日志、依赖自装 | `mcp`、`store` |
+| `server.py` | 796 | MCP 协议入口，定义并分发全部对外能力（含 annotations 与 destructive 门禁），启动时后台预热后端依赖 | `mcp`、`store`、`registry`、`backend_client`、`schema` |
 | `scripts/generate_format_doc.py` | 148 | 读 `schema.py` 渲染字段表并就地替换 `docs/format.md` 的生成区块；`--check` 做漂移检查 | 标准库、`schema` |
 
 ### 5.3 后端路由调用链
@@ -220,6 +221,8 @@ call_backend_tool(tool_id, tool_name, arguments)
 ```
 
 - `start()` 成功后会**预热工具列表**并启动心跳任务（间隔 30s，探测超时 10s）；
+- `start()` 在 spawn 子进程前会先走一遍 `ensure_installed()`：启动命令的真实目标不在 PATH
+  且配了 `install` 时自动安装（限时 300s、只装一次），装完复检再继续启动；
 - `BackendManager.start_backend()` 在启动成功后**自动执行一次 `sync_tools_catalog`**；
 - 心跳失败会把状态置为 `error` 并**主动清理连接**（不再留僵尸子进程）；
 - 调用超时同样会把连接标记为 `error` 并后台清理，让后续请求快速失败而不是继续卡住。
@@ -282,8 +285,9 @@ python src/server.py
   → 构造 JsonStore / ToolRegistry / BackendManager（同步，无 IO 校验）
   → 注册 MCP handlers
   → 打印已加载工具数量到 stderr
+  → 创建后台任务 _prewarm_backends()：为各后端装好缺失的依赖（只装不启，异常全吞）
   → stdio_server() → app.run() 事件循环
-  → finally: backend_manager.close_all()
+  → finally: 取消预热任务 → backend_manager.close_all()
 ```
 
 ### 7.2 关键设计点
@@ -297,6 +301,7 @@ python src/server.py
 | 子进程目录同步到磁盘 | ✅ 便于离线查询；空结果不覆盖已有缓存 |
 | 后端调用统一超时（默认 30s，`connection.timeout` 可覆盖） | ✅ 避免子进程卡死拖垮服务 |
 | `start` / `stop` 共用锁 + 独立清理锁 | ✅ 状态与真实连接一致，清理幂等 |
+| 后端依赖自装 + 启动预热（`ensure_installed` / `ensure_all_installed`） | ✅ `install` 元数据从死数据变为真能力：缺失才装、只装一次、装不坏不阻断启动 |
 | `store` 每次请求全量重读 JSON | ⚠️ 小规模可接受，无缓存层 |
 
 ---
@@ -376,6 +381,7 @@ python src/server.py
 | 项 | 说明 |
 |---|---|
 | `structuredContent` | ✅ 已启用（mcp>=1.30）：`call_tool` 返回带 `structuredContent` 的 `CallToolResult`，`list_tools` 给每个工具挂统一 `outputSchema`（见 `SHARED_OUTPUT_SCHEMA`） |
+| 依赖自装 + 启动预热（A6 ✅ 已收口） | `install` 元数据接入执行：`ensure_installed()`（`_resolved_command` 剥壳解包 → `shutil.which` 检测 → 限时装一次 → 复检）+ `start()` 前置调用 + 服务启动时 `ensure_all_installed()` 后台预热（只装不启）。已用临时探针工具实测全链路 |
 | 工具变更通知 | `notifications/tools/list_changed` 未发送（顶层工具集静态，影响小） |
 | 标准 logging capability | 目前用自定义 Tool 查日志 |
 | 并发限流（A3 ✅ 已收口） | 单后端串行（`_call_lock`），并发调用报 `backend_busy`；要升级信号量 + 排队只需调 `MAX_CONCURRENT_CALLS` |
@@ -393,10 +399,12 @@ python src/server.py
 | `server.py` `call_tool` | `tools/call` 入口，含意外异常兜底 |
 | `server.py` `dispatch_tool` | 12 个工具的分发（if/elif 链） |
 | `server.py` `read_resource` | 返回 `Iterable[ReadResourceContents]` |
-| `server.py` `main` | stdio 事件循环 + `finally` 关闭全部后端 |
+| `server.py` `main` | stdio 事件循环 + 启动后台预热任务 `_prewarm_backends()`，`finally` 取消预热并关闭全部后端 |
 | `store.py` `load_json` / `save_json` | JSON 读写：读有容错（坏文件跳过），写走 `mkstemp` + `os.replace` 原子替换 |
 | `registry.py` `search_tools` | 关键词匹配 name / displayName / description / tags（不含 id） |
-| `backend_client.py` `BackendClient.start` | 子进程启动、连接、预热工具列表、起心跳 |
+| `backend_client.py` `BackendClient.start` | 子进程启动、连接、预热工具列表、起心跳；spawn 前先 `ensure_installed()` 自装缺失依赖 |
+| `backend_client.py` `BackendClient.ensure_installed` | 依赖自装：剥壳解包启动命令 → `shutil.which` 检测 → 限时装一次（`INSTALL_TIMEOUT`）→ 复检；幂等，装不坏不阻断 |
+| `backend_client.py` `BackendManager.ensure_all_installed` | 启动预热：遍历所有 MCP 工具只装不启，单个失败不影响整体 |
 | backend_client.py 新增的 `_cleanup_lock` 保证清理串行且幂等（第一轮修复前两个 context 共用 try） |
 | `backend_client.py` `BackendClient.call_tool` | 转发调用，`wait_for` 限时，超时标记连接不可用 |
-| `backend_client.py` `BackendManager.get_client` | 连接池；以磁盘配置为真相源，空闲时按新 `connection` 重建 |
+| `backend_client.py` `BackendManager.get_client` | 连接池；以磁盘配置为真相源，空闲时按新 `connection` / `install` 重建 |

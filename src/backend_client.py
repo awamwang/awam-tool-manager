@@ -5,9 +5,11 @@
 
 import asyncio
 import contextlib
+import shutil
 import sys
 import time
 from collections import deque
+from pathlib import Path
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -35,6 +37,9 @@ class BackendClient:
     HEARTBEAT_INTERVAL = 30
     HEARTBEAT_TIMEOUT = 10
     DEFAULT_TIMEOUT = 30.0
+    # 依赖自装：install.command 的执行上限（秒）。npm i -g 小包通常几十秒，
+    # 300s 给慢网络留余量；超时会杀掉子进程，不让安装命令在后台变成孤儿。
+    INSTALL_TIMEOUT = 300.0
     # 工具列表缓存有效期（秒）
     TOOLS_CACHE_TTL = 300
 
@@ -47,9 +52,30 @@ class BackendClient:
     # 级别优先级：低于当前 log_level 的消息不入队
     LOG_LEVEL_PRIORITY = {"debug": 10, "info": 20, "warning": 30, "error": 40}
 
-    def __init__(self, tool_id: str, connection_config: dict):
+    # 常见的「壳包裹」启动形式：connection.command 是壳程序，真正需要在
+    # PATH 上找到的是壳后面的目标程序。不剥掉这层壳的话，
+    # which("cmd.exe") 永远命中，「没安装」会被误判成「已安装」。
+    # 键为壳名（小写、去 .exe），值为该壳「后面跟目标程序」的开关。
+    SHELL_WRAPPERS: dict[str, set[str]] = {
+        "cmd": {"/c", "/k"},
+        "powershell": {"-command", "-c"},
+        "pwsh": {"-command", "-c"},
+        "bash": {"-c"},
+        "sh": {"-c"},
+    }
+
+    def __init__(
+        self,
+        tool_id: str,
+        connection_config: dict,
+        install_config: dict | None = None,
+    ):
         self.tool_id = tool_id
         self.connection_config = connection_config
+        # 安装元数据（tools/*.json 的 install 字段）。此前它只是死元数据：
+        # schema 声明了、没有任何代码读取，导致包没全局安装时 start() 必然
+        # 失败且永不自愈。现在由 ensure_installed() 消费，见该方法文档。
+        self.install_config = install_config
         self.session: ClientSession | None = None
         self.status = self.STATUS_STOPPED
         self.last_error: str | None = None
@@ -81,6 +107,12 @@ class BackendClient:
         self._stdio_context = None
         self._client_context = None
 
+        # 依赖自愈状态：_install_lock 保证并发预热/启动只装一次；
+        # _install_attempted 保证同一客户端生命周期内不重复执行同一条安装
+        # 命令（防 npm 被反复锤）。确需重试时重启服务或改配置触发重建即可。
+        self._install_lock = asyncio.Lock()
+        self._install_attempted = False
+
     def _log(self, level: str, message: str):
         """记录日志
 
@@ -96,6 +128,185 @@ class BackendClient:
         self.logs.append({"time": timestamp, "level": level, "message": message})
         # 打印到 stderr，不能污染 stdout 协议通道
         print(f"[awam:{self.tool_id}][{level}] {message}", file=sys.stderr, flush=True)
+
+    @classmethod
+    def _resolved_command(cls, connection_config: dict) -> str | None:
+        """解析出「真正要在 PATH 上找的程序」
+
+        - 壳包裹（cmd /c foo）→ 返回 foo（剥掉外层引号）；
+        - 直接形式（command: foo，或绝对路径）→ 返回 command 本身；
+        - 没有 command → None。
+
+        只在能确定「壳 + 开关 + 目标」三段结构时才剥壳；bash -c 跟一串
+        脚本参数之类无法可靠解析的情况原样返回 command，由调用方兜底。
+        """
+        command = connection_config.get("command")
+        if not command:
+            return None
+        args = [str(a) for a in connection_config.get("args", [])]
+        # 壳名统一小写并去掉 .exe：cmd.exe 与 cmd 是同一个程序
+        shell = Path(command).name.lower()
+        if shell.endswith(".exe"):
+            shell = shell[: -len(".exe")]
+        switches = cls.SHELL_WRAPPERS.get(shell)
+        if switches and len(args) >= 2 and args[0].lower() in switches:
+            target = args[1].strip().strip('"')
+            return target or None
+        return command
+
+    def _target_available(self, target: str | None) -> bool:
+        """target 是否已在 PATH 上。
+
+        解析不出目标（None）时返回 True：不把「判不了」当成「缺失」，
+        交给 spawn 产出原生错误，避免误装、误判。
+        """
+        if not target:
+            return True
+        return shutil.which(target) is not None
+
+    def _install_command(self) -> str | None:
+        """install.command；配置缺省或畸形时返回 None，绝不让坏数据炸掉启动"""
+        install = self.install_config if isinstance(self.install_config, dict) else {}
+        command = install.get("command")
+        if not isinstance(command, str) or not command.strip():
+            return None
+        return command
+
+    @staticmethod
+    async def _kill_and_reap(proc, reap: bool = True) -> None:
+        """杀掉安装子进程并回收（超时 / 被取消时调用，避免孤儿 npm）"""
+        if proc is None:
+            return
+        with contextlib.suppress(Exception):
+            proc.kill()
+        if reap:
+            with contextlib.suppress(Exception):
+                await proc.wait()
+
+    async def ensure_installed(self) -> dict:
+        """确保后端的可执行依赖已安装（按需、幂等、只装一次）
+
+        背景：tools/*.json 的 `install` 字段此前是死元数据——schema 声明了
+        它，却没有任何代码读取。后果：包没有全局安装时 start() 必然失败，
+        且每次重试都一样失败（命令缺失是秒级失败，不会卡住，但也永远不会自愈）。
+
+        策略：
+        1. 解析不出启动目标（例如没配 command）→ 不装也不阻塞，如实报告
+           available=False，由 spawn 产出原生错误；
+        2. 启动命令的真实目标已在 PATH 上 → 直接返回，什么都不做；
+        3. 没有 install.command → 返回 available=False 但**不阻塞**：由
+           spawn 产出原生错误，行为与接入前完全一致，不把「本来能起」的
+           配置误判死（例如 bash -c 跟一串脚本参数，which 无从判定）；
+        4. 有 install.command → 加锁执行一次安装（限时 INSTALL_TIMEOUT），
+           装完复检。已尝试过（无论成败）不重复装；确需重试时重启服务或
+           改配置触发客户端重建即可。
+
+        返回 {"success", "available", "installed", "error"?}：
+        success=False 仅表示「装了但还没好」或「安装执行失败」，调用方
+        （start / 启动预热）只记录不阻断——自装只会让启动更容易成功，
+        不会让任何原本能启动的配置变得更糟。
+        """
+        target = self._resolved_command(self.connection_config)
+        if target is None:
+            # 解析不出启动目标（例如没配 command）：既装不了也验不了，
+            # 不阻塞，由 spawn 产出原生错误。
+            self._log("debug", "无法从 connection 解析出启动命令目标，跳过自装")
+            return {
+                "success": True,
+                "available": False,
+                "installed": False,
+                "note": "无法解析启动命令",
+            }
+        if self._target_available(target):
+            return {"success": True, "available": True, "installed": False}
+
+        install_command = self._install_command()
+        if not install_command:
+            self._log(
+                "debug",
+                f"启动目标 {target or '(未配置 command)'} 不在 PATH，"
+                f"且未配置 install.command，跳过自装",
+            )
+            return {
+                "success": True,
+                "available": False,
+                "installed": False,
+                "note": "未配置安装命令",
+            }
+
+        async with self._install_lock:
+            # 双检：等锁期间可能已被其他协程（如启动预热）装好
+            if self._target_available(target):
+                return {"success": True, "available": True, "installed": False}
+            if self._install_attempted:
+                return {
+                    "success": False,
+                    "available": False,
+                    "installed": False,
+                    "error": "安装已尝试过，跳过重复执行",
+                }
+
+            self._install_attempted = True
+            self._log("info", f"检测到依赖缺失，执行安装: {install_command}")
+            proc = None
+            try:
+                proc = await asyncio.create_subprocess_shell(
+                    install_command,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _, stderr = await asyncio.wait_for(
+                    proc.communicate(), timeout=self.INSTALL_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                await self._kill_and_reap(proc)
+                error = f"安装超时（>{self.INSTALL_TIMEOUT:.0f}s）: {install_command}"
+                self._log("error", error)
+                return {
+                    "success": False,
+                    "available": False,
+                    "installed": False,
+                    "error": error,
+                }
+            except asyncio.CancelledError:
+                # 预热任务被取消（服务退出）：不能让安装命令变成孤儿进程
+                await self._kill_and_reap(proc, reap=False)
+                raise
+            except Exception as e:
+                error = f"安装执行失败: {type(e).__name__}: {e}"
+                self._log("error", error)
+                return {
+                    "success": False,
+                    "available": False,
+                    "installed": False,
+                    "error": error,
+                }
+
+            if proc.returncode != 0:
+                tail = (stderr or b"").decode("utf-8", "replace").strip()
+                if len(tail) > 300:
+                    tail = "..." + tail[-300:]
+                error = f"安装命令退出码 {proc.returncode}" + (f": {tail}" if tail else "")
+                self._log("error", error)
+                return {
+                    "success": False,
+                    "available": False,
+                    "installed": False,
+                    "error": error,
+                }
+
+            if self._target_available(target):
+                self._log("info", "✅ 依赖安装成功")
+                return {"success": True, "available": True, "installed": True}
+
+            error = "安装命令执行成功，但启动目标仍不在 PATH"
+            self._log("warning", error)
+            return {
+                "success": False,
+                "available": False,
+                "installed": True,
+                "error": error,
+            }
 
     async def start(self) -> dict:
         """启动后端 MCP Server 并建立连接"""
@@ -120,6 +331,13 @@ class BackendClient:
                 conn_type = self.connection_config.get("type", "stdio")
                 if conn_type != "stdio":
                     raise NotImplementedError(f"暂不支持的连接类型: {conn_type}")
+
+                # 依赖自装：启动命令的目标不在 PATH 且配了 install 时，先自动
+                # 安装再 spawn。安装失败不阻断——照旧 spawn，让原生错误说话，
+                # 行为与接入前完全一致（策略详见 ensure_installed）。
+                install_result = await self.ensure_installed()
+                if install_result.get("installed"):
+                    self._log("info", "依赖已自动安装，继续启动")
 
                 command = self.connection_config.get("command")
                 args = self.connection_config.get("args", [])
@@ -431,12 +649,20 @@ class BackendManager:
         if not connection:
             return None
 
-        # 配置没变就继续复用旧对象，避免平白丢掉日志历史
-        if client is not None and client.connection_config == connection:
+        install_config = tool_config.get("install")
+
+        # 配置没变就继续复用旧对象，避免平白丢掉日志历史。
+        # install 也算配置的一部分：只改 install（例如补一条安装命令）时
+        # 同样要重建，否则新的安装元数据不会生效。
+        if (
+            client is not None
+            and client.connection_config == connection
+            and client.install_config == install_config
+        ):
             return client
 
         previous = self.clients.pop(tool_id, None)
-        client = BackendClient(tool_id, connection)
+        client = BackendClient(tool_id, connection, install_config=install_config)
         if previous is not None:
             # 继承日志与日志级别：重建不应让运维刚查过的历史日志凭空消失
             client.logs = previous.logs
@@ -448,6 +674,35 @@ class BackendManager:
         """列出所有已配置的 MCP 类工具 ID"""
         tools = self.store.list_tools()
         return [t["id"] for t in tools if t.get("kind") == "mcp"]
+
+    async def ensure_all_installed(self) -> dict:
+        """启动预热：为所有 MCP 工具提前装好缺失的依赖（只装不启）
+
+        动机：依赖自装接入后，第一次 start_backend 可能要现场等安装
+        （npm i -g 可达数十秒）。MCP Server 启动时在后台预热一遍，
+        把安装成本挪到服务启动阶段，首个 start_backend 不再被拖慢。
+
+        只装不启：预热阶段拉起所有子进程会无谓占用资源，而这些工具
+        可能很久都不会被调用。单个工具的失败不影响其他工具。
+        """
+        details = []
+        for tool_id in self.list_mcp_tools():
+            client = self.get_client(tool_id)
+            if not client:
+                continue
+            try:
+                result = await client.ensure_installed()
+            except Exception as e:
+                result = {"success": False, "error": f"{type(e).__name__}: {e}"}
+            details.append({"tool_id": tool_id, **result})
+
+        return {
+            "success": True,
+            "total": len(details),
+            "available": sum(1 for d in details if d.get("available")),
+            "installed": sum(1 for d in details if d.get("installed")),
+            "details": details,
+        }
 
     async def start_backend(self, tool_id: str) -> dict:
         """启动指定后端，成功后自动同步工具目录"""

@@ -56,6 +56,8 @@
 - [x] 后端调用统一超时（默认 30s，可用 `connection.timeout` 覆盖）
 - [x] start / stop 串行化，start 前清理上次残留连接
 - [x] 心跳失败与调用超时都会释放连接，不再留孤儿子进程
+- [x] **依赖自装**：`install.command` 接入执行——启动命令缺失时自动安装（限时、只装一次、
+      装完复检），服务启动时后台预热；安装失败不阻断启动
 - [x] JSON 读容错：坏文件 / 非对象文件跳过并告警，不再拖垮整个服务
 - [x] JSON 原子写：临时文件 → `fsync` → `os.replace`，崩溃不会留下半截 JSON
 - [x] `get_backend_logs` 的 `limit<=0` 返回空列表（此前 `-0 == 0` 会返回全部）
@@ -80,12 +82,12 @@
 
 ### 测试覆盖
 - [x] `tests/test_registry.py` - store / registry 基础路径
-- [x] `tests/test_backend_client.py`（20 用例）- 稳定性、P2 修复、BackendManager 池管理
+- [x] `tests/test_backend_client.py`（37 用例）- 稳定性、P2 修复、BackendManager 池管理、依赖自装
 - [x] `tests/test_store.py`（8 用例）- 容错、原子写、时间戳
-- [x] `tests/test_server_dispatch.py`（18 用例）- 12 条分发路径、错误载荷、资源/提示定义
+- [x] `tests/test_server_dispatch.py`（23 用例）- 12 条分发路径、错误载荷、资源/提示定义、启动预热
 - [x] `tests/test_registry_policy.py`（14 用例）- 搜索语义、schema 校验、annotations、门禁
-- [x] `tests/test_protocol_roundtrip.py`（7 用例）- **真实 MCP 会话**：isError 映射、
-  resources/read、prompts/get、annotations 下发（不 mock SDK）
+- [x] `tests/test_protocol_roundtrip.py`（9 用例）- **真实 MCP 会话**：isError 映射、
+  resources/read、prompts/get、annotations 下发、structuredContent / outputSchema（不 mock SDK）
 - [x] `tests/test_backend_client.py` 补 BackendManager：错误归类、`close_all`、缓存 TTL
 - [x] `tests/test_server_dispatch.py` 补 `AnyUrl` 参数、resources 与 prompts 定义回归
 - [x] `tests/test_docs_sync.py`（10 用例）- 文档与 schema 一致、示例过校验、
@@ -97,7 +99,12 @@
       `structuredContent` 的 `CallToolResult`，`list_tools` 给每个工具挂统一 `outputSchema`
       （`SHARED_OUTPUT_SCHEMA`）；`test_protocol_roundtrip.py` 验证客户端真实收到
       structuredContent 且 outputSchema 校验通过（无 `Output validation error`）
-- [x] 合计 **89 passed**（7 个文件）；真实后端子进程启停 + 调用回归通过
+- [x] **A6 后端依赖自动安装 + 启动预热** - `install` 元数据从死数据变为真能力：
+      `BackendClient.ensure_installed()`（壳包裹命令剥壳解包 → `shutil.which` 检测 →
+      限时 `INSTALL_TIMEOUT` 安装一次 → 复检，幂等）+ `start()` spawn 前前置调用 +
+      服务启动时 `BackendManager.ensure_all_installed()` 后台预热（只装不启、异常全吞）；
+      安装失败不阻断启动（spawn 原生错误照旧）；已用临时探针工具实测全链路
+- [x] 合计 **106 passed**（7 个文件）；真实后端子进程启停 + 调用回归通过
 
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
@@ -174,8 +181,9 @@
   "connection": {
     "type": "stdio",
     "command": "cmd.exe",
-    "args": ["/c", "npx", "-y", "everything-search-mcp"]
+    "args": ["/c", "everything-search-mcp"]
   },
+  "install": { "method": "npm", "command": "npm i -g everything-search-mcp" },
   "update": { "method": "winget", "packageId": "voidtools.Everything" },
   "readOnly": false,
   "destructive": false,
@@ -189,6 +197,7 @@
 - `kind`：`app`（普通应用）/ `mcp`（MCP 工具），决定是否可建立后端连接、决定 `get_tool_info` 的返回形状
 - `launch`：仅 `kind=app` 有意义，`launch_tool` 据此返回启动命令
 - `connection`：仅 `kind=mcp` 有意义，`BackendClient` 据此拉起子进程；目前只支持 `stdio`
+- `install`：仅 `kind=mcp` 有意义，`start_backend` 检测到启动命令缺失时会自动执行一次 `install.command`
 
 ### 4.3 后端子工具缓存（`data/backend-tools/{tool_id}.json`）
 
@@ -216,7 +225,7 @@ awam-tool-manager/
 ├── TASKS.md                    # 本文件（任务清单）
 ├── README.md                   # 项目说明
 ├── SKILL.md                    # 技能说明
-├── requirements.txt            # 依赖（mcp 锁 <2.0.0）
+├── requirements.txt            # 依赖（mcp>=1.30.0,<2.0.0）
 ├── docs/
 │   ├── format.md               # 数据格式规范
 │   ├── architecture.md         # 架构说明

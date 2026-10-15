@@ -17,6 +17,7 @@ MCP 只是工具的一种类型（`kind=mcp`），普通应用是另一种（`ki
 - **路由调用**：把调用转发给 `kind=mcp` 工具对应的后端 MCP Server
 - **进程管理**：管理后端 MCP 子进程的启停、状态、日志
 - **目录同步**：拉取后端 MCP 的子工具清单并缓存到本地
+- **依赖自装**：启动命令缺失时按 `install` 元数据自动安装（服务启动时后台预热，只装不启）
 
 ## 目录结构
 
@@ -39,7 +40,7 @@ awam-tool-manager/
 │   └── schema.py             # 两层数据的 JSON Schema 校验 + 文档生成源
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 89 个用例（含真实 MCP 会话与文档漂移检测）
+└── tests/                    # 106 个用例（含真实 MCP 会话与文档漂移检测）
 ```
 
 > 早期版本曾有 `data/launchers/`（启动器配置）与 `src/adapters/`（启动器适配器），
@@ -57,7 +58,7 @@ awam-tool-manager/
 | `launch_tool` | `tool_id`(必填) | 返回工具的启动命令（**目前不实际执行**） |
 | `call_backend_tool` | `tool_id`、`tool_name`(必填)、`arguments`、`allowDestructive` | 路由调用后端 MCP 的子工具（`destructive` 工具需显式确认） |
 | `list_backend_tools` | `tool_id`(必填)、`force_refresh` | 列出后端子工具（含参数 schema） |
-| `start_backend` | `tool_id`(必填) | 启动后端并自动同步工具目录 |
+| `start_backend` | `tool_id`(必填) | 启动后端并自动同步工具目录；启动命令缺失时会先按 `install` 自动安装 |
 | `stop_backend` | `tool_id`(必填) | 停止后端 |
 | `get_backend_status` | `tool_id` | 查看单个或全部后端状态 |
 | `get_backend_logs` | `tool_id`(必填)、`level`、`limit` | 查看后端日志（`limit<=0` 返回空） |
@@ -96,7 +97,8 @@ awam-tool-manager/
 
 1. 在 `data/tools/` 下新建 `{tool_id}.json`（字段见 `docs/format.md`）
 2. 普通应用写 `kind=app` + `launch`；MCP 工具写 `kind=mcp` + `connection`
-3. MCP 工具调用 `start_backend(tool_id=...)` 建立连接并自动同步子工具目录
+3. MCP 工具调用 `start_backend(tool_id=...)` 建立连接并自动同步子工具目录；
+   启动命令不在 PATH 时会按 `install.command` 自动安装一次（服务启动时也会后台预热）
 
 > 修改已有工具的 `connection` 时，若后端当前是停止/错误状态，**下次调用会用新配置重建连接**，
 > 无需重启 MCP Server；运行中则不受影响（避免留下孤儿进程），需先 `stop_backend` 再 `start_backend`。

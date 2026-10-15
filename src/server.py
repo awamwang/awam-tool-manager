@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import contextlib
 import json
 import sys
 from pathlib import Path
@@ -727,6 +728,31 @@ awam-tool-manager 是一个统一的工具管理器，聚合各种 MCP 工具和
     return GetPromptResult(description=f"{name} 提示模板", messages=messages)
 
 
+async def _prewarm_backends():
+    """启动预热：后台为各后端装好缺失的依赖，不阻塞协议服务就绪
+
+    依赖自装（BackendClient.ensure_installed）已保证「start_backend 时缺
+    什么装什么」，但安装是重操作（npm i -g 可达数十秒），第一次调用就要
+    现场等。这里在服务启动时后台预热一遍，把安装成本提前到启动阶段。
+
+    只装不启、异常全吞：预热失败不能拖垮服务本体——最坏情况退化为
+    「首次 start_backend 时现场装」，与没有预热时完全一致。
+    """
+    try:
+        result = await backend_manager.ensure_all_installed()
+        if result.get("installed"):
+            log(
+                f"启动预热：已自动安装 {result['installed']} 个后端依赖"
+                f"（共 {result['total']} 个 MCP 工具，其余已就绪）"
+            )
+        elif result.get("total"):
+            log(f"启动预热：{result['total']} 个 MCP 工具依赖均已就绪")
+        else:
+            log("启动预热：没有需要处理的 MCP 工具")
+    except Exception as e:
+        log(f"启动预热失败（不影响服务，将退化为首次调用时按需安装）: {type(e).__name__}: {e}")
+
+
 async def main():
     """启动 MCP Server"""
     log("=" * 50)
@@ -743,6 +769,9 @@ async def main():
     log("等待客户端连接...")
     log("=" * 50)
 
+    # 后台预热后端依赖：安装是重操作，不能阻塞协议服务就绪
+    prewarm_task = asyncio.create_task(_prewarm_backends())
+
     try:
         async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
             await app.run(
@@ -751,6 +780,9 @@ async def main():
                 app.create_initialization_options()
             )
     finally:
+        prewarm_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await prewarm_task
         log("服务退出，关闭所有后端连接...")
         await backend_manager.close_all()
         log("清理完成")

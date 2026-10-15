@@ -106,7 +106,7 @@ TOOL_ENTRY_SCHEMA: dict[str, Any] = {
         },
         "install": {
             "type": "object",
-            "description": "安装方式（与 `update` 并存，`everything-search-mcp` 用的是这个）",
+            "description": "安装方式；`start_backend` 检测到启动命令缺失时会自动执行一次 `command`（服务启动时也会后台预热），与 `update` 并存",
             "properties": {
                 "method": {
                     "type": "string",
