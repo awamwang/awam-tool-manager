@@ -161,15 +161,25 @@ return [ReadResourceContents(content=text, mime_type="application/json")]
 
 实测：`awam://tools` 返回 `list[ReadResourceContents]`，`mime_type = application/json`。
 
-### 2.4 Tool 缺少 annotations ⚠️
+### 2.4 Tool annotations ✅
 
-MCP Tool 支持 `annotations`（`title` / `readOnlyHint` / `destructiveHint` / `openWorldHint`），
-客户端据此在 UI 上给出"只读/危险"提示。
+MCP Tool 支持 `annotations`（`title` / `readOnlyHint` / `destructiveHint` / `idempotentHint`
+/ `openWorldHint`），客户端据此在 UI 上给出"只读/危险"提示。
 
-数据文件里已经有 `readOnly` / `destructive` 字段，但**没有映射到 Tool 定义**，
-等于这两个字段目前纯装饰。
+数据文件里已经有 `readOnly` / `destructive` 字段，但此前**没有映射到 Tool 定义**，纯装饰。
 
-建议：构造 `Tool(...)` 时补 `annotations=ToolAnnotations(readOnlyHint=..., destructiveHint=...)`。
+**已修复**：`server.py` 新增 `TOOL_ANNOTATION_HINTS` 并在返回工具列表前逐个附加：
+
+| 类别 | 工具 | hints |
+|---|---|---|
+| 只读 | `search_tools` / `list_tools` / `get_tool_info` / `launch_tool` / `list_backend_tools` / `get_backend_status` / `get_backend_logs` | `readOnlyHint=true`、`destructiveHint=false` |
+| 幂等 | `start_backend` / `stop_backend` / `sync_backend_tools` | `idempotentHint=true` |
+| 副作用静态不可知 | `call_backend_tool` | `openWorldHint=true`（**不谎报 readOnly**） |
+
+`call_backend_tool` 只标 `openWorldHint` 是刻意的：它转发到任意后端子工具，
+副作用取决于运行时的 `tool_name`，静态断言只读会误导客户端。真正的防护落在
+**转发前的 destructive 门禁**上：目标工具 `destructive=true` 时默认拒绝
+（`errorType: destructive_blocked`），需显式传 `allowDestructive=true`。
 
 ### 2.5 异常兜底
 
@@ -246,7 +256,8 @@ AttributeError: 'Server' object has no attribute 'list_tools'
 | ✅ 已完成 | 参数名统一 `tool_id`，修正 prompt 模板 | - |
 | ✅ 已完成 | `lastSynced` 写真实 ISO 8601 时间（`%Y-%m-%dT%H:%M:%SZ`） | 3.4 |
 | ✅ 已完成 | 数据文件读写补齐：坏 JSON 跳过 + 原子写盘 | code-review D12/D13 |
-| P1 | Tool 补 `annotations`（映射 `readOnly` / `destructive`） | 2.4 |
+| ✅ 已完成 | Tool `annotations` 下发 + `destructive` 转发门禁 | 2.4 |
+| ✅ 已完成 | 工具条目 schema 校验（数据格式不再是纸面标准） | code-review A1 |
 | P2 | 依赖下限提到 `>=1.30` 后改用 `structuredContent` + `outputSchema` | 2.2 |
 | P2 | 同步后端工具时保留 `title` / `annotations` / `outputSchema` | 3.3 |
 | P3 | 工具集动态化时补 `notifications/tools/list_changed` | 1.2 |

@@ -51,7 +51,7 @@ awam-tool-manager/
 | `list_tools` | `kind` | 列出所有工具 |
 | `get_tool_info` | `tool_id`(必填) | 查看工具详情 |
 | `launch_tool` | `tool_id`(必填) | 返回工具的启动命令（**目前不实际执行**） |
-| `call_backend_tool` | `tool_id`、`tool_name`(必填)、`arguments` | 路由调用后端 MCP 的子工具 |
+| `call_backend_tool` | `tool_id`、`tool_name`(必填)、`arguments`、`allowDestructive` | 路由调用后端 MCP 的子工具（`destructive` 工具需显式确认） |
 | `list_backend_tools` | `tool_id`(必填)、`force_refresh` | 列出后端子工具（含参数 schema） |
 | `start_backend` | `tool_id`(必填) | 启动后端并自动同步工具目录 |
 | `stop_backend` | `tool_id`(必填) | 停止后端 |
@@ -71,7 +71,15 @@ awam-tool-manager/
 ```
 
 `errorType` 取值：`not_found` / `unknown_tool` / `unknown_resource` / `invalid_params`
-/ `connection_error` / `runtime_error` / `config_error` / `internal_error`。
+/ `connection_error` / `runtime_error` / `config_error` / `destructive_blocked`
+/ `internal_error`。
+
+## 安全约定
+
+- 工具条目里的 `readOnly` / `destructive` 会映射到 MCP Tool annotations
+- `call_backend_tool` 转发前会检查目标工具的 `destructive`：
+  为 `true` 时必须显式传 `allowDestructive=true`，否则返回 `destructive_blocked`
+- 不合规的 `data/tools/*.json` 会被跳过并向 stderr 告警，不会让整个服务不可用
 
 ## 新增工具步骤
 

@@ -17,12 +17,18 @@ try:  # mcp >=1.9 起才有 ReadResourceContents，老版本退回纯文本返�
 except ImportError:  # pragma: no cover
     ReadResourceContents = None
 
+try:  # Tool annotations 同样是 1.9 才引入的能力
+    from mcp.types import ToolAnnotations
+except ImportError:  # pragma: no cover
+    ToolAnnotations = None
+
 # 添加 src 目录到路径
 sys.path.insert(0, str(Path(__file__).parent))
 
 from store import JsonStore
 from registry import ToolRegistry
 from backend_client import BackendManager
+from schema import schema_backend_available
 
 # 数据目录
 DATA_DIR = Path(__file__).parent.parent / "data"
@@ -39,6 +45,27 @@ app = Server("awam-tool-manager")
 def log(msg: str):
     """日志输出到 stderr，不污染 stdout 协议通道"""
     print(f"[awam-tool-manager] {msg}", file=sys.stderr, flush=True)
+
+
+# MCP Tool annotations：把数据里的 `readOnly` / `destructive`（见 docs/format.md）
+# 语义映射到协议层 hints，客户端可据此决定是否要二次确认。
+# 只有能静态确定的才标：`call_backend_tool` 转发到任意后端子工具，
+# 其副作用取决于运行时的 tool_name，因此只标 openWorldHint 而不断言只读/破坏性。
+TOOL_ANNOTATION_HINTS: dict[str, dict[str, bool]] = {
+    "search_tools": {"readOnlyHint": True, "destructiveHint": False},
+    "list_tools": {"readOnlyHint": True, "destructiveHint": False},
+    "get_tool_info": {"readOnlyHint": True, "destructiveHint": False},
+    "launch_tool": {"readOnlyHint": True, "destructiveHint": False},
+    "list_backend_tools": {"readOnlyHint": True, "destructiveHint": False},
+    "get_backend_status": {"readOnlyHint": True, "destructiveHint": False},
+    "get_backend_logs": {"readOnlyHint": True, "destructiveHint": False},
+    "start_backend": {"idempotentHint": True},
+    "stop_backend": {"idempotentHint": True},
+    "sync_backend_tools": {"idempotentHint": True},
+    "set_backend_log_level": {},
+    # 转发到后端 MCP，属于"与外部世界交互"但静态无法判定副作用
+    "call_backend_tool": {"openWorldHint": True},
+}
 
 
 class ToolError(Exception):
@@ -118,7 +145,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="launch_tool",
-            description="启动指定的工具，返回启动命令信息",
+            description="取指定工具的启动命令（只返回命令，不实际执行启动）",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -147,6 +174,10 @@ async def list_tools() -> list[Tool]:
                     "arguments": {
                         "type": "object",
                         "description": "调用参数"
+                    },
+                    "allowDestructive": {
+                        "type": "boolean",
+                        "description": "目标工具被标记为 destructive 时，需显式传 true 才会转发"
                     }
                 },
                 "required": ["tool_id", "tool_name"]
@@ -266,6 +297,12 @@ async def list_tools() -> list[Tool]:
             }
         ),
     ]
+    if ToolAnnotations is not None:
+        for tool in tools:
+            hints = TOOL_ANNOTATION_HINTS.get(tool.name)
+            if hints:
+                tool.annotations = ToolAnnotations(**hints)
+
     log(f"返回 {len(tools)} 个工具定义")
     return tools
 
@@ -379,10 +416,27 @@ async def dispatch_tool(name: str, arguments: dict) -> str:
         tool_name = arguments.get("tool_name", "")
         backend_args = arguments.get("arguments") or {}
 
+        # A2：数据里的 destructive 之前只是个装饰字段，被无差别转发。
+        # 这里把门禁落到转发前：目标工具标了 destructive 就必须显式确认，
+        # 否则默认拒绝（当前两个工具都是 destructive=false，不改变既有行为）。
+        target_tool = registry.get_tool(tool_id)
+        if target_tool and target_tool.get("destructive"):
+            if not arguments.get("allowDestructive"):
+                fail(
+                    f"目标工具 '{tool_id}' 被标记为 destructive，"
+                    f"需显式传 allowDestructive=true 才会转发调用",
+                    error_type="destructive_blocked",
+                    toolId=tool_id,
+                    toolName=tool_name,
+                )
+            log(f"⚠️ 已确认转发到 destructive 工具: {tool_id}/{tool_name}")
+
         log(f"路由调用: {tool_id}/{tool_name}")
         res = ensure_success(
             await backend_manager.call_backend_tool(tool_id, tool_name, backend_args)
         )
+        if target_tool and target_tool.get("destructive"):
+            res["warning"] = f"目标工具 '{tool_id}' 被标记为 destructive"
         result = json.dumps(res, ensure_ascii=False, indent=2, default=str)
 
     elif name == "list_backend_tools":
@@ -612,6 +666,10 @@ async def main():
     mcp_tools = [t for t in all_tools if t.get("kind") == "mcp"]
     log(f"已加载 {len(all_tools)} 个工具: {', '.join([t['id'] for t in all_tools])}")
     log(f"其中 MCP 类工具: {len(mcp_tools)} 个")
+    log(
+        "条目校验: "
+        + ("jsonschema 完整校验" if schema_backend_available() else "基础校验（未安装 jsonschema）")
+    )
     log("等待客户端连接...")
     log("=" * 50)
 

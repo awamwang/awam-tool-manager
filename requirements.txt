@@ -6,4 +6,9 @@
 # AttributeError 而无法启动。迁移到 2.x 需同步重写 server.py 的注册方式。
 mcp>=1.9.0,<2.0.0
 
+# 工具条目校验（A1）：按 docs/format.md 的规范校验 data/tools/*.json。
+# 可选依赖 —— 未安装时 src/schema.py 会自动降级为「必填 + 类型 + 枚举」的基础校验，
+# 服务照常可用，只是校验强度下降。
+jsonschema>=4.0.0
+
 pytest>=7.0.0

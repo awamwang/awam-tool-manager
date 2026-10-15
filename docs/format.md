@@ -7,9 +7,14 @@
 
 ---
 
-## 第 1 层：工具条目（Tool Entry）
+## 数据层 1：工具条目（Tool Entry）
+
+> **只有这两个"层"是数据层**：`data/tools/`（人工维护）与 `data/backend-tools/`（自动生成）。
+> 下面第 3 节列出的「对外 MCP 工具」是**对外契约**，不是存储在磁盘上的数据层，
+> 早期文档把它算作第 3 层容易造成"三层架构"的误解。
 
 **一个工具 = 一个 JSON 文件**，存放在 `data/tools/` 目录，文件名即 `tool_id`。
+条目在加载时会按本节规范校验（`src/schema.py`），不合规的条目会被跳过并向 stderr 告警。
 
 ### 字段说明
 
@@ -39,9 +44,14 @@
 | `update` | object | - | 更新方式 |
 | `update.method` | string | - | `winget` / `scoop` / `npm` / `manual` |
 | `update.packageId` | string | - | 包管理器中的包 ID |
+| `install` | object | - | 安装方式（`everything-search-mcp` 用的是这个，与 `update` 并存） |
+| `install.method` | string | - | `npm` / `winget` / `manual` ... |
+| `install.command` | string | - | 安装命令 |
 | `tags` | array | - | 标签分类（参与搜索匹配） |
+| `actions` | array | - | 支持的动作（如 `launch` / `search`） |
+| `capabilities` | array | - | 能力标签（如 `search` / `index`） |
 | `readOnly` | boolean | - | 是否只读（对应 MCP 的 readOnlyHint） |
-| `destructive` | boolean | - | 是否有破坏性（对应 MCP 的 destructiveHint） |
+| `destructive` | boolean | - | 是否有破坏性（对应 MCP 的 destructiveHint，`call_backend_tool` 会据此拦截） |
 | `metadata` | object | - | 扩展元数据 |
 | `createdAt` | string | - | 创建时间 ISO 8601 |
 | `updatedAt` | string | - | 更新时间 ISO 8601 |
@@ -107,7 +117,7 @@
 
 ---
 
-## 第 2 层：后端子工具缓存（Backend Tool Catalog）
+## 数据层 2：后端子工具缓存（Backend Tool Catalog）
 
 由 `sync_backend_tools` 自动生成并写入 `data/backend-tools/{tool_id}.json`，**不建议手工编辑**。
 
@@ -141,18 +151,19 @@
 
 ---
 
-## 第 3 层：对外 MCP 工具
+## 对外契约：MCP 工具
 
-本技能作为 MCP Server 暴露给 AI 客户端的工具列表。
+本技能作为 MCP Server 暴露给 AI 客户端的工具列表（**不是磁盘上的数据层**）。
 后端相关工具统一使用 **`tool_id`** 指定目标工具。
+可静态判定的工具都带 annotations（`readOnlyHint` / `idempotentHint` / `openWorldHint`）。
 
 | 工具名 | 参数 | 说明 |
 |---|---|---|
-| `search_tools` | `keyword`(必填)、`kind` | 按关键词搜索工具 |
+| `search_tools` | `keyword`(必填)、`kind` | 按关键词搜索工具（匹配 `id` / 名称 / 描述 / 标签） |
 | `list_tools` | `kind` | 列出所有工具 |
 | `get_tool_info` | `tool_id`(必填) | 查看工具详情 |
-| `launch_tool` | `tool_id`(必填) | 返回启动命令（当前不实际执行） |
-| `call_backend_tool` | `tool_id`、`tool_name`(必填)、`arguments` | 路由调用后端子工具 |
+| `launch_tool` | `tool_id`(必填) | 返回启动命令（**当前不实际执行**） |
+| `call_backend_tool` | `tool_id`、`tool_name`(必填)、`arguments`、`allowDestructive` | 路由调用后端子工具（目标标记 `destructive` 时需 `allowDestructive=true`） |
 | `list_backend_tools` | `tool_id`(必填)、`force_refresh` | 列出后端子工具 |
 | `start_backend` | `tool_id`(必填) | 启动后端并同步目录 |
 | `stop_backend` | `tool_id`(必填) | 停止后端 |
@@ -182,7 +193,8 @@
 ```
 
 `errorType`：`not_found` / `unknown_tool` / `unknown_resource` / `invalid_params`
-/ `connection_error` / `runtime_error` / `config_error` / `internal_error`
+/ `connection_error` / `runtime_error` / `config_error` / `destructive_blocked`
+/ `internal_error`
 
 ---
 
@@ -190,4 +202,7 @@
 
 - 符合 MCP 官方 Tool Schema 规范，`inputSchema` 必须是合法 JSON Schema
 - 元工具模式：只暴露少量高层工具，内部路由到具体实现
-- `readOnly` / `destructive` 与 MCP Tool annotations 语义对齐（当前尚未映射到 Tool 定义）
+- `readOnly` / `destructive` 与 MCP Tool annotations 语义对齐：
+  只读工具已下发 `readOnlyHint`，`destructive` 已在 `call_backend_tool` 转发前设门禁
+- **本文件即校验依据**：`src/schema.py` 的 `TOOL_ENTRY_SCHEMA` 与之对应，
+  改动字段时应同步两边，避免"文档是纸面标准、data/ 是事实标准"再次分叉

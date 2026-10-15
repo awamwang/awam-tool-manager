@@ -76,8 +76,9 @@ awam-tool-manager/
 └── src/
     ├── server.py             # MCP Server 入口 + 全部对外工具定义 + 分发
     ├── store.py              # JSON 存储层（139 行，读容错 + 原子写）
-    ├── registry.py           # 工具注册中心（77 行）
-    └── backend_client.py     # 后端 MCP 客户端与连接池（411 行）
+    ├── registry.py           # 工具注册中心（140 行，含条目校验过滤）
+    ├── schema.py             # 工具条目的 JSON Schema 与校验（119 行）
+    └── backend_client.py     # 后端 MCP 客户端与连接池（547 行）
 ```
 
 > 根目录下的 `test_*.py`、`test_output.txt` 是调试期临时脚本，已被 `.gitignore` 排除。
@@ -184,10 +185,11 @@ awam-tool-manager/
 
 | 模块 | 行数 | 职责 | 依赖 |
 |---|---|---|---|
-| `store.py` | 139 | JSON 文件的读写与目录遍历，读有容错、写走原子替换，无缓存、无 schema 校验 | 标准库 |
-| `registry.py` | 76 | 工具查询语义（列表 / 搜索 / 详情 / 启动信息），无状态 | `store` |
+| `store.py` | 139 | JSON 文件的读写与目录遍历，读有容错、写走原子替换，无缓存 | 标准库 |
+| `schema.py` | 119 | 工具条目的 JSON Schema 与校验（`jsonschema` 可选，缺失时降级） | `jsonschema`(可选) |
+| `registry.py` | 140 | 工具查询语义（列表 / 搜索含 `id` / 详情 / 启动信息），加载时过滤不合规条目 | `store`、`schema` |
 | `backend_client.py` | 547 | 后端 MCP 子进程的连接管理、调用转发、缓存、心跳、日志 | `mcp`、`store` |
-| `server.py` | 636 | MCP 协议入口，定义并分发全部对外能力 | `mcp`、`store`、`registry`、`backend_client` |
+| `server.py` | 694 | MCP 协议入口，定义并分发全部对外能力（含 annotations 与 destructive 门禁） | `mcp`、`store`、`registry`、`backend_client`、`schema` |
 
 ### 5.3 后端路由调用链
 
@@ -333,15 +335,26 @@ python src/server.py
 | `lastSynced` 字面量 `"now"`（D15） | ✅ 写入 UTC `%Y-%m-%dT%H:%M:%SZ` |
 | server 分发零测试（D19） | ✅ 新增 `tests/test_store.py`（8）+ `tests/test_server_dispatch.py`（14），合计 41 passed |
 
-### 8.4 尚未处理 ⏳
+### 8.4 第四轮已修复 ✅（语义一致性与合规）
+
+| 项 | 处理 |
+|---|---|
+| 搜索不含 `id`（D18） | ✅ `search_tools` 匹配范围加入 `id` |
+| 文档与数据字段漂移（D17） | ✅ `format.md` 明确「两层数据 + 一层对外契约」，补齐 `install` / `actions` / `capabilities` |
+| `launch_tool` 名不副实（D22） | ✅ 描述改为「只返回命令，不实际执行」并标 `readOnlyHint`（未改名，避免破坏已接入客户端） |
+| 无 schema 校验（A1） | ✅ 新增 `src/schema.py`（`jsonschema` 可选依赖），`registry` 跳过不合规条目并告警 |
+| 安全元数据形同装饰（A2） | ✅ 只读工具下发 `readOnlyHint`；`call_backend_tool` 新增 destructive 门禁（`allowDestructive`） |
+| 测试 | ✅ 新增 `test_registry_policy.py`（13 例），合计 54 passed |
+
+### 8.5 尚未处理 ⏳
 
 | 项 | 说明 |
 |---|---|
-| Tool 未带 `annotations` | 数据里的 `readOnly` / `destructive` 未映射到 Tool 定义 |
 | `structuredContent` | 待依赖下限提到 `>=1.30` 后可启用 |
 | 工具变更通知 | `notifications/tools/list_changed` 未发送（顶层工具集静态，影响小） |
 | 标准 logging capability | 目前用自定义 Tool 查日志 |
-| 命名与语义一致性（D17/D18/D21） | `source`/`kind` 分叉、搜索不含 `id`、README 与数据命名不一致 |
+| 并发限流（A3） | `BackendManager` 无排队/限流，并发调用同一 session 的正确性依赖后端实现 |
+| 双真相源治理（A4） | 长期方案是由 schema 反向生成文档，当前靠"改字段同步两边"的约定 |
 
 > 完整清单见 [`code-review.md`](code-review.md) 与 [`mcp-conformance.md`](mcp-conformance.md)。
 

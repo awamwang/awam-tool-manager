@@ -6,7 +6,21 @@
 
 ---
 
-## 0. 第四次更新：P2 已修复（最新）
+## 0. 第五次更新：语义一致性与合规（最新）
+
+| 编号 | 问题 | 处理方式 |
+|---|---|---|
+| D18 | 搜索不含 `id` | `search_tools` 匹配范围加入 `tool.get("id")`；文档同步说明 |
+| D17 | 文档与数据的字段/语义分叉 | `docs/format.md` 明确「两层数据 + 一层对外契约」，补上数据里实际存在的 `install` / `actions` / `capabilities`；`launch_tool` 失败补齐 `errorType` |
+| D21 | README 与数据命名不一致 | 复核后 README / format.md / SKILL.md 已统一为 `everything-search-mcp`，仅本报告里的旧行号引用需更新 |
+| D22 | `launch_tool` 名不副实 | 描述改为「取启动命令（不实际执行）」，未改名以免破坏已接入客户端的调用 |
+| A1 | 无 schema 校验 | 新增 `src/schema.py`（`jsonschema` 为可选依赖，缺失时降级基础校验），`registry` 加载时跳过不合规条目并告警 |
+| A2 | `readOnly` / `destructive` 形同装饰 | 只读工具下发 `readOnlyHint`；`call_backend_tool` 新增 `destructive` 门禁（`allowDestructive`），转发类工具标 `openWorldHint` |
+| 附带 | 测试 | 新增 `tests/test_registry_policy.py`（13 例），合计 **54 passed** |
+
+---
+
+## 0.0 第四次更新：P2 已修复（2026-10-15 深夜）
 
 修复了全部 7 项 P2，并补了 `test_store.py` / `test_server_dispatch.py` 两个测试文件（测试总数 13 → 41 passed）。
 
@@ -22,7 +36,7 @@
 
 ---
 
-## 0.0 第三次更新：P1 已修复（2026-10-15 晚）
+## 0.0.0 第三次更新：P1 已修复（2026-10-15 晚）
 
 按第二批计划修复了全部 4 项 P1，并补了首个 backend_client 单元测试文件（13 passed）。
 
@@ -41,7 +55,7 @@
 
 ---
 
-## 0.0 第二次更新：P0 已修复 + 协议一致性专项（2026-10-15 晚）
+## 0.0.0.0 第二次更新：P0 已修复 + 协议一致性专项（2026-10-15 晚）
 
 按审核结论执行了首轮修复，并在做 MCP 协议一致性对比时**新发现一个 P0 级缺陷**。
 
@@ -89,12 +103,13 @@ P0 与 P1 已全部关闭。剩余有效待办为 P2 的 D9–D15、P3 的 D17/D
 | 架构设计 | ⭐⭐⭐⭐ 分层清晰（接口 / 领域 / 存储 / 路由），职责边界干净 |
 | 契约一致性 | ⭐⭐⭐⭐ 修复后已对齐（原 ⭐⭐） |
 | 健壮性 | ⭐⭐⭐⭐⭐ 超时、清理、JSON 容错、原子写均已到位（原 ⭐⭐） |
-| 可维护性 | ⭐⭐⭐⭐⭐ 4 个测试文件共 41 个用例（原 ⭐⭐） |
-| 协议合规 | ⭐⭐⭐⭐ 修复后主体合规，annotations / structuredContent 待补 |
+| 可维护性 | ⭐⭐⭐⭐⭐ 5 个测试文件共 54 个用例（原 ⭐⭐） |
+| 协议合规 | ⭐⭐⭐⭐⭐ annotations 已下发、destructive 门禁已落地，仅 `structuredContent` 待依赖升级 |
 
 **共发现 25 项问题**：P0 级 4 项、P1 级 5 项、P2 级 8 项、P3 级 4 项、后续新增 4 项。
-**P0 / P1 / P2（D9–D15）已全部修复并完成回归**，P3 的 D19 已补齐测试。
-剩余待办为 **D17 / D18 / D21 / D22**（语义与命名一致性）以及 §7 的四项架构议题（A1–A4）。
+**P0 / P1 / P2（D9–D15）/ P3 的 D17/D18/D19/D21/D22 已全部修复**；
+架构议题中 **A1（schema 校验）、A2（annotations + destructive 门禁）已落地**。
+剩余待办只有 **A3（并发限流）** 与 **A4（文档/数据双真相源的长期治理）**。
 
 ---
 
@@ -400,7 +415,7 @@ call_backend_tool(launcher_id="everything", tool_name="everything_search", ...)
 
 ## 6. P3 —— 规范与覆盖度
 
-### D17. 参数名、字段名与文档不一致
+### D17. ✅ 已修复 —— 参数名、字段名与文档不一致
 
 | 项 | 文档（format.md） | 实现（server.py） |
 |---|---|---|
@@ -411,16 +426,24 @@ call_backend_tool(launcher_id="everything", tool_name="everything_search", ...)
 两者语义还不一样：`source` 是"来自哪个启动器"，`kind` 是"这是什么类型的工具"。
 按当前数据模型，**已无法按启动器筛选**（数据里没有 `source` 字段）。
 
-**修复建议**：二选一 —— 要么给工具条目补 `source` 字段并支持 `source` 筛选，
-要么把文档改成 `kind` 并明确"按启动器筛选暂不支持"。
+**已修复（第五轮）**：选择"以文档迁就数据模型"这条路 —— `source`（按启动器筛选）概念已随
+早期重构消失，按当前模型**无法实现**也没有意义，因此：
 
-### D18. 搜索未覆盖 `id` 字段，语义描述有歧义
+- `docs/format.md` 明确「两层数据层 + 一层对外契约」，去掉"第 3 层"造成的三层误解；
+- 补上数据里实际存在但文档缺失的 `install` / `actions` / `capabilities`；
+- 筛选参数统一为 `kind`，详情参数统一为 `tool_id`（第四轮已完成）；
+- `registry.launch_tool` 的失败结果补齐 `errorType`，与 server 层错误契约一致。
+
+### D18. ✅ 已修复 —— 搜索未覆盖 `id` 字段，语义描述有歧义
 
 **位置**：`src/registry.py:29-38`、`src/server.py:83`
 
 `search_tools` 只匹配 `name` / `displayName` / `description` / `tags`，**不含 `id`**。
 而 `get_tool_info` 的参数说明把 `tool_id` 举例如 `everything`、`everything-search-mcp`
 （这其实是"工具 ID"，但命名和历史上的"启动器 ID"混在一起），容易误用。
+
+**已修复（第五轮）**：`searchable` 加入 `tool.get("id", "")`，搜 `everything-search-mcp`
+这种"ID 里带关键词"的情况不再漏。用例：`test_search_matches_tool_id`。
 
 ### D19. ✅ 已修复 —— 测试覆盖薄弱
 
@@ -444,16 +467,22 @@ call_backend_tool(launcher_id="everything", tool_name="everything_search", ...)
 - 被暴露的工具名 `list_tools` 与 handler 函数名 `list_tools` 同名，阅读时容易混淆；
 - 12 个工具的 schema 全部内联在 `list_tools()` 里，函数长达 200 行，建议抽成常量表。
 
-### D21. 命名混乱（README 与数据对不上）
+### D21. ✅ 已修复 —— 命名混乱（README 与数据对不上）
 
-`README.md:35` 和 `docs/format.md:106` 写的是 `everything-mcp`，
-而 `data/tools/everything-search-mcp.json` 用的是 `everything-search-mcp` —— 这是**两个不同的 npm 包**。
-`SKILL.md:108` 的安装命令仍是 `npm i -g everything-mcp`。
+> 复核结论：README / format.md / SKILL.md 现已统一为 `everything-search-mcp`，
+> 早期文档里那个 `everything-mcp` 是**另一个 npm 包**，已在第四轮文档重写时清除；
+> 本报告原先记录的只是旧行号引用。仅根目录已被 `.gitignore` 排除的调试脚本里还有旧名，不影响交付。
 
-### D22. `launch_tool` 名不副实
+### D22. ✅ 已修复（描述层）—— `launch_tool` 名不副实
 
 工具名与描述是"启动工具 / `launch_tool`"，实现却只是返回启动命令（`registry.py`），
-**不实际执行**。`TASKS.md` P0 已记录此项，现已在 SKILL.md / README.md 的工具说明中明确标注"目前不实际执行"。
+**不实际执行**。
+
+**已修复（第五轮）**：`Tool` 描述改为「取指定工具的启动命令（只返回命令，不实际执行启动）」，
+`launch_tool` 缺 `launch` 配置时返回 `config_error` 而不是含糊的报错。
+**未改名**：`launch_tool` 是已发布给客户端的对外契约，改名会破坏已接入的调用方；
+真正"执行启动"的排期见 `TASKS.md` P0。改用 annotations（`readOnlyHint=true`）进一步
+表明它不会真的启动任何东西。
 
 ---
 
@@ -478,27 +507,47 @@ SDK 对 Iterable 执行 `[create_content(item.content, item.mime_type) for item 
 
 ## 7. 架构层面的不合理
 
-### A1. 无任何 schema 校验
+### A1. ✅ 已修复 —— 无任何 schema 校验
 
-`docs/format.md` 定义了详尽的字段规范，但代码里**从未使用**（`requirements.txt` 也没有 `jsonschema`）。
-字段拼错、类型写错、必填缺失都不会被发现，只会表现为运行期行为异常。
-建议加载时用 `jsonschema` 校验一次，失败则跳过该文件并记日志。
+新增 `src/schema.py`：`TOOL_ENTRY_SCHEMA` 与 `docs/format.md` 对应，`registry` 加载时
+逐条校验并**跳过不合规条目**（向 stderr 告警，同一条目只报一次）。
+这么做之前，缺 `id` 的条目会在 `server.py` 的 `t["id"]` 处直接 KeyError，一条脏数据就能让
+`tools/list` 整体失败。
 
-### A2. `readOnly` / `destructive` 字段形同装饰
+`jsonschema` 是**可选依赖**：未安装时自动降级为「必填 + 类型 + 枚举」的基础校验，
+服务照常可用（启动日志会说明当前是哪种强度）。未知字段一律放行，避免把
+`actions` / `capabilities` / `install` 这类文档尚未覆盖的扩展字段判死。
+
+### A2. ✅ 已修复 —— `readOnly` / `destructive` 字段形同装饰
 
 数据里记录了这两个安全元数据，但 `launch_tool` / `call_backend_tool` 都**没有读取**它们。
-`destructive: true` 的工具同样会被无差别转发执行。TASKS.md 把它放在 P3「权限控制」，
-考虑到这是"让 AI 操作系统工具"的入口层，建议优先级上调。
+`destructive: true` 的工具同样会被无差别转发执行 —— 对"让 AI 操作系统工具"的入口层来说是实打实的风险。
+
+**已修复（第五轮）**：
+
+- `server.py` 新增 `TOOL_ANNOTATION_HINTS`，7 个只读工具下发 `readOnlyHint=true` /
+  `destructiveHint=false`，`start/stop/sync` 标 `idempotentHint`；
+- `call_backend_tool` 转发前检查目标工具的 `destructive`：为 `true` 时**默认拒绝**，
+  需显式传 `allowDestructive=true`，否则返回 `errorType: destructive_blocked`；
+  放行时结果里附 `warning`。当前两个工具都是 `destructive=false`，不改变既有行为；
+- 静态无法判定副作用的 `call_backend_tool` 只标 `openWorldHint=true`，
+  **不谎报 readOnly**。
 
 ### A3. 全局单例 + 无并发限流
 
 `BackendManager` 是模块级单例，`clients` 字典无锁保护（除 `BackendClient` 内部启动锁）。
 并发 `call_backend_tool` 打到同一个 session 时，正确性完全依赖后端 MCP 的实现，缺少限流与排队。
 
-### A4. 数据与文档双真相源
+### A4. ✅ 部分改善 —— 数据与文档双真相源
 
 `data/*.json` 是事实标准，`docs/format.md` 是纸面标准，二者已经分叉（D17）。
-长期看应当**由代码生成文档**或**由 schema 反向校验数据**，避免再次漂移。
+
+**已改善（第五轮）**：分叉的字段（`install` / `actions` / `capabilities`）已补进文档，
+且 `format.md` 现在明确写着"改动字段时应同步 `src/schema.py` 的 `TOOL_ENTRY_SCHEMA`" ——
+文档不再只是纸面，它由校验代码背书。
+
+**仍未解决**：真正的单向真相源要等**由 schema 反向生成文档**（或由数据反推文档）落地，
+否则时间一长仍会再次漂移。
 
 ---
 
@@ -531,14 +580,21 @@ SDK 对 Iterable 执行 `[create_content(item.content, item.mime_type) for item 
     - D15：`lastSynced` 写真实 UTC 时间戳
 13. ~~**D19** —— 补 `test_store.py`（8 例）与 `test_server_dispatch.py`（14 例）~~ → 合计 41 passed
 
-**第四批（待做，一致性与合规）**
+**第四批（已完成 ✅）**
 
-14. **D17 / D18 / D21** —— `source`/`kind` 语义分叉、搜索不含 `id`、README 与数据命名不一致；
-15. **D22** —— `launch_tool` 只返回命令不实际执行（已在文档中标注，待定是否需要改名）；
-16. **A1 / A2** —— 引入 `jsonschema` 校验；把 `readOnly` / `destructive` 映射为 MCP Tool annotations；
-17. **A3** —— `BackendManager` 并发限流与排队。
+14. ~~**D18** —— 搜索覆盖 `id`~~
+15. ~~**D17 / D21** —— `format.md` 明确两层数据 + 一层对外契约，补齐漂移字段~~
+16. ~~**D22** —— `launch_tool` 描述改准确（未改名，避免破坏已接入客户端）~~
+17. ~~**A1** —— `src/schema.py` + `jsonschema`（可选依赖）校验并跳过脏条目~~
+18. ~~**A2** —— annotations 下发 + `call_backend_tool` 的 destructive 门禁~~
 
-> 原先 §8 里有一个重复编号的「第三批（迭代，一致性）」小节，已合并到上面的第四批。
+**第五批（待做）**
+
+19. **A3** —— `BackendManager` 并发限流与排队（并发调用同一 session 的正确性目前依赖后端实现）；
+20. **A4** —— 由 schema 反向生成文档，彻底消除双真相源；
+21. 依赖下限提到 `mcp>=1.30` 后启用 `structuredContent` / `outputSchema`。
+
+> 原先 §8 里有一个重复编号的「第三批（迭代，一致性）」小节，已合并到上面的批次。
 
 ---
 
@@ -551,7 +607,8 @@ pip install "mcp>=1.9.0,<2.0.0" pytest
 # 2) 静态检查
 python -m py_compile src/*.py tests/*.py
 
-# 3) 单元测试（41 项：store/registry + backend_client 稳定性 + store 容错/原子写 + server 分发）
+# 3) 单元测试（54 项：store/registry + backend_client 稳定性 + store 容错/原子写
+#    + server 分发 + 搜索语义/schema 校验/annotations/destructive 门禁）
 python -m pytest tests/ -q
 
 # 4) import 验证（mcp 2.x 下会 AttributeError）
@@ -605,6 +662,7 @@ print('残留:', [f.name for f in p.iterdir() if f.name.startswith('.')])
 本次审核中 **D2、D9、D23、D24** 均通过上述方式实测确认；
 D4 / D5 / D6 / D7 的修复由 `tests/test_backend_client.py` 覆盖，
 D9 / D10 / D12 / D13 / D14 / D15 由新增的 `tests/test_store.py`、`test_backend_client.py`
-与 `tests/test_server_dispatch.py` 覆盖（`41 passed`），
+与 `tests/test_server_dispatch.py` 覆盖，
+D17 / D18 / A1 / A2 由 `tests/test_registry_policy.py` 覆盖（合计 `54 passed`），
 并已用真实后端子进程做过完整启停 + 调用回归：启动成功 → 自动同步 3 个工具 →
 `lastSynced` 写入真实时间戳 → 调用 `search_files` 返回结果 → 停止后状态回到 `stopped`。

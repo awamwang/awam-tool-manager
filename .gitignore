@@ -12,3 +12,6 @@ build/
 # 临时测试脚本（根目录下的）
 /test_*.py
 /test_output.txt
+
+# WorkBuddy 的工作数据（记忆、会话等），不进版本库
+.workbuddy/

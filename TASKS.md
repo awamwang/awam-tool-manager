@@ -61,12 +61,25 @@
 - [x] `connection` 配置热更新：后端空闲时按磁盘最新配置重建，无需重启 MCP Server
 - [x] `lastSynced` 写真实 UTC 时间戳（此前是字面量 `"now"`）
 
+### 语义一致性
+- [x] `search_tools` 匹配范围覆盖 `id`（此前搜不到 ID 里带关键词的工具）
+- [x] `docs/format.md` 明确「两层数据 + 一层对外契约」，补齐 `install` / `actions` / `capabilities`
+- [x] `launch_tool` 描述改准确（只返回命令，不实际执行），失败带 `errorType`
+- [x] README / format.md / SKILL.md 的工具命名与数据一致（`everything-search-mcp`）
+
+### 合规与安全
+- [x] `src/schema.py` - 工具条目 JSON Schema 校验（`jsonschema` 可选依赖，缺失时降级）
+- [x] 加载时跳过不合规条目并向 stderr 告警（缺 `id` 不再让 tools/list 整体 KeyError）
+- [x] Tool annotations：只读工具 `readOnlyHint`，启停类 `idempotentHint`，转发类 `openWorldHint`
+- [x] `call_backend_tool` 的 destructive 门禁（`allowDestructive`，默认拒绝）
+
 ### 测试覆盖
 - [x] `tests/test_registry.py` - store / registry 基础路径
 - [x] `tests/test_backend_client.py`（14 用例）- 稳定性与 P2 修复
 - [x] `tests/test_store.py`（8 用例）- 容错、原子写、时间戳
 - [x] `tests/test_server_dispatch.py`（14 用例）- 12 条分发路径、错误载荷、资源读取
-- [x] 合计 41 passed；真实后端子进程启停 + 调用回归通过
+- [x] `tests/test_registry_policy.py`（13 用例）- 搜索语义、schema 校验、annotations、门禁
+- [x] 合计 54 passed；真实后端子进程启停 + 调用回归通过
 
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
@@ -90,7 +103,7 @@
 - [ ] 工具自动发现：检测本机已安装哪些可作为 MCP 后端接入的工具
 - [ ] 工具标签分类和筛选优化（`kind` / `tags` 之外的维度）
 - [ ] 工具帮助文档查看（--help 输出）
-- [ ] `jsonschema` 校验：加载 `data/**/*.json` 时按 `docs/format.md` 校验并跳过不合规条目
+- [ ] 由 `src/schema.py` 反向生成 `docs/format.md`（彻底消除文档/数据双真相源）
 
 ### P2 - 生态扩展
 - [ ] 接入 Scoop（写 CLI 适配器）
