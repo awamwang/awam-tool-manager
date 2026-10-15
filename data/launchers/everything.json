@@ -18,58 +18,56 @@
       "command": "cmd.exe",
       "args": ["/c", "npx", "-y", "everything-mcp"]
     },
-    "capabilities": [
-      {
-        "name": "search",
-        "description": "搜索文件，支持 Everything 查询语法（ext:pdf、size:>10mb、path:C:\\Projects 等）",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "query": {
-              "type": "string",
-              "description": "搜索关键词，支持 Everything 查询语法"
-            },
-            "max_results": {
-              "type": "number",
-              "description": "返回数量上限，默认 100"
-            },
-            "in_path": {
-              "type": "string",
-              "description": "限定搜索路径（递归）"
-            }
-          },
-          "required": ["query"]
-        },
-        "docsUrl": "https://www.voidtools.com/support/everything/searching/"
-      }
-    ],
     "toolsCatalog": {
-      "lastSynced": "2026-10-15T14:30:00Z",
-      "source": "manual",
-      "note": "工具目录手动维护，可通过 list_backend_tools 自动同步更新",
+      "lastSynced": "2026-10-15T15:30:00Z",
+      "source": "auto",
       "tools": [
         {
-          "name": "search",
-          "description": "搜索文件",
-          "parameters": {
-            "query": "搜索关键词",
-            "max_results": "结果数量上限（默认100）",
-            "in_path": "限定搜索路径"
-          },
-          "example": {
-            "query": "AI in one-启动器",
-            "in_path": "G:\\Projects"
+          "name": "everything_search",
+          "description": "Search files/folders with Everything. Ultra-fast Windows file search (supports wildcards and regex)",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "query": {"type": "string", "description": "Everything query (supports wildcards and regex)"},
+              "max_results": {"type": "number", "default": 200, "description": "Maximum number of results"},
+              "sort": {"type": "string", "default": "", "description": "Sort key (name, size, date, path, etc.)"}
+            },
+            "required": ["query"]
+          }
+        },
+        {
+          "name": "everything_open",
+          "description": "Open specified file/folder with default application (Windows only)",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "path": {"type": "string", "description": "Absolute path of file or folder to open"}
+            },
+            "required": ["path"]
+          }
+        },
+        {
+          "name": "everything_glob",
+          "description": "Wildcard search based on folder. Example: folder='D:/data', pattern='*.pdf'",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "folder": {"type": "string", "description": "Absolute path of folder to search"},
+              "pattern": {"type": "string", "default": "*", "description": "Wildcard pattern"},
+              "max_results": {"type": "number", "default": 200, "description": "Maximum number of results"}
+            },
+            "required": ["folder"]
           }
         }
       ]
     }
   },
   "sync": {
-    "enabled": false,
-    "method": "manual",
-    "tool": "",
+    "enabled": true,
+    "method": "mcp",
+    "tool": "everything-mcp",
     "mapFields": {}
   },
   "createdAt": "2026-10-15T13:30:00Z",
-  "updatedAt": "2026-10-15T13:30:00Z"
+  "updatedAt": "2026-10-15T15:30:00Z"
 }
