@@ -50,25 +50,12 @@ class ToolRegistry:
             "source": lid,
         }
 
-    def list_all_tools(self, source: str | None = None, include_launchers: bool = True) -> list[dict[str, Any]]:
-        """列出所有工具，可按来源筛选。默认包含 launcher 类型"""
+    def list_all_tools(self, source: str | None = None) -> list[dict[str, Any]]:
+        """列出所有工具（不包含 launcher 类型，launcher 只是 MCP 配置容器）"""
         tools = []
-
-        # 加入 launcher 类型
-        if include_launchers:
-            launchers = self.store.list_launchers()
-            for lid in launchers:
-                if source and lid != source:
-                    continue
-                config = self.store.load_launcher(lid)
-                if config:
-                    tools.append(self._launcher_to_tool(config))
-
-        # 加入普通工具
         sources = [source] if source else self.store.list_launchers()
         for src in sources:
             tools.extend(self.store.load_tools(src))
-
         return tools
 
     def search_tools(self, keyword: str, source: str | None = None) -> list[dict[str, Any]]:

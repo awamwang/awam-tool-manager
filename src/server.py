@@ -113,28 +113,6 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
-            name="list_launchers",
-            description="列出所有已接入的启动器（工具集）",
-            inputSchema={
-                "type": "object",
-                "properties": {}
-            }
-        ),
-        Tool(
-            name="get_launcher_info",
-            description="查看启动器的详细信息和推荐的 MCP",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "launcher_id": {
-                        "type": "string",
-                        "description": "启动器 ID"
-                    }
-                },
-                "required": ["launcher_id"]
-            }
-        ),
-        Tool(
             name="call_backend_tool",
             description="路由调用：转发请求到指定启动器的后端 MCP Server 执行具体操作",
             inputSchema={
@@ -294,7 +272,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         tools = registry.list_all_tools(source)
         result = f"共 {len(tools)} 个工具：\n"
         for t in tools:
-            result += f"- [{t['id']}] {t.get('displayName', t['name'])}\n"
+            kind = t.get("kind", "unknown")
+            installed = t.get("installed", True)
+            install_mark = "✅" if installed else "❌"
+            result += f"- {install_mark} [{t['id']}] {t.get('displayName', t['name'])} ({kind})\n"
 
     elif name == "get_tool_info":
         tool_id = arguments.get("tool_id", "")
@@ -395,30 +376,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result += f"命令: {res['launch'].get('command', '')}\n"
         else:
             result = f"❌ {res.get('error', '未知错误')}"
-
-    elif name == "list_launchers":
-        launchers = registry.list_launchers()
-        result = f"已接入 {len(launchers)} 个启动器：\n"
-        for l in launchers:
-            status = "✅ 已安装" if l.get("installed") else "❌ 未安装"
-            result += f"- [{l['id']}] {l.get('displayName', l['name'])} ({l.get('type')}) {status}\n"
-
-    elif name == "get_launcher_info":
-        launcher_id = arguments.get("launcher_id", "")
-        info = registry.get_launcher(launcher_id)
-        if info:
-            result = f"启动器详情：\n"
-            result += f"- ID: {info['id']}\n"
-            result += f"- 名称: {info.get('displayName', info['name'])}\n"
-            result += f"- 类型: {info.get('type')}\n"
-            result += f"- 描述: {info.get('description', '')}\n"
-            result += f"- 已安装: {info.get('installed', False)}\n"
-            mcp = info.get("mcp", {})
-            if mcp:
-                result += f"- 推荐 MCP: {mcp.get('serverName', '')}\n"
-                result += f"- 安装命令: {mcp.get('installCommand', '')}\n"
-        else:
-            result = f"未找到启动器: {launcher_id}"
 
     elif name == "call_backend_tool":
         launcher_id = resolve_launcher_id(arguments.get("launcher_id", ""))
