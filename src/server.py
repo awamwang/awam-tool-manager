@@ -145,7 +145,25 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="list_backend_tools",
-            description="列出指定启动器的后端 MCP 提供的所有工具",
+            description="列出指定启动器的后端 MCP 提供的所有工具（含完整参数 schema）",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "launcher_id": {
+                        "type": "string",
+                        "description": "启动器 ID"
+                    },
+                    "force_refresh": {
+                        "type": "boolean",
+                        "description": "是否强制刷新缓存"
+                    }
+                },
+                "required": ["launcher_id"]
+            }
+        ),
+        Tool(
+            name="start_backend",
+            description="启动指定的后端 MCP Server 并建立连接",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -155,6 +173,73 @@ async def list_tools() -> list[Tool]:
                     }
                 },
                 "required": ["launcher_id"]
+            }
+        ),
+        Tool(
+            name="stop_backend",
+            description="停止指定的后端 MCP Server",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "launcher_id": {
+                        "type": "string",
+                        "description": "启动器 ID"
+                    }
+                },
+                "required": ["launcher_id"]
+            }
+        ),
+        Tool(
+            name="get_backend_status",
+            description="获取后端 MCP Server 的运行状态",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "launcher_id": {
+                        "type": "string",
+                        "description": "启动器 ID，不填则返回所有后端状态"
+                    }
+                }
+            }
+        ),
+        Tool(
+            name="get_backend_logs",
+            description="获取后端 MCP Server 的运行日志",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "launcher_id": {
+                        "type": "string",
+                        "description": "启动器 ID"
+                    },
+                    "level": {
+                        "type": "string",
+                        "description": "日志级别过滤（debug/info/warning/error）"
+                    },
+                    "limit": {
+                        "type": "number",
+                        "description": "返回条数上限，默认 50"
+                    }
+                },
+                "required": ["launcher_id"]
+            }
+        ),
+        Tool(
+            name="set_backend_log_level",
+            description="设置后端 MCP Server 的日志级别",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "launcher_id": {
+                        "type": "string",
+                        "description": "启动器 ID"
+                    },
+                    "level": {
+                        "type": "string",
+                        "description": "日志级别（debug/info/warning/error）"
+                    }
+                },
+                "required": ["launcher_id", "level"]
             }
         ),
     ]
@@ -259,16 +344,94 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
     elif name == "list_backend_tools":
         launcher_id = arguments.get("launcher_id", "")
-        res = await backend_manager.list_backend_tools(launcher_id)
+        force_refresh = arguments.get("force_refresh", False)
+        res = await backend_manager.list_backend_tools(launcher_id, force_refresh=force_refresh)
         if res.get("success"):
             tools = res.get("tools", [])
             result = f"启动器 {launcher_id} 的后端 MCP 提供 {len(tools)} 个工具：\n"
             for t in tools:
-                result += f"- {t['name']}: {t.get('description', '')[:60]}\n"
-            # 日志里打印详细内容
+                result += f"\n📦 {t['name']}\n"
+                result += f"   描述: {t.get('description', '')[:80]}\n"
+                # 提取参数信息
+                schema = t.get("inputSchema", {})
+                props = schema.get("properties", {})
+                required = schema.get("required", [])
+                if props:
+                    result += f"   参数:\n"
+                    for param_name, param_info in props.items():
+                        req_mark = "*" if param_name in required else " "
+                        param_type = param_info.get("type", "any")
+                        param_desc = param_info.get("description", "")[:50]
+                        result += f"     {req_mark} {param_name} ({param_type}): {param_desc}\n"
             log(f"后端工具列表: {[t['name'] for t in tools]}")
         else:
             result = f"❌ 获取失败: {res.get('error', '未知错误')}"
+
+    elif name == "start_backend":
+        launcher_id = arguments.get("launcher_id", "")
+        log(f"启动后端: {launcher_id}")
+        res = await backend_manager.start_backend(launcher_id)
+        if res.get("success"):
+            result = f"✅ 启动成功: {launcher_id}\n{res.get('message', '')}"
+        else:
+            result = f"❌ 启动失败: {res.get('error', '未知错误')}"
+
+    elif name == "stop_backend":
+        launcher_id = arguments.get("launcher_id", "")
+        log(f"停止后端: {launcher_id}")
+        res = await backend_manager.stop_backend(launcher_id)
+        if res.get("success"):
+            result = f"✅ 已停止: {launcher_id}\n{res.get('message', '')}"
+        else:
+            result = f"❌ 停止失败: {res.get('error', '未知错误')}"
+
+    elif name == "get_backend_status":
+        launcher_id = arguments.get("launcher_id")
+        res = backend_manager.get_backend_status(launcher_id)
+        if res.get("success"):
+            if launcher_id:
+                s = res.get("status", {})
+                status_emoji = {"running": "🟢", "starting": "🟡", "stopped": "⚪", "error": "🔴"}.get(s.get("status"), "⚪")
+                result = f"{status_emoji} 后端状态: {launcher_id}\n"
+                result += f"- 状态: {s.get('status')}\n"
+                result += f"- 运行时长: {s.get('uptime_seconds', 0)} 秒\n"
+                result += f"- 工具数: {s.get('tools_count', 0)}\n"
+                result += f"- 日志级别: {s.get('log_level')}\n"
+                if s.get("last_error"):
+                    result += f"- 最近错误: {s.get('last_error')}\n"
+            else:
+                backends = res.get("backends", [])
+                result = f"共 {len(backends)} 个后端：\n"
+                status_emoji = {"running": "🟢", "starting": "🟡", "stopped": "⚪", "error": "🔴"}
+                for s in backends:
+                    emoji = status_emoji.get(s.get("status"), "⚪")
+                    result += f"{emoji} [{s['launcher_id']}] {s.get('status')} - {s.get('tools_count', 0)} 个工具\n"
+        else:
+            result = f"❌ 获取失败: {res.get('error', '未知错误')}"
+
+    elif name == "get_backend_logs":
+        launcher_id = arguments.get("launcher_id", "")
+        level = arguments.get("level")
+        limit = arguments.get("limit", 50)
+        res = backend_manager.get_backend_logs(launcher_id, level, limit)
+        if res.get("success"):
+            logs = res.get("logs", [])
+            result = f"后端 {launcher_id} 的日志（最近 {len(logs)} 条）：\n"
+            level_emoji = {"debug": "🔵", "info": "⚪", "warning": "🟡", "error": "🔴"}
+            for l in logs:
+                emoji = level_emoji.get(l.get("level"), "⚪")
+                result += f"{emoji} [{l.get('time')}] {l.get('message')}\n"
+        else:
+            result = f"❌ 获取失败: {res.get('error', '未知错误')}"
+
+    elif name == "set_backend_log_level":
+        launcher_id = arguments.get("launcher_id", "")
+        level = arguments.get("level", "")
+        res = backend_manager.set_backend_log_level(launcher_id, level)
+        if res.get("success"):
+            result = f"✅ 日志级别已设置为: {res.get('log_level')}"
+        else:
+            result = f"❌ 设置失败: {res.get('error', '未知错误')}"
 
     else:
         result = f"未知工具: {name}"
