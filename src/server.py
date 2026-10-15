@@ -290,48 +290,47 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         tool = registry.get_tool(tool_id)
 
         if not tool:
-            result = f"未找到工具: {tool_id}\n"
-            result += f"可用 list_tools 查看所有工具"
+            result = json.dumps({
+                "success": False,
+                "error": f"未找到工具: {tool_id}"
+            }, ensure_ascii=False, indent=2)
         else:
             kind = tool.get("kind", "unknown")
-            result = f"工具详情：\n"
-            result += f"- ID: {tool['id']}\n"
-            result += f"- 名称: {tool.get('displayName', tool['name'])}\n"
-            result += f"- 类型: {kind}\n"
-            result += f"- 状态: {tool.get('status', 'unknown')}\n"
-            result += f"- 描述: {tool.get('description', '')}\n"
+            result_data = {
+                "success": True,
+                "id": tool["id"],
+                "name": tool.get("displayName", tool["name"]),
+                "kind": kind,
+                "status": tool.get("status", "unknown"),
+                "description": tool.get("description", "")
+            }
 
             if kind == "app":
-                result += f"- 版本: {tool.get('version', '未知')}\n"
-                result += f"- 标签: {', '.join(tool.get('tags', []))}\n"
+                result_data["version"] = tool.get("version", "未知")
+                result_data["tags"] = tool.get("tags", [])
                 if tool.get("launch"):
-                    result += f"- 启动命令: {tool['launch'].get('command', '')}\n"
+                    result_data["launch"] = tool["launch"]
 
             elif kind == "mcp":
-                # 后端运行状态
                 backend_res = backend_manager.get_backend_status(tool_id)
                 if backend_res.get("success"):
-                    status = backend_res.get("status", {})
-                    status_text = {"running": "运行中", "starting": "启动中", "stopped": "已停止", "error": "错误"}.get(status.get("status"), "未知")
-                    result += f"- 后端状态: {status_text}\n"
-                    result += f"- 运行时长: {status.get('uptime_seconds', 0)} 秒\n"
-                    result += f"- 工具数: {status.get('tools_count', 0)}\n"
+                    result_data["backend"] = backend_res.get("status", {})
 
-                # 子工具列表
                 backend_tools = registry.list_backend_tools(tool_id)
-                if backend_tools:
-                    result += f"- 子工具列表: {len(backend_tools)} 个\n"
-                    for t in backend_tools:
-                        result += f"  • {t['name']}: {t.get('description', '')[:50]}\n"
+                result_data["backendTools"] = [
+                    {
+                        "name": t["name"],
+                        "description": t.get("description", "")
+                    }
+                    for t in backend_tools
+                ]
+
+            result = json.dumps(result_data, ensure_ascii=False, indent=2, default=str)
 
     elif name == "launch_tool":
         tool_id = arguments.get("tool_id", "")
         res = registry.launch_tool(tool_id)
-        if res.get("success"):
-            result = f"✅ {res['message']}\n"
-            result += f"命令: {res['launch'].get('command', '')}\n"
-        else:
-            result = f"❌ {res.get('error', '未知错误')}"
+        result = json.dumps(res, ensure_ascii=False, indent=2)
 
     elif name == "call_backend_tool":
         mcp_tool_id = arguments.get("mcp_tool_id", "")
@@ -340,121 +339,49 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         log(f"路由调用: {mcp_tool_id}/{tool_name}")
         res = await backend_manager.call_backend_tool(mcp_tool_id, tool_name, backend_args)
-        if res.get("success"):
-            result = f"✅ 调用成功 ({mcp_tool_id}/{tool_name})\n\n"
-            result += res.get("result", "")
-        else:
-            error_type = res.get("errorType", "unknown")
-            error_msg = res.get("error", "未知错误")
-            result = f"❌ 调用失败\n"
-            result += f"  类型: {error_type}\n"
-            result += f"  错误: {error_msg}\n"
-            # 常见错误的提示
-            if error_type == "connection_error":
-                result += f"  提示: 请确认后端 MCP（{mcp_tool_id}）是否已启动"
-            elif error_type == "runtime_error":
-                result += f"  提示: 请检查工具名 '{tool_name}' 是否正确，参数是否匹配"
+        result = json.dumps(res, ensure_ascii=False, indent=2, default=str)
 
     elif name == "list_backend_tools":
         mcp_tool_id = arguments.get("mcp_tool_id", "")
         force_refresh = arguments.get("force_refresh", False)
         res = await backend_manager.list_backend_tools(mcp_tool_id, force_refresh=force_refresh)
-        if res.get("success"):
-            tools = res.get("tools", [])
-            result = f"MCP 工具 {mcp_tool_id} 提供 {len(tools)} 个后端工具：\n"
-            for t in tools:
-                result += f"\n📦 {t['name']}\n"
-                result += f"   描述: {t.get('description', '')[:80]}\n"
-                # 提取参数信息
-                schema = t.get("inputSchema", {})
-                props = schema.get("properties", {})
-                required = schema.get("required", [])
-                if props:
-                    result += f"   参数:\n"
-                    for param_name, param_info in props.items():
-                        req_mark = "*" if param_name in required else " "
-                        param_type = param_info.get("type", "any")
-                        param_desc = param_info.get("description", "")[:50]
-                        result += f"     {req_mark} {param_name} ({param_type}): {param_desc}\n"
-            log(f"后端工具列表: {[t['name'] for t in tools]}")
-        else:
-            result = f"❌ 获取失败: {res.get('error', '未知错误')}"
+        result = json.dumps(res, ensure_ascii=False, indent=2, default=str)
 
     elif name == "start_backend":
         mcp_tool_id = arguments.get("mcp_tool_id", "")
         log(f"启动后端: {mcp_tool_id}")
         res = await backend_manager.start_backend(mcp_tool_id)
-        if res.get("success"):
-            result = f"✅ 启动成功: {mcp_tool_id}\n{res.get('message', '')}"
-        else:
-            result = f"❌ 启动失败: {res.get('error', '未知错误')}"
+        result = json.dumps(res, ensure_ascii=False, indent=2)
 
     elif name == "stop_backend":
         mcp_tool_id = arguments.get("mcp_tool_id", "")
         log(f"停止后端: {mcp_tool_id}")
         res = await backend_manager.stop_backend(mcp_tool_id)
-        if res.get("success"):
-            result = f"✅ 已停止: {mcp_tool_id}\n{res.get('message', '')}"
-        else:
-            result = f"❌ 停止失败: {res.get('error', '未知错误')}"
+        result = json.dumps(res, ensure_ascii=False, indent=2)
 
     elif name == "get_backend_status":
         mcp_tool_id = arguments.get("mcp_tool_id")
         res = backend_manager.get_backend_status(mcp_tool_id)
-        if res.get("success"):
-            if mcp_tool_id:
-                s = res.get("status", {})
-                status_emoji = {"running": "🟢", "starting": "🟡", "stopped": "⚪", "error": "🔴"}.get(s.get("status"), "⚪")
-                result = f"{status_emoji} 后端状态: {mcp_tool_id}\n"
-                result += f"- 状态: {s.get('status')}\n"
-                result += f"- 运行时长: {s.get('uptime_seconds', 0)} 秒\n"
-                result += f"- 工具数: {s.get('tools_count', 0)}\n"
-                result += f"- 日志级别: {s.get('log_level')}\n"
-                if s.get("last_error"):
-                    result += f"- 最近错误: {s.get('last_error')}\n"
-            else:
-                backends = res.get("backends", [])
-                result = f"共 {len(backends)} 个后端：\n"
-                status_emoji = {"running": "🟢", "starting": "🟡", "stopped": "⚪", "error": "🔴"}
-                for s in backends:
-                    emoji = status_emoji.get(s.get("status"), "⚪")
-                    result += f"{emoji} [{s['mcp_tool_id']}] {s.get('status')} - {s.get('tools_count', 0)} 个工具\n"
-        else:
-            result = f"❌ 获取失败: {res.get('error', '未知错误')}"
+        result = json.dumps(res, ensure_ascii=False, indent=2, default=str)
 
     elif name == "get_backend_logs":
         mcp_tool_id = arguments.get("mcp_tool_id", "")
         level = arguments.get("level")
         limit = arguments.get("limit", 50)
         res = backend_manager.get_backend_logs(mcp_tool_id, level, limit)
-        if res.get("success"):
-            logs = res.get("logs", [])
-            result = f"后端 {mcp_tool_id} 的日志（最近 {len(logs)} 条）：\n"
-            level_emoji = {"debug": "🔵", "info": "⚪", "warning": "🟡", "error": "🔴"}
-            for l in logs:
-                emoji = level_emoji.get(l.get("level"), "⚪")
-                result += f"{emoji} [{l.get('time')}] {l.get('message')}\n"
-        else:
-            result = f"❌ 获取失败: {res.get('error', '未知错误')}"
+        result = json.dumps(res, ensure_ascii=False, indent=2, default=str)
 
     elif name == "set_backend_log_level":
         mcp_tool_id = arguments.get("mcp_tool_id", "")
         level = arguments.get("level", "")
         res = backend_manager.set_backend_log_level(mcp_tool_id, level)
-        if res.get("success"):
-            result = f"✅ 日志级别已设置为: {res.get('log_level')}"
-        else:
-            result = f"❌ 设置失败: {res.get('error', '未知错误')}"
+        result = json.dumps(res, ensure_ascii=False, indent=2)
 
     elif name == "sync_backend_tools":
         mcp_tool_id = arguments.get("mcp_tool_id", "")
         log(f"手动同步后端工具目录: {mcp_tool_id}")
         res = await backend_manager.sync_tools_catalog(mcp_tool_id)
-        if res.get("success"):
-            result = f"✅ 同步成功，共 {res.get('count', 0)} 个工具"
-            result += f"\n工具目录已自动保存到 backend-tools/"
-        else:
-            result = f"❌ 同步失败: {res.get('error', '未知错误')}"
+        result = json.dumps(res, ensure_ascii=False, indent=2)
 
     else:
         result = f"未知工具: {name}"

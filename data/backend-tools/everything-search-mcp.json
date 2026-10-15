@@ -1,58 +1,81 @@
 {
   "parent": "everything-search-mcp",
-  "lastSynced": "2026-10-15T16:40:00Z",
-  "source": "manual",
+  "lastSynced": "now",
+  "source": "auto",
   "tools": [
     {
       "name": "search_files",
-      "description": "Search for files and folders using Everything (Windows) or platform-specific search engines",
+      "description": "Search for files and folders using Everything (Windows) or platform-specific search engines (macOS Spotlight, Linux ripgrep/locate).",
       "inputSchema": {
         "type": "object",
         "properties": {
           "query": {
             "type": "string",
-            "description": "Search query. Supports wildcards (*, ?), operators"
+            "description": "Search query. Supports wildcards (*, ?), operators (AND, OR, NOT), and regex on Windows. On macOS, supports Spotlight query syntax. On Linux, supports ripgrep patterns or locate patterns."
           },
           "maxResults": {
             "type": "number",
-            "default": 100,
-            "description": "Maximum number of results to return"
+            "description": "Maximum number of results to return (default: 100)",
+            "default": 100
           },
           "offset": {
             "type": "number",
-            "description": "Number of results to skip (for pagination)"
+            "description": "Number of results to skip (for pagination)",
+            "default": 0
           },
           "sortBy": {
             "type": "string",
-            "description": "Sort results by field (Windows only)"
+            "description": "Sort results by field (Windows only)",
+            "enum": [
+              "name",
+              "path",
+              "size",
+              "extension",
+              "date_modified",
+              "date_created",
+              "attributes",
+              "run_count"
+            ],
+            "default": "name"
           },
           "sortOrder": {
             "type": "string",
-            "description": "Sort order (Windows only)"
+            "description": "Sort order (Windows only)",
+            "enum": [
+              "ascending",
+              "descending"
+            ],
+            "default": "ascending"
           },
           "matchPath": {
             "type": "boolean",
-            "description": "Match against full path instead of just filename"
+            "description": "Match against full path instead of just filename (Windows only)",
+            "default": false
           },
           "matchCase": {
             "type": "boolean",
-            "description": "Enable case-sensitive matching"
+            "description": "Enable case-sensitive matching",
+            "default": false
           },
           "matchWholeWord": {
             "type": "boolean",
-            "description": "Match whole words only (Windows only)"
+            "description": "Match whole words only (Windows only)",
+            "default": false
           },
           "regex": {
             "type": "boolean",
-            "description": "Enable regex mode"
+            "description": "Enable regex mode",
+            "default": false
           }
         },
-        "required": ["query"]
+        "required": [
+          "query"
+        ]
       }
     },
     {
       "name": "get_file_info",
-      "description": "Get detailed metadata for a specific file or folder",
+      "description": "Get detailed metadata for a specific file or folder.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -61,12 +84,14 @@
             "description": "Full path to the file or folder"
           }
         },
-        "required": ["path"]
+        "required": [
+          "path"
+        ]
       }
     },
     {
       "name": "check_status",
-      "description": "Check the status of the search engine and platform",
+      "description": "Check the status of the search engine and platform.",
       "inputSchema": {
         "type": "object",
         "properties": {}
