@@ -191,6 +191,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = f"工具详情：\n"
             result += f"- ID: {tool['id']}\n"
             result += f"- 名称: {tool.get('displayName', tool['name'])}\n"
+            result += f"- 类型: {tool.get('kind', 'unknown')}\n"
+            result += f"- 支持操作: {', '.join(tool.get('actions', []))}\n"
             result += f"- 描述: {tool.get('description', '')}\n"
             result += f"- 版本: {tool.get('version', '未知')}\n"
             result += f"- 来源: {tool.get('source', '')}\n"

@@ -111,6 +111,8 @@
 | `tools[].update.method` | string | - | 更新方式：`winget` / `scoop` / `npm` / `manual` |
 | `tools[].update.packageId` | string | - | 包管理器中的包 ID |
 | `tools[].tags` | array | - | 标签分类 |
+| `tools[].kind` | string | - | 工具类型：`app`（应用程序）/ `file`（文件/文件夹）/ `command`（命令行）/ `mcp_tool`（MCP 工具） |
+| `tools[].actions` | array | - | 支持的操作：`launch`（启动）/ `open`（打开）/ `search`（搜索）/ `read`（读取） |
 | `tools[].capabilities` | array | - | 能力标签（参考 MCP annotations） |
 | `tools[].readOnly` | boolean | - | 是否只读（参考 MCP readOnlyHint） |
 | `tools[].destructive` | boolean | - | 是否有破坏性（参考 MCP destructiveHint） |
@@ -143,6 +145,8 @@
         "packageId": "voidtools.Everything"
       },
       "tags": ["文件搜索", "系统工具", "效率"],
+      "kind": "app",
+      "actions": ["launch", "search"],
       "capabilities": ["search", "index"],
       "readOnly": false,
       "destructive": false,
