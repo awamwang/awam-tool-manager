@@ -279,11 +279,51 @@ class BackendManager:
         return client
 
     async def start_backend(self, launcher_id: str) -> dict:
-        """启动指定后端"""
+        """启动指定后端，成功后自动同步工具目录"""
         client = self.get_client(launcher_id)
         if not client:
             return {"success": False, "error": f"启动器 '{launcher_id}' 未配置后端 MCP 连接"}
-        return await client.start()
+
+        result = await client.start()
+        if result.get("success"):
+            # 自动同步工具目录
+            sync_result = await self.sync_tools_catalog(launcher_id)
+            if sync_result.get("success"):
+                result["message"] += f"\n工具目录已自动同步：{sync_result.get('count', 0)} 个工具"
+            else:
+                result["message"] += f"\n工具目录同步失败：{sync_result.get('error', '')}"
+        return result
+
+    async def sync_tools_catalog(self, launcher_id: str) -> dict:
+        """同步后端工具目录到启动器配置"""
+        client = self.get_client(launcher_id)
+        if not client:
+            return {"success": False, "error": f"启动器 '{launcher_id}' 未配置"}
+
+        if client.status != BackendClient.STATUS_RUNNING:
+            return {"success": False, "error": "后端未运行，请先启动"}
+
+        try:
+            tools = await client.list_tools(force_refresh=True)
+
+            # 加载启动器配置
+            launcher_config = self.store.load_launcher(launcher_id)
+            if not launcher_config:
+                return {"success": False, "error": "启动器配置不存在"}
+
+            # 更新 toolsCatalog
+            mcp_config = launcher_config.setdefault("mcp", {})
+            tools_catalog = mcp_config.setdefault("toolsCatalog", {})
+            tools_catalog["lastSynced"] = "now"
+            tools_catalog["source"] = "auto"
+            tools_catalog["tools"] = tools
+
+            # 保存配置
+            self.store.save_launcher(launcher_id, launcher_config)
+
+            return {"success": True, "count": len(tools)}
+        except Exception as e:
+            return {"success": False, "error": f"同步失败: {type(e).__name__}: {e}"}
 
     async def stop_backend(self, launcher_id: str) -> dict:
         """停止指定后端"""

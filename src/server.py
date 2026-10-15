@@ -242,6 +242,20 @@ async def list_tools() -> list[Tool]:
                 "required": ["launcher_id", "level"]
             }
         ),
+        Tool(
+            name="sync_backend_tools",
+            description="手动同步后端 MCP 的工具目录（自动获取所有工具的参数 schema 并保存）",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "launcher_id": {
+                        "type": "string",
+                        "description": "启动器 ID"
+                    }
+                },
+                "required": ["launcher_id"]
+            }
+        ),
     ]
     log(f"返回 {len(tools)} 个工具定义")
     return tools
@@ -484,6 +498,16 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = f"✅ 日志级别已设置为: {res.get('log_level')}"
         else:
             result = f"❌ 设置失败: {res.get('error', '未知错误')}"
+
+    elif name == "sync_backend_tools":
+        launcher_id = arguments.get("launcher_id", "")
+        log(f"手动同步后端工具目录: {launcher_id}")
+        res = await backend_manager.sync_tools_catalog(launcher_id)
+        if res.get("success"):
+            result = f"✅ 同步成功，共 {res.get('count', 0)} 个工具"
+            result += f"\n工具目录已自动保存到启动器配置"
+        else:
+            result = f"❌ 同步失败: {res.get('error', '未知错误')}"
 
     else:
         result = f"未知工具: {name}"
