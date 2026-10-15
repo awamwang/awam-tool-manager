@@ -274,7 +274,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     "name": t.get("displayName", t["name"]),
                     "kind": t.get("kind", "unknown"),
                     "description": t.get("description", "")[:100],
-                    "installed": t.get("installed", True)
+                    "status": t.get("status", "installed")
                 }
                 for t in tools
             ]
@@ -292,7 +292,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     "name": t.get("displayName", t["name"]),
                     "kind": t.get("kind", "unknown"),
                     "description": t.get("description", "")[:100],
-                    "installed": t.get("installed", True)
+                    "status": t.get("status", "installed")
                 }
                 for t in tools
             ]
