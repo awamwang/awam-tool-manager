@@ -64,9 +64,9 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "搜索关键词"
                     },
-                    "source": {
+                    "kind": {
                         "type": "string",
-                        "description": "可选，按启动器来源筛选（如 everything、steam）"
+                        "description": "可选，按工具类型筛选（如 app、mcp、driver）"
                     }
                 },
                 "required": ["keyword"]
@@ -74,13 +74,13 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="list_tools",
-            description="列出所有已注册的工具，可按来源筛选",
+            description="列出所有已注册的工具，可按类型筛选",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "source": {
+                    "kind": {
                         "type": "string",
-                        "description": "可选，按启动器来源筛选"
+                        "description": "可选，按工具类型筛选（如 app、mcp、driver）"
                     }
                 }
             }
@@ -93,7 +93,7 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "tool_id": {
                         "type": "string",
-                        "description": "工具 ID，格式如 everything:main"
+                        "description": "工具 ID，如 everything、everything-search-mcp"
                     }
                 },
                 "required": ["tool_id"]
@@ -115,13 +115,13 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="call_backend_tool",
-            description="路由调用：转发请求到指定启动器的后端 MCP Server 执行具体操作",
+            description="路由调用：转发请求到指定 MCP 工具的后端 Server 执行具体操作",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "launcher_id": {
+                    "mcp_tool_id": {
                         "type": "string",
-                        "description": "启动器 ID（如 everything、steam）"
+                        "description": "MCP 工具 ID（如 everything-search-mcp）"
                     },
                     "tool_name": {
                         "type": "string",
@@ -132,7 +132,7 @@ async def list_tools() -> list[Tool]:
                         "description": "调用参数"
                     }
                 },
-                "required": ["launcher_id", "tool_name"]
+                "required": ["mcp_tool_id", "tool_name"]
             }
         ),
         Tool(
@@ -262,8 +262,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
     if name == "search_tools":
         keyword = arguments.get("keyword", "")
-        source = arguments.get("source")
-        tools = registry.search_tools(keyword, source)
+        kind = arguments.get("kind")
+        tools = registry.search_tools(keyword, kind)
         result = json.dumps({
             "success": True,
             "keyword": keyword,
@@ -281,8 +281,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         }, ensure_ascii=False, indent=2)
 
     elif name == "list_tools":
-        source = arguments.get("source")
-        tools = registry.list_all_tools(source)
+        kind = arguments.get("kind")
+        tools = registry.list_all_tools(kind)
         result = json.dumps({
             "success": True,
             "count": len(tools),
@@ -399,14 +399,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = f"❌ {res.get('error', '未知错误')}"
 
     elif name == "call_backend_tool":
-        launcher_id = resolve_launcher_id(arguments.get("launcher_id", ""))
+        mcp_tool_id = arguments.get("mcp_tool_id", "")
         tool_name = arguments.get("tool_name", "")
         backend_args = arguments.get("arguments", {})
 
-        log(f"路由调用: {launcher_id}/{tool_name}")
-        res = await backend_manager.call_backend_tool(launcher_id, tool_name, backend_args)
+        log(f"路由调用: {mcp_tool_id}/{tool_name}")
+        res = await backend_manager.call_backend_tool(mcp_tool_id, tool_name, backend_args)
         if res.get("success"):
-            result = f"✅ 调用成功 ({launcher_id}/{tool_name})\n\n"
+            result = f"✅ 调用成功 ({mcp_tool_id}/{tool_name})\n\n"
             result += res.get("result", "")
         else:
             error_type = res.get("errorType", "unknown")
@@ -416,17 +416,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result += f"  错误: {error_msg}\n"
             # 常见错误的提示
             if error_type == "connection_error":
-                result += f"  提示: 请确认后端软件（{launcher_id}）是否已启动"
+                result += f"  提示: 请确认后端 MCP（{mcp_tool_id}）是否已启动"
             elif error_type == "runtime_error":
                 result += f"  提示: 请检查工具名 '{tool_name}' 是否正确，参数是否匹配"
 
     elif name == "list_backend_tools":
-        launcher_id = resolve_launcher_id(arguments.get("launcher_id", ""))
+        mcp_tool_id = arguments.get("mcp_tool_id", "")
         force_refresh = arguments.get("force_refresh", False)
-        res = await backend_manager.list_backend_tools(launcher_id, force_refresh=force_refresh)
+        res = await backend_manager.list_backend_tools(mcp_tool_id, force_refresh=force_refresh)
         if res.get("success"):
             tools = res.get("tools", [])
-            result = f"启动器 {launcher_id} 的后端 MCP 提供 {len(tools)} 个工具：\n"
+            result = f"MCP 工具 {mcp_tool_id} 提供 {len(tools)} 个后端工具：\n"
             for t in tools:
                 result += f"\n📦 {t['name']}\n"
                 result += f"   描述: {t.get('description', '')[:80]}\n"
@@ -446,32 +446,31 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = f"❌ 获取失败: {res.get('error', '未知错误')}"
 
     elif name == "start_backend":
-        launcher_id = resolve_launcher_id(arguments.get("launcher_id", ""))
-        log(f"启动后端: {launcher_id}")
-        res = await backend_manager.start_backend(launcher_id)
+        mcp_tool_id = arguments.get("mcp_tool_id", "")
+        log(f"启动后端: {mcp_tool_id}")
+        res = await backend_manager.start_backend(mcp_tool_id)
         if res.get("success"):
-            result = f"✅ 启动成功: {launcher_id}\n{res.get('message', '')}"
+            result = f"✅ 启动成功: {mcp_tool_id}\n{res.get('message', '')}"
         else:
             result = f"❌ 启动失败: {res.get('error', '未知错误')}"
 
     elif name == "stop_backend":
-        launcher_id = resolve_launcher_id(arguments.get("launcher_id", ""))
-        log(f"停止后端: {launcher_id}")
-        res = await backend_manager.stop_backend(launcher_id)
+        mcp_tool_id = arguments.get("mcp_tool_id", "")
+        log(f"停止后端: {mcp_tool_id}")
+        res = await backend_manager.stop_backend(mcp_tool_id)
         if res.get("success"):
-            result = f"✅ 已停止: {launcher_id}\n{res.get('message', '')}"
+            result = f"✅ 已停止: {mcp_tool_id}\n{res.get('message', '')}"
         else:
             result = f"❌ 停止失败: {res.get('error', '未知错误')}"
 
     elif name == "get_backend_status":
-        raw_id = arguments.get("launcher_id")
-        launcher_id = resolve_launcher_id(raw_id) if raw_id else None
-        res = backend_manager.get_backend_status(launcher_id)
+        mcp_tool_id = arguments.get("mcp_tool_id")
+        res = backend_manager.get_backend_status(mcp_tool_id)
         if res.get("success"):
-            if launcher_id:
+            if mcp_tool_id:
                 s = res.get("status", {})
                 status_emoji = {"running": "🟢", "starting": "🟡", "stopped": "⚪", "error": "🔴"}.get(s.get("status"), "⚪")
-                result = f"{status_emoji} 后端状态: {launcher_id}\n"
+                result = f"{status_emoji} 后端状态: {mcp_tool_id}\n"
                 result += f"- 状态: {s.get('status')}\n"
                 result += f"- 运行时长: {s.get('uptime_seconds', 0)} 秒\n"
                 result += f"- 工具数: {s.get('tools_count', 0)}\n"
