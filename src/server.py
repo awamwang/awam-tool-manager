@@ -9,8 +9,13 @@ import sys
 from pathlib import Path
 
 from mcp.server import Server
-from mcp.types import Tool, TextContent
+from mcp.types import Resource, Prompt, PromptMessage, TextContent, Tool
 import mcp.server.stdio
+
+try:  # mcp >=1.9 起才有 ReadResourceContents，老版本退回纯文本返回形式
+    from mcp.server.lowlevel.helper_types import ReadResourceContents
+except ImportError:  # pragma: no cover
+    ReadResourceContents = None
 
 # 添加 src 目录到路径
 sys.path.insert(0, str(Path(__file__).parent))
@@ -34,6 +39,31 @@ app = Server("awam-tool-manager")
 def log(msg: str):
     """日志输出到 stderr，不污染 stdout 协议通道"""
     print(f"[awam-tool-manager] {msg}", file=sys.stderr, flush=True)
+
+
+class ToolError(Exception):
+    """业务级失败。
+
+    mcp 1.x 的低层 Server 会把 @app.call_tool() 的**正常返回值**恒包装成
+    CallToolResult(isError=False)，因此「让客户端知道这次调用失败了」的唯一
+    途径就是抛出异常 —— SDK 捕获后会自动转成 isError=True 的结果。
+
+    异常正文统一为 JSON，确保客户端既能感知失败，也能读到可读的原因。
+    """
+
+
+def fail(error: str, error_type: str = "invalid_params", **extra) -> None:
+    """抛出携带 JSON 载荷的业务错误"""
+    payload = {"success": False, "errorType": error_type, "error": error}
+    payload.update(extra)
+    raise ToolError(json.dumps(payload, ensure_ascii=False))
+
+
+def ensure_success(res: dict) -> dict:
+    """后端 / 注册中心返回的失败结果一律转成 ToolError"""
+    if not res.get("success"):
+        raise ToolError(json.dumps(res, ensure_ascii=False, default=str))
+    return res
 
 
 @app.list_tools()
@@ -106,7 +136,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "mcp_tool_id": {
+                    "tool_id": {
                         "type": "string",
                         "description": "MCP 工具 ID（如 everything-search-mcp）"
                     },
@@ -119,7 +149,7 @@ async def list_tools() -> list[Tool]:
                         "description": "调用参数"
                     }
                 },
-                "required": ["mcp_tool_id", "tool_name"]
+                "required": ["tool_id", "tool_name"]
             }
         ),
         Tool(
@@ -128,7 +158,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "mcp_tool_id": {
+                    "tool_id": {
                         "type": "string",
                         "description": "MCP 工具 ID"
                     },
@@ -137,7 +167,7 @@ async def list_tools() -> list[Tool]:
                         "description": "是否强制刷新缓存"
                     }
                 },
-                "required": ["mcp_tool_id"]
+                "required": ["tool_id"]
             }
         ),
         Tool(
@@ -146,12 +176,12 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "mcp_tool_id": {
+                    "tool_id": {
                         "type": "string",
                         "description": "MCP 工具 ID"
                     }
                 },
-                "required": ["mcp_tool_id"]
+                "required": ["tool_id"]
             }
         ),
         Tool(
@@ -160,12 +190,12 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "mcp_tool_id": {
+                    "tool_id": {
                         "type": "string",
                         "description": "MCP 工具 ID"
                     }
                 },
-                "required": ["mcp_tool_id"]
+                "required": ["tool_id"]
             }
         ),
         Tool(
@@ -174,7 +204,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "mcp_tool_id": {
+                    "tool_id": {
                         "type": "string",
                         "description": "MCP 工具 ID，不填则返回所有后端状态"
                     }
@@ -187,7 +217,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "mcp_tool_id": {
+                    "tool_id": {
                         "type": "string",
                         "description": "MCP 工具 ID"
                     },
@@ -200,7 +230,7 @@ async def list_tools() -> list[Tool]:
                         "description": "返回条数上限，默认 50"
                     }
                 },
-                "required": ["mcp_tool_id"]
+                "required": ["tool_id"]
             }
         ),
         Tool(
@@ -209,7 +239,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "mcp_tool_id": {
+                    "tool_id": {
                         "type": "string",
                         "description": "MCP 工具 ID"
                     },
@@ -218,7 +248,7 @@ async def list_tools() -> list[Tool]:
                         "description": "日志级别（debug/info/warning/error）"
                     }
                 },
-                "required": ["mcp_tool_id", "level"]
+                "required": ["tool_id", "level"]
             }
         ),
         Tool(
@@ -227,12 +257,12 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "mcp_tool_id": {
+                    "tool_id": {
                         "type": "string",
                         "description": "MCP 工具 ID"
                     }
                 },
-                "required": ["mcp_tool_id"]
+                "required": ["tool_id"]
             }
         ),
     ]
@@ -242,9 +272,24 @@ async def list_tools() -> list[Tool]:
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    """处理工具调用"""
+    """MCP tools/call 入口：把分发结果包成 TextContent"""
     log(f"收到工具调用: {name} | 参数: {arguments}")
 
+    try:
+        result = await dispatch_tool(name, arguments or {})
+    except ToolError:
+        # 业务错误：交给 SDK 转成 CallToolResult(isError=True)
+        raise
+    except Exception as e:
+        log(f"工具 {name} 执行异常: {type(e).__name__}: {e}")
+        fail(f"内部错误: {type(e).__name__}: {e}", error_type="internal_error")
+
+    log(f"工具 {name} 执行完成，返回 {len(result)} 字符")
+    return [TextContent(type="text", text=result)]
+
+
+async def dispatch_tool(name: str, arguments: dict) -> str:
+    """按工具名分发，返回 JSON 文本"""
     result = ""
 
     if name == "search_tools":
@@ -290,109 +335,107 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         tool = registry.get_tool(tool_id)
 
         if not tool:
-            result = json.dumps({
-                "success": False,
-                "error": f"未找到工具: {tool_id}"
-            }, ensure_ascii=False, indent=2)
-        else:
-            kind = tool.get("kind", "unknown")
-            result_data = {
-                "success": True,
-                "id": tool["id"],
-                "name": tool.get("displayName", tool["name"]),
-                "kind": kind,
-                "status": tool.get("status", "unknown"),
-                "description": tool.get("description", "")
-            }
+            fail(f"未找到工具: {tool_id}", error_type="not_found", toolId=tool_id)
 
-            if kind == "app":
-                result_data["version"] = tool.get("version", "未知")
-                result_data["tags"] = tool.get("tags", [])
-                if tool.get("launch"):
-                    result_data["launch"] = tool["launch"]
+        kind = tool.get("kind", "unknown")
+        result_data = {
+            "success": True,
+            "id": tool["id"],
+            "name": tool.get("displayName", tool["name"]),
+            "kind": kind,
+            "status": tool.get("status", "unknown"),
+            "description": tool.get("description", "")
+        }
 
-            elif kind == "mcp":
-                backend_res = backend_manager.get_backend_status(tool_id)
-                if backend_res.get("success"):
-                    result_data["backend"] = backend_res.get("status", {})
+        if kind == "app":
+            result_data["version"] = tool.get("version", "未知")
+            result_data["tags"] = tool.get("tags", [])
+            if tool.get("launch"):
+                result_data["launch"] = tool["launch"]
 
-                backend_tools = registry.list_backend_tools(tool_id)
-                result_data["backendTools"] = [
-                    {
-                        "name": t["name"],
-                        "description": t.get("description", "")
-                    }
-                    for t in backend_tools
-                ]
+        elif kind == "mcp":
+            backend_res = backend_manager.get_backend_status(tool_id)
+            if backend_res.get("success"):
+                result_data["backend"] = backend_res.get("status", {})
 
-            result = json.dumps(result_data, ensure_ascii=False, indent=2, default=str)
+            backend_tools = registry.list_backend_tools(tool_id)
+            result_data["backendTools"] = [
+                {
+                    "name": t["name"],
+                    "description": t.get("description", "")
+                }
+                for t in backend_tools
+            ]
+
+        result = json.dumps(result_data, ensure_ascii=False, indent=2, default=str)
 
     elif name == "launch_tool":
         tool_id = arguments.get("tool_id", "")
-        res = registry.launch_tool(tool_id)
+        res = ensure_success(registry.launch_tool(tool_id))
         result = json.dumps(res, ensure_ascii=False, indent=2)
 
     elif name == "call_backend_tool":
-        mcp_tool_id = arguments.get("mcp_tool_id", "")
+        tool_id = arguments.get("tool_id", "")
         tool_name = arguments.get("tool_name", "")
-        backend_args = arguments.get("arguments", {})
+        backend_args = arguments.get("arguments") or {}
 
-        log(f"路由调用: {mcp_tool_id}/{tool_name}")
-        res = await backend_manager.call_backend_tool(mcp_tool_id, tool_name, backend_args)
+        log(f"路由调用: {tool_id}/{tool_name}")
+        res = ensure_success(
+            await backend_manager.call_backend_tool(tool_id, tool_name, backend_args)
+        )
         result = json.dumps(res, ensure_ascii=False, indent=2, default=str)
 
     elif name == "list_backend_tools":
-        mcp_tool_id = arguments.get("mcp_tool_id", "")
+        tool_id = arguments.get("tool_id", "")
         force_refresh = arguments.get("force_refresh", False)
-        res = await backend_manager.list_backend_tools(mcp_tool_id, force_refresh=force_refresh)
+        res = ensure_success(
+            await backend_manager.list_backend_tools(tool_id, force_refresh=force_refresh)
+        )
         result = json.dumps(res, ensure_ascii=False, indent=2, default=str)
 
     elif name == "start_backend":
-        mcp_tool_id = arguments.get("mcp_tool_id", "")
-        log(f"启动后端: {mcp_tool_id}")
-        res = await backend_manager.start_backend(mcp_tool_id)
+        tool_id = arguments.get("tool_id", "")
+        log(f"启动后端: {tool_id}")
+        res = ensure_success(await backend_manager.start_backend(tool_id))
         result = json.dumps(res, ensure_ascii=False, indent=2)
 
     elif name == "stop_backend":
-        mcp_tool_id = arguments.get("mcp_tool_id", "")
-        log(f"停止后端: {mcp_tool_id}")
-        res = await backend_manager.stop_backend(mcp_tool_id)
+        tool_id = arguments.get("tool_id", "")
+        log(f"停止后端: {tool_id}")
+        res = ensure_success(await backend_manager.stop_backend(tool_id))
         result = json.dumps(res, ensure_ascii=False, indent=2)
 
     elif name == "get_backend_status":
-        mcp_tool_id = arguments.get("mcp_tool_id")
-        res = backend_manager.get_backend_status(mcp_tool_id)
+        tool_id = arguments.get("tool_id")
+        res = ensure_success(backend_manager.get_backend_status(tool_id))
         result = json.dumps(res, ensure_ascii=False, indent=2, default=str)
 
     elif name == "get_backend_logs":
-        mcp_tool_id = arguments.get("mcp_tool_id", "")
+        tool_id = arguments.get("tool_id", "")
         level = arguments.get("level")
         limit = arguments.get("limit", 50)
-        res = backend_manager.get_backend_logs(mcp_tool_id, level, limit)
+        res = ensure_success(backend_manager.get_backend_logs(tool_id, level, limit))
         result = json.dumps(res, ensure_ascii=False, indent=2, default=str)
 
     elif name == "set_backend_log_level":
-        mcp_tool_id = arguments.get("mcp_tool_id", "")
+        tool_id = arguments.get("tool_id", "")
         level = arguments.get("level", "")
-        res = backend_manager.set_backend_log_level(mcp_tool_id, level)
+        res = ensure_success(backend_manager.set_backend_log_level(tool_id, level))
         result = json.dumps(res, ensure_ascii=False, indent=2)
 
     elif name == "sync_backend_tools":
-        mcp_tool_id = arguments.get("mcp_tool_id", "")
-        log(f"手动同步后端工具目录: {mcp_tool_id}")
-        res = await backend_manager.sync_tools_catalog(mcp_tool_id)
+        tool_id = arguments.get("tool_id", "")
+        log(f"手动同步后端工具目录: {tool_id}")
+        res = ensure_success(await backend_manager.sync_tools_catalog(tool_id))
         result = json.dumps(res, ensure_ascii=False, indent=2)
 
     else:
-        result = f"未知工具: {name}"
+        fail(f"未知工具: {name}", error_type="unknown_tool", toolName=name)
 
-    log(f"工具 {name} 执行完成，返回 {len(result)} 字符")
-    return [TextContent(type="text", text=result)]
+    return result
 
 
 # ============ Resources（资源） ============
-
-from mcp.types import Resource, Prompt, PromptMessage, TextContent as MCPTextContent
 
 
 @app.list_resources()
@@ -422,27 +465,32 @@ async def list_resources() -> list[Resource]:
 
 
 @app.read_resource()
-async def read_resource(uri: str) -> list[MCPTextContent]:
-    """读取资源内容"""
+async def read_resource(uri: str):
+    """读取资源内容
+
+    MCP 规范要求返回 str / bytes / Iterable[ReadResourceContents]，
+    而不是 TextContent —— SDK 会读取每个条目的 .content 与 .mime_type 字段，
+    返回 TextContent 会因为没有 .content 属性而报 AttributeError。
+    """
     log(f"收到 read_resource 请求: {uri}")
 
     if uri == "awam://mcp-servers":
-        import json
-        mcp_tools = registry.list_all_tools(kind="mcp")
-        return [MCPTextContent(type="text", text=json.dumps(mcp_tools, ensure_ascii=False, indent=2, default=str))]
+        payload = registry.list_all_tools(kind="mcp")
 
     elif uri == "awam://tools":
-        import json
-        tools = registry.list_all_tools()
-        return [MCPTextContent(type="text", text=json.dumps(tools, ensure_ascii=False, indent=2, default=str))]
+        payload = registry.list_all_tools()
 
     elif uri == "awam://backends/status":
-        import json
-        res = backend_manager.get_backend_status()
-        return [MCPTextContent(type="text", text=json.dumps(res, ensure_ascii=False, indent=2, default=str))]
+        payload = backend_manager.get_backend_status()
 
     else:
-        return [MCPTextContent(type="text", text=f"未知资源: {uri}")]
+        fail(f"未知资源: {uri}", error_type="unknown_resource", uri=str(uri))
+
+    text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+
+    if ReadResourceContents is None:  # mcp <1.9，退回已废弃的 str 返回形式
+        return text
+    return [ReadResourceContents(content=text, mime_type="application/json")]
 
 
 # ============ Prompts（提示模板） ============
@@ -499,51 +547,58 @@ awam-tool-manager 是一个统一的工具管理器，聚合各种 MCP 工具和
 ## 基本搜索
 
 调用 `search_tools`，传入关键词：
-- 关键词会匹配工具名称、描述、标签
-- 可以用 `source` 参数按启动器筛选
+- 关键词会匹配工具的名称、显示名、描述、标签
+- 可以用 `kind` 参数按类型筛选（app = 普通应用，mcp = MCP 工具）
 
 ## 列出所有工具
 
-调用 `list_tools`，可以按来源筛选。
+调用 `list_tools`，可按同样的 `kind` 筛选。
 
 ## 查看工具详情
 
-调用 `get_tool_info`，传入工具 ID（格式：`启动器ID:工具名`）。
+调用 `get_tool_info`，传入工具 ID（即 `data/tools/` 下的文件名去掉 .json）。
 
 ## 示例
 
 1. 搜索"文件"相关工具：`search_tools(keyword="文件")`
-2. 只看 Everything 来源：`list_tools(source="everything")`
-3. 查看某个工具详情：`get_tool_info(tool_id="everything:main")`
+2. 只看 MCP 类工具：`list_tools(kind="mcp")`
+3. 查看某个工具详情：`get_tool_info(tool_id="everything")`
 """
 
     elif name == "how_to_call_backend":
         text = """# 如何调用后端 MCP 工具
 
+只有 `kind=mcp` 的工具才有后端连接，这里以 `everything-search-mcp` 为例。
+
 ## 步骤
 
-1. **查看后端状态**：`get_backend_status(launcher_id="everything")`
-2. **如果未运行，先启动**：`start_backend(launcher_id="everything")`
-3. **列出后端工具**：`list_backend_tools(launcher_id="everything")`
-   - 这会返回每个工具的名称、描述、参数 schema
-4. **调用工具**：`call_backend_tool(launcher_id="everything", tool_name="everything_search", arguments={"query": "测试"})`
+1. **查看后端状态**：`get_backend_status(tool_id="everything-search-mcp")`
+2. **如果未运行，先启动**：`start_backend(tool_id="everything-search-mcp")`
+3. **列出后端工具**：`list_backend_tools(tool_id="everything-search-mcp")`
+   - 这会返回每个子工具的名称、描述、参数 schema
+4. **调用工具**：`call_backend_tool(tool_id="everything-search-mcp", tool_name="search_files", arguments={"query": "测试"})`
 
 ## 注意事项
 
-- 工具名必须和 `list_backend_tools` 返回的一致（注意大小写）
+- 全部后端工具统一使用 `tool_id` 指定目标工具，不存在 `launcher_id` 参数
+- 子工具名必须和 `list_backend_tools` 返回的一致（注意大小写）
 - 参数必须匹配 inputSchema 的定义，必填参数不能少
 - 如果连接失败，先 `get_backend_logs` 看看日志
 - 可以用 `set_backend_log_level` 调整日志级别
 
 ## 错误处理
 
+调用失败时本服务会返回 MCP 协议层的错误（isError），文本部分是 JSON：
+
 - `connection_error`：后端未运行，用 `start_backend` 启动
 - `runtime_error`：参数错误或工具执行失败，检查参数
-- `config_error`：启动器配置有问题
+- `config_error`：工具缺少 connection 配置，或 kind 不是 mcp
+- `not_found`：工具 ID 不存在
+- `unknown_tool`：工具名不存在
 """
 
     else:
-        text = f"未知提示模板: {name}"
+        fail(f"未知提示模板: {name}", error_type="unknown_prompt", promptName=name)
 
     return [PromptMessage(role="user", content=TextContent(type="text", text=text))]
 
