@@ -34,12 +34,41 @@ class ToolRegistry:
 
     # ---- 工具 ----
 
-    def list_all_tools(self, source: str | None = None) -> list[dict[str, Any]]:
-        """列出所有工具，可按来源筛选"""
+    def _launcher_to_tool(self, launcher_config: dict[str, Any]) -> dict[str, Any]:
+        """把启动器配置包装成工具条目"""
+        lid = launcher_config.get("id")
+        return {
+            "id": lid,
+            "name": launcher_config.get("name"),
+            "displayName": launcher_config.get("displayName", launcher_config.get("name")),
+            "kind": "launcher",
+            "description": launcher_config.get("description", ""),
+            "installed": launcher_config.get("installed", False),
+            "type": launcher_config.get("type"),
+            "tags": ["启动器", "工具集"],
+            "actions": ["manage", "sync"],
+            "source": lid,
+        }
+
+    def list_all_tools(self, source: str | None = None, include_launchers: bool = True) -> list[dict[str, Any]]:
+        """列出所有工具，可按来源筛选。默认包含 launcher 类型"""
         tools = []
+
+        # 加入 launcher 类型
+        if include_launchers:
+            launchers = self.store.list_launchers()
+            for lid in launchers:
+                if source and lid != source:
+                    continue
+                config = self.store.load_launcher(lid)
+                if config:
+                    tools.append(self._launcher_to_tool(config))
+
+        # 加入普通工具
         sources = [source] if source else self.store.list_launchers()
         for src in sources:
             tools.extend(self.store.load_tools(src))
+
         return tools
 
     def search_tools(self, keyword: str, source: str | None = None) -> list[dict[str, Any]]:
@@ -61,10 +90,15 @@ class ToolRegistry:
         return results
 
     def get_tool(self, tool_id: str) -> dict[str, Any] | None:
-        """根据 ID 获取工具详情"""
-        # ID 格式：source:name
+        """根据 ID 获取工具详情，支持 launcher（无冒号）和普通工具（source:name）"""
+        # 先尝试找 launcher（ID 不带冒号的）
         if ":" not in tool_id:
+            launcher_config = self.store.load_launcher(tool_id)
+            if launcher_config:
+                return self._launcher_to_tool(launcher_config)
             return None
+
+        # 普通工具：source:name
         source, _ = tool_id.split(":", 1)
         for tool in self.store.load_tools(source):
             if tool.get("id") == tool_id:
