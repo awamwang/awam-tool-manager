@@ -9,5 +9,6 @@ venv/
 dist/
 build/
 
-# 测试脚本（非产品代码）
-test_*.py
+# 临时测试脚本（根目录下的）
+/test_*.py
+/test_output.txt
