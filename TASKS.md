@@ -77,10 +77,10 @@
 
 ### 测试覆盖
 - [x] `tests/test_registry.py` - store / registry 基础路径
-- [x] `tests/test_backend_client.py`（14 用例）- 稳定性与 P2 修复
+- [x] `tests/test_backend_client.py`（20 用例）- 稳定性、P2 修复、BackendManager 池管理
 - [x] `tests/test_store.py`（8 用例）- 容错、原子写、时间戳
-- [x] `tests/test_server_dispatch.py`（14 用例）- 12 条分发路径、错误载荷、资源读取
-- [x] `tests/test_registry_policy.py`（13 用例）- 搜索语义、schema 校验、annotations、门禁
+- [x] `tests/test_server_dispatch.py`（18 用例）- 12 条分发路径、错误载荷、资源/提示定义
+- [x] `tests/test_registry_policy.py`（14 用例）- 搜索语义、schema 校验、annotations、门禁
 - [x] `tests/test_protocol_roundtrip.py`（7 用例）- **真实 MCP 会话**：isError 映射、
   resources/read、prompts/get、annotations 下发（不 mock SDK）
 - [x] `tests/test_backend_client.py` 补 BackendManager：错误归类、`close_all`、缓存 TTL
@@ -216,9 +216,19 @@ awam-tool-manager/
 │   │   └── everything-search-mcp.json
 │   └── backend-tools/          # 后端子工具缓存
 │       └── everything-search-mcp.json
-└── src/
-    ├── server.py               # MCP Server 入口 + 对外工具定义 + 分发
-    ├── store.py                # JSON 存储层
-    ├── registry.py             # 工具注册中心
-    └── backend_client.py       # 后端 MCP 客户端与连接池
+├── src/
+│   ├── server.py               # MCP Server 入口 + 对外工具定义 + 分发
+│   ├── store.py                # JSON 存储层
+│   ├── registry.py             # 工具注册中心
+│   ├── backend_client.py       # 后端 MCP 客户端与连接池
+│   └── schema.py               # 工具条目 JSON Schema 校验（jsonschema 可选）
+└── tests/
+    ├── test_store.py
+    ├── test_registry.py
+    ├── test_registry_policy.py
+    ├── test_server_dispatch.py
+    ├── test_backend_client.py
+    └── test_protocol_roundtrip.py   # 真实 MCP 会话，不 mock SDK
 ```
+
+运行：`python -m pytest -q`（未装 pytest-asyncio，异步用例统一用 `asyncio.run`）
