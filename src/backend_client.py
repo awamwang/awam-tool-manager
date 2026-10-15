@@ -48,10 +48,11 @@ class BackendClient:
 
     def _log(self, level: str, message: str):
         """记录日志"""
+        import sys
         timestamp = time.strftime("%H:%M:%S")
         self.logs.append({"time": timestamp, "level": level, "message": message})
-        # 同时打印到 stdout
-        print(f"[awam:{self.launcher_id}][{level}] {message}", flush=True)
+        # 打印到 stderr，不能污染 stdout 协议通道
+        print(f"[awam:{self.launcher_id}][{level}] {message}", file=sys.stderr, flush=True)
 
     async def start(self) -> dict:
         """启动后端 MCP Server 并建立连接"""
