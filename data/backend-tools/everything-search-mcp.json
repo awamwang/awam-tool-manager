@@ -1,0 +1,76 @@
+{
+  "parent": "everything-search-mcp",
+  "lastSynced": "2026-10-15T16:40:00Z",
+  "source": "manual",
+  "tools": [
+    {
+      "name": "search_files",
+      "description": "Search for files and folders using Everything (Windows) or platform-specific search engines",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Search query. Supports wildcards (*, ?), operators"
+          },
+          "maxResults": {
+            "type": "number",
+            "default": 100,
+            "description": "Maximum number of results to return"
+          },
+          "offset": {
+            "type": "number",
+            "description": "Number of results to skip (for pagination)"
+          },
+          "sortBy": {
+            "type": "string",
+            "description": "Sort results by field (Windows only)"
+          },
+          "sortOrder": {
+            "type": "string",
+            "description": "Sort order (Windows only)"
+          },
+          "matchPath": {
+            "type": "boolean",
+            "description": "Match against full path instead of just filename"
+          },
+          "matchCase": {
+            "type": "boolean",
+            "description": "Enable case-sensitive matching"
+          },
+          "matchWholeWord": {
+            "type": "boolean",
+            "description": "Match whole words only (Windows only)"
+          },
+          "regex": {
+            "type": "boolean",
+            "description": "Enable regex mode"
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "get_file_info",
+      "description": "Get detailed metadata for a specific file or folder",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Full path to the file or folder"
+          }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "check_status",
+      "description": "Check the status of the search engine and platform",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  ]
+}

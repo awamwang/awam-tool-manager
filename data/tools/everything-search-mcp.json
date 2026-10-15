@@ -1,0 +1,22 @@
+{
+  "id": "everything-search-mcp",
+  "name": "Everything Search MCP",
+  "kind": "mcp",
+  "description": "Everything 文件搜索的 MCP 接口，提供文件搜索、文件信息查询能力",
+  "version": "latest",
+  "status": "installed",
+  "publisher": "community",
+  "website": "https://www.npmjs.com/package/everything-search-mcp",
+  "tags": ["文件搜索", "MCP", "系统工具"],
+  "connection": {
+    "type": "stdio",
+    "command": "cmd.exe",
+    "args": ["/c", "npx", "-y", "everything-search-mcp"]
+  },
+  "install": {
+    "method": "npm",
+    "command": "npm i -g everything-search-mcp"
+  },
+  "createdAt": "2026-10-15T16:50:00Z",
+  "updatedAt": "2026-10-15T16:50:00Z"
+}

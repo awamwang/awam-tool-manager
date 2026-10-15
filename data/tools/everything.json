@@ -1,38 +1,34 @@
 {
-  "schemaVersion": "1.0",
-  "source": "everything",
-  "tools": [
-    {
-      "id": "everything:main",
-      "name": "Everything",
-      "displayName": "Everything 文件搜索",
-      "description": "极速文件搜索工具，毫秒级搜索百万文件，支持正则、按路径/大小/日期筛选",
-      "version": "1.4.1",
-      "publisher": "voidtools",
-      "website": "https://www.voidtools.com/",
-      "docUrl": "https://www.voidtools.com/support/everything/",
-      "icon": "",
-      "launch": {
-        "type": "executable",
-        "command": "C:\\Program Files\\Everything\\Everything.exe",
-        "args": []
-      },
-      "update": {
-        "method": "winget",
-        "packageId": "voidtools.Everything"
-      },
-      "tags": ["文件搜索", "系统工具", "效率"],
-      "kind": "app",
-      "status": "installed",
-      "actions": ["launch", "search"],
-      "capabilities": ["search", "index"],
-      "readOnly": false,
-      "destructive": false,
-      "metadata": {
-        "portable": false,
-        "free": true,
-        "supportsRegex": true
-      }
-    }
-  ]
+  "id": "everything",
+  "name": "Everything",
+  "displayName": "Everything 文件搜索",
+  "kind": "app",
+  "description": "Windows 极速文件搜索工具，毫秒级搜索百万文件，支持正则、按路径/大小/日期筛选",
+  "version": "1.4.1",
+  "publisher": "voidtools",
+  "website": "https://www.voidtools.com/",
+  "docUrl": "https://www.voidtools.com/support/everything/",
+  "icon": "",
+  "status": "installed",
+  "launch": {
+    "type": "executable",
+    "command": "C:\\Program Files\\Everything\\Everything.exe",
+    "args": []
+  },
+  "update": {
+    "method": "winget",
+    "packageId": "voidtools.Everything"
+  },
+  "tags": ["文件搜索", "系统工具", "效率"],
+  "actions": ["launch", "search"],
+  "capabilities": ["search", "index"],
+  "readOnly": false,
+  "destructive": false,
+  "metadata": {
+    "portable": false,
+    "free": true,
+    "supportsRegex": true
+  },
+  "createdAt": "2026-10-15T16:50:00Z",
+  "updatedAt": "2026-10-15T16:50:00Z"
 }
