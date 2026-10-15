@@ -6,7 +6,23 @@
 
 ---
 
-## 0. 第三次更新：P1 已修复（2026-10-15 晚）
+## 0. 第四次更新：P2 已修复（最新）
+
+修复了全部 7 项 P2，并补了 `test_store.py` / `test_server_dispatch.py` 两个测试文件（测试总数 13 → 41 passed）。
+
+| 编号 | 问题 | 处理方式 |
+|---|---|---|
+| D12 | 单个坏 JSON 拖垮全服务 | `load_json` 捕获 `JSONDecodeError` / `OSError` / 顶层非对象，告警后返回 `None`；`list_tools()` 跳过损坏文件 |
+| D13 | 写盘非原子，崩溃留半截 JSON | `save_json` 改为「同目录临时文件 → `fsync` → `os.replace`」；写失败时删除临时文件且不破坏原内容 |
+| D9 | `limit=0` 返回全部日志 | `get_logs` 显式判 `limit<=0` → 返回 `[]`（`logs[-0:]` 等价于全量） |
+| D10 | `set_backend_log_level` 形同虚设 | `_log()` 按 `LOG_LEVEL_PRIORITY` 在**入队前**过滤，避免心跳 debug 挤掉 error |
+| D14 | 连接配置无法热更新 | `get_client` 在客户端空闲（stopped/error）且磁盘配置变化时原地重建并继承日志；运行中禁止热替换以免留下孤儿进程；工具被删除后不再返回旧缓存 |
+| D15 | `lastSynced` 硬编码 `"now"` | 写入 `datetime.now(timezone.utc)` 的 `%Y-%m-%dT%H:%M:%SZ`，与 `docs/format.md` 示例一致 |
+| D19 | server 分发无自动化测试 | 新增 `tests/test_server_dispatch.py`（14 例）：12 条分发路径、错误载荷 `errorType`、资源返回 `ReadResourceContents`、工具定义无遗留参数名 |
+
+---
+
+## 0.0 第三次更新：P1 已修复（2026-10-15 晚）
 
 按第二批计划修复了全部 4 项 P1，并补了首个 backend_client 单元测试文件（13 passed）。
 
@@ -72,12 +88,13 @@ P0 与 P1 已全部关闭。剩余有效待办为 P2 的 D9–D15、P3 的 D17/D
 |---|---|
 | 架构设计 | ⭐⭐⭐⭐ 分层清晰（接口 / 领域 / 存储 / 路由），职责边界干净 |
 | 契约一致性 | ⭐⭐⭐⭐ 修复后已对齐（原 ⭐⭐） |
-| 健壮性 | ⭐⭐⭐⭐ 修复后超时、清理、缓存保护均已到位（原 ⭐⭐） |
-| 可维护性 | ⭐⭐⭐⭐ 后端模块已有针对性测试（原 ⭐⭐） |
+| 健壮性 | ⭐⭐⭐⭐⭐ 超时、清理、JSON 容错、原子写均已到位（原 ⭐⭐） |
+| 可维护性 | ⭐⭐⭐⭐⭐ 4 个测试文件共 41 个用例（原 ⭐⭐） |
 | 协议合规 | ⭐⭐⭐⭐ 修复后主体合规，annotations / structuredContent 待补 |
 
 **共发现 25 项问题**：P0 级 4 项、P1 级 5 项、P2 级 8 项、P3 级 4 项、后续新增 4 项。
-**P0 与 P1 已全部修复**，下一批重点是 P2 的 D9–D15。
+**P0 / P1 / P2（D9–D15）已全部修复并完成回归**，P3 的 D19 已补齐测试。
+剩余待办为 **D17 / D18 / D21 / D22**（语义与命名一致性）以及 §7 的四项架构议题（A1–A4）。
 
 ---
 
@@ -252,7 +269,7 @@ try:
 
 ## 5. P2 —— 行为不符合预期
 
-### D9. `get_backend_logs` 的 `limit=0` 会返回全部日志（已实测）
+### D9. ✅ 已修复 —— `get_backend_logs` 的 `limit=0` 会返回全部日志（已实测）
 
 **位置**：`src/backend_client.py:245`
 
@@ -265,7 +282,11 @@ Python 中 `-0 == 0`，`logs[-0:]` 等价于 `logs[0:]` → **返回全部**。
 
 **修复建议**：`return logs[len(logs) - limit:] if limit > 0 else []`
 
-### D10. `set_backend_log_level` 形同虚设
+**已修复（第四轮）**：`get_logs()` 开头显式判 `limit is None or limit <= 0 → []`；
+`test_backend_client.py::test_get_logs_limit_zero_returns_empty` 固化为用例，
+真实后端回归实测 `logs(limit=0)` 返回 `[]`、`limit=3` 返回 3 条。
+
+### D10. ✅ 已修复 —— `set_backend_log_level` 形同虚设
 
 **位置**：`src/backend_client.py:49-55`、`247-254`
 
@@ -274,6 +295,10 @@ Python 中 `-0 == 0`，`logs[-0:]` 等价于 `logs[0:]` → **返回全部**。
 **真正的 error 日志会被挤掉**，而 `get_backend_logs` 恰恰是排查故障的主要手段。
 
 **修复建议**：`_log()` 开头按级别过滤；`_log` 里的 `import sys` 提到模块顶层。
+
+**已修复（第四轮）**：新增类常量 `LOG_LEVEL_PRIORITY`，`_log()` 在**入队之前**比较优先级后返回，
+stderr 打印也随之过滤（`set_backend_log_level("warning")` 后心跳噪声不再刷屏）。用例：`test_log_level_filters_before_enqueue`
+（设为 warning 时 debug/info 完全不入队，error 保留）。
 
 ### D11. ✅ 已修复 —— 启动日志拼接假定 `args` 全为字符串
 
@@ -288,7 +313,7 @@ self._log("info", f"启动命令: {command} {' '.join(args)}")
 
 **修复建议**：`' '.join(str(a) for a in args)`
 
-### D12. 单个 JSON 文件损坏会拖垮整个服务
+### D12. ✅ 已修复 —— 单个 JSON 文件损坏会拖垮整个服务
 
 **位置**：`src/store.py:16-21`、`42-51`
 
@@ -298,7 +323,12 @@ self._log("info", f"启动命令: {command} {' '.join(args)}")
 **修复建议**：`load_json` 捕获 `json.JSONDecodeError` 并记录文件名后返回 `None`，
 `list_tools()` 跳过损坏文件而不是整体崩溃。
 
-### D13. 写盘非原子，崩溃会留下半截 JSON
+**已修复（第四轮）**：`load_json` 分别捕获 `json.JSONDecodeError` 与 `OSError`，
+并额外校验顶层必须是 `dict`（防止下游 `tool.get()` 报 `AttributeError`），
+失败时向 stderr 打印含文件名的告警后返回 `None`。新增 `tests/test_store.py`：
+坏文件被跳过、其余工具照常返回、顶层为数组也跳过。
+
+### D13. ✅ 已修复 —— 写盘非原子，崩溃会留下半截 JSON
 
 **位置**：`src/store.py:23-27`
 
@@ -307,7 +337,13 @@ self._log("info", f"启动命令: {command} {' '.join(args)}")
 
 **修复建议**：先写 `path.with_suffix(".tmp")`，再 `os.replace(tmp, path)` 原子替换。
 
-### D14. 连接配置无法热更新
+**已修复（第四轮）**：`save_json` 用 `tempfile.mkstemp` 在同目录建前缀为 `.` 的临时文件
+（必须是同分区，`os.replace` 才是原子操作），写完 `flush + fsync` 后 `os.replace` 替换目标；
+任何异常都在移除临时文件后原样抛出，绝不留下半成品。用例：
+`test_save_json_is_atomic_and_leaves_no_temp`（无残留）、
+`test_failed_write_keeps_old_content`（写入失败时旧内容完好）。
+
+### D14. ✅ 已修复 —— 连接配置无法热更新
 
 **位置**：`src/backend_client.py:264-283`
 
@@ -317,7 +353,14 @@ self._log("info", f"启动命令: {command} {' '.join(args)}")
 
 **修复建议**：`stop_backend()` 时从 `self.clients` 移除该条目，下次重新读取配置。
 
-### D15. `lastSynced` 硬编码为字符串 `"now"`
+**已修复（第四轮）**：改为「以磁盘配置为真相源」——`get_client()` 每次都以
+`store.load_tool()` 的最新内容为准；运行/启动中的连接直接复用（热替换会产生孤儿进程
+且让调用方持有失效引用），而**空闲状态（stopped/error）下若 `connection` 已变化就原地重建**，
+并继承旧对象的 `logs` 与 `log_level`，排障时的历史日志不会断。另外工具被删除或不再配置
+`connection` 时不再返回旧缓存对象。用例：`test_idle_client_is_rebuilt_when_config_changed`、
+`test_running_client_is_not_replaced`、`test_missing_tool_yields_no_client`。
+
+### D15. ✅ 已修复 —— `lastSynced` 硬编码为字符串 `"now"`
 
 **位置**：`src/store.py:67-72`
 
@@ -329,6 +372,11 @@ self._log("info", f"启动命令: {command} {' '.join(args)}")
 缓存新鲜度无从判断，也让"超过 N 天自动重新同步"这类逻辑无法实现。
 
 **修复建议**：`datetime.now(timezone.utc).isoformat()`
+
+**已修复（第四轮）**：写入 `datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")`，
+与 `docs/format.md` 里 `lastSynced` 的示例格式完全一致（便于直接 `strptime` 解析）。
+真实后端回归后 `data/backend-tools/everything-search-mcp.json` 已由 `"now"`
+更新为 `"2026-10-15T12:04:56Z"`。用例：`test_last_synced_is_real_timestamp`。
 
 ### D16. ✅ 已修复 —— Prompt 模板教的参数名是错的
 
@@ -374,14 +422,21 @@ call_backend_tool(launcher_id="everything", tool_name="everything_search", ...)
 而 `get_tool_info` 的参数说明把 `tool_id` 举例如 `everything`、`everything-search-mcp`
 （这其实是"工具 ID"，但命名和历史上的"启动器 ID"混在一起），容易误用。
 
-### D19. ✅ 部分改善 —— 测试覆盖薄弱
+### D19. ✅ 已修复 —— 测试覆盖薄弱
 
 - `tests/test_registry.py` 覆盖 store + registry 的 happy path；
-- **`tests/test_backend_client.py`（新增，8 个用例）** 针对性覆盖 P1 修复：
+- `tests/test_backend_client.py`（14 个用例）覆盖 P1/P2 的稳定性修复：
   清理顺序（client 退出失败仍要保证 stdio 被释放）、清理幂等、stop/start 串行、
-  残留连接清理、空结果不覆盖缓存、超时标记、心跳失败清理；
-- `server.py` 的 12 个分发分支仍无自动化测试，目前靠手工脚本回归（见第 9 节）；
+  残留连接清理、空结果不覆盖缓存、超时标记、心跳失败清理、**日志 limit 边界**、
+  **日志级别过滤**、**配置热更新三种情形**；
+- `tests/test_store.py`（8 个用例，第四轮新增）：坏 JSON 跳过 / 顶层非对象跳过 /
+  原子写无残留 / 写失败保原内容 / `lastSynced` 真实时间戳；
+- `tests/test_server_dispatch.py`（14 个用例，第四轮新增）：12 条分发路径、
+  错误载荷的 `errorType`、`internal_error` 兜底、工具定义不含遗留参数名、
+  三个资源均返回可读的 `ReadResourceContents`；
 - 根目录 8 个 `test_*.py` 调试脚本已被 `.gitignore` 排除。
+
+> 全部异步用例用 `asyncio.run` 驱动，**不引入 pytest-asyncio**，运行测试只需 `mcp` + `pytest`。
 
 ### D20. ✅ 已修复 —— 代码组织细节
 
@@ -466,16 +521,24 @@ SDK 对 Iterable 执行 `[create_content(item.content, item.mime_type) for item 
 9. ~~**D11** —— `args` 拼接改 `str(a)`~~
 10. ~~**D8** —— 随上一轮的 `ToolError` 机制一并解决~~
 
-**第三批（下一轮，健壮性）**
+**第三批（已完成 ✅）**
 
-11. **D12 / D13** —— JSON 读容错 + 原子写（**建议优先**：单个坏文件会拖垮整个服务）；
-12. **D9 / D10 / D14 / D15** —— 边界与配置问题；
+11. ~~**D12 / D13** —— JSON 读容错 + 原子写~~ → 坏文件跳过，`mkstemp` + `os.replace` 原子写盘
+12. ~~**D9 / D10 / D14 / D15** —— 边界与配置问题~~
+    - D9：`limit<=0` 返回 `[]`（`-0 == 0` 的陷阱）
+    - D10：`_log()` 按级别在入队前过滤
+    - D14：空闲时按磁盘最新 `connection` 重建客户端，运行中禁止热替换
+    - D15：`lastSynced` 写真实 UTC 时间戳
+13. ~~**D19** —— 补 `test_store.py`（8 例）与 `test_server_dispatch.py`（14 例）~~ → 合计 41 passed
 
-**第三批（迭代，一致性）**
+**第四批（待做，一致性与合规）**
 
-10. **D9 / D10 / D11 / D14 / D15** —— 边界与配置问题；
-11. **D17 / D18 / D21** —— 剩余命名与筛选语义；
-12. **D19** —— 补 backend_client 与 server dispatch 测试。
+14. **D17 / D18 / D21** —— `source`/`kind` 语义分叉、搜索不含 `id`、README 与数据命名不一致；
+15. **D22** —— `launch_tool` 只返回命令不实际执行（已在文档中标注，待定是否需要改名）；
+16. **A1 / A2** —— 引入 `jsonschema` 校验；把 `readOnly` / `destructive` 映射为 MCP Tool annotations；
+17. **A3** —— `BackendManager` 并发限流与排队。
+
+> 原先 §8 里有一个重复编号的「第三批（迭代，一致性）」小节，已合并到上面的第四批。
 
 ---
 
@@ -488,7 +551,7 @@ pip install "mcp>=1.9.0,<2.0.0" pytest
 # 2) 静态检查
 python -m py_compile src/*.py tests/*.py
 
-# 3) 单元测试（13 项：store/registry + backend_client 稳定性）
+# 3) 单元测试（41 项：store/registry + backend_client 稳定性 + store 容错/原子写 + server 分发）
 python -m pytest tests/ -q
 
 # 4) import 验证（mcp 2.x 下会 AttributeError）
@@ -524,10 +587,24 @@ async def main():
 asyncio.run(main())
 PY
 
-# 7) limit 边界 bug 复现（D9，尚未修复）
+# 7) D9 边界复现 —— logs[-0:] 确实是全量，这正是 limit=0 返回全部的原因
 python -c "logs=[{'i':i} for i in range(5)]; print(len(logs[-0:]))"   # 输出 5，预期 0
+
+# 8) D13 原子写验证：写入成功后数据目录不应有 . 开头的临时文件残留
+python -c "
+import sys, json; sys.path.insert(0,'src')
+from pathlib import Path
+from store import JsonStore
+s = JsonStore('data'); s.save_backend_tools('_selftest', [{'name':'x'}])
+p = Path('data/backend-tools')
+print('残留:', [f.name for f in p.iterdir() if f.name.startswith('.')])
+(p/'_selftest.json').unlink()
+"
 ```
 
 本次审核中 **D2、D9、D23、D24** 均通过上述方式实测确认；
-D4 / D5 / D6 / D7 的修复由新增的 `tests/test_backend_client.py` 回归覆盖，
-并已用真实后端子进程做过一轮完整启停验证。
+D4 / D5 / D6 / D7 的修复由 `tests/test_backend_client.py` 覆盖，
+D9 / D10 / D12 / D13 / D14 / D15 由新增的 `tests/test_store.py`、`test_backend_client.py`
+与 `tests/test_server_dispatch.py` 覆盖（`41 passed`），
+并已用真实后端子进程做过完整启停 + 调用回归：启动成功 → 自动同步 3 个工具 →
+`lastSynced` 写入真实时间戳 → 调用 `search_files` 返回结果 → 停止后状态回到 `stopped`。

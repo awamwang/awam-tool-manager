@@ -1,8 +1,18 @@
 """JSON 存储层：读写工具条目和后端 MCP 子工具"""
 
+import contextlib
 import json
+import os
+import sys
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+def _warn(message: str) -> None:
+    """存储层告警：走 stderr，绝不能污染 MCP 的 stdout 协议通道"""
+    print(f"[awam:store][warning] {message}", file=sys.stderr, flush=True)
 
 
 class JsonStore:
@@ -14,17 +24,61 @@ class JsonStore:
         self.backend_tools_dir = self.base_dir / "backend-tools"
 
     def load_json(self, path: Path) -> dict[str, Any] | None:
-        """读取 JSON 文件，不存在返回 None"""
+        """读取 JSON 文件
+
+        - 文件不存在 → None（正常情况，语义等同「尚未配置」）
+        - JSON 损坏 / 顶层不是对象 / 读不动 → None + stderr 告警
+
+        这里必须容错而不是让异常冒泡：load_json 会被 list_tools() 对每个
+        文件循环调用，而这些 list_* 又是 resources、prompts、几乎全部
+        只读工具的共同底座。一个坏文件若抛异常，等于单点损坏升级成全表
+        不可用。宁可跳过这一个文件，也不能让服务整体起不来。
+        """
         if not path.exists():
             return None
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            _warn(f"JSON 解析失败，已跳过该文件: {path} ({e})")
+            return None
+        except OSError as e:
+            _warn(f"文件读取失败，已跳过: {path} ({e})")
+            return None
+
+        if not isinstance(data, dict):
+            _warn(f"文件内容不是 JSON 对象，已跳过: {path}（实际为 {type(data).__name__}）")
+            return None
+        return data
 
     def save_json(self, path: Path, data: dict[str, Any]) -> None:
-        """写入 JSON 文件"""
+        """原子写入 JSON 文件
+
+        先写同目录临时文件，再 os.replace 覆盖目标。
+
+        为什么不能直接 open(path, "w")：本服务是被 MCP 客户端拉起的子进程，
+        随时可能被 kill。截断写进行到一半时进程退出，就会在磁盘上留下一份
+        半个 JSON；下次 load_json 读到的就是它 —— 配合上面的容错会让该工具
+        静默消失。os.replace 在同一分区是原子的，读端只会看到旧版本或新版本，
+        不存在中间态。
+        """
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
+        except BaseException:
+            # 写入中途失败不要让半成品 / 临时文件留在数据目录里堆积
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+            raise
 
     # ---- 工具条目（tools/ 目录）----
 
@@ -66,7 +120,9 @@ class JsonStore:
         """保存某个 MCP 工具的所有子工具"""
         data = {
             "parent": parent_id,
-            "lastSynced": "now",
+            # 真实 UTC 时间戳，格式与 docs/format.md 的示例一致
+            # （历史上这里写死的是字面量 "now"，无法判断缓存有多旧）
+            "lastSynced": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "source": "auto",
             "tools": tools
         }

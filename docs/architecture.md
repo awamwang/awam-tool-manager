@@ -75,7 +75,7 @@ awam-tool-manager/
 │       └── everything-search-mcp.json
 └── src/
     ├── server.py             # MCP Server 入口 + 全部对外工具定义 + 分发
-    ├── store.py              # JSON 存储层（84 行）
+    ├── store.py              # JSON 存储层（139 行，读容错 + 原子写）
     ├── registry.py           # 工具注册中心（77 行）
     └── backend_client.py     # 后端 MCP 客户端与连接池（411 行）
 ```
@@ -135,7 +135,7 @@ awam-tool-manager/
 ```json
 {
   "parent": "everything-search-mcp",
-  "lastSynced": "now",
+  "lastSynced": "2026-10-15T12:04:56Z",
   "source": "auto",
   "tools": [
     { "name": "search_files", "description": "...", "inputSchema": { ... } }
@@ -184,10 +184,10 @@ awam-tool-manager/
 
 | 模块 | 行数 | 职责 | 依赖 |
 |---|---|---|---|
-| `store.py` | 84 | JSON 文件的读写与目录遍历，无缓存、无校验 | 标准库 |
-| `registry.py` | 77 | 工具查询语义（列表 / 搜索 / 详情 / 启动信息），无状态 | `store` |
-| `backend_client.py` | 411 | 后端 MCP 子进程的连接管理、调用转发、缓存、心跳、日志 | `mcp`、`store` |
-| `server.py` | 582 | MCP 协议入口，定义并分发全部对外能力 | `mcp`、`store`、`registry`、`backend_client` |
+| `store.py` | 139 | JSON 文件的读写与目录遍历，读有容错、写走原子替换，无缓存、无 schema 校验 | 标准库 |
+| `registry.py` | 76 | 工具查询语义（列表 / 搜索 / 详情 / 启动信息），无状态 | `store` |
+| `backend_client.py` | 547 | 后端 MCP 子进程的连接管理、调用转发、缓存、心跳、日志 | `mcp`、`store` |
+| `server.py` | 636 | MCP 协议入口，定义并分发全部对外能力 | `mcp`、`store`、`registry`、`backend_client` |
 
 ### 5.3 后端路由调用链
 
@@ -321,19 +321,27 @@ python src/server.py
 | 启动日志拼接假定 `args` 全为字符串 | ✅ 改为 `str(a)` |
 | backend_client 零测试 | ✅ 新增 `tests/test_backend_client.py`（8 用例） |
 
-### 8.3 尚未处理 ⏳
+### 8.3 第三轮已修复 ✅（P2）
+
+| 项 | 处理 |
+|---|---|
+| JSON 读容错（D12） | ✅ `load_json` 捕获 `JSONDecodeError` / `OSError` + 校验顶层为 dict，告警后返回 `None`，坏文件不影响其他工具 |
+| 原子写（D13） | ✅ 同目录 `mkstemp` → `fsync` → `os.replace`；写失败清理临时文件且保留原内容 |
+| `get_backend_logs` 的 `limit=0` 边界（D9） | ✅ 显式判 `limit<=0 → []`（`-0 == 0` 陷阱） |
+| 日志级别未真正过滤（D10） | ✅ `_log()` 按 `LOG_LEVEL_PRIORITY` 在入队前过滤 |
+| 连接配置无法热更新（D14） | ✅ 空闲时按磁盘最新 `connection` 重建客户端并继承日志；运行中禁止热替换 |
+| `lastSynced` 字面量 `"now"`（D15） | ✅ 写入 UTC `%Y-%m-%dT%H:%M:%SZ` |
+| server 分发零测试（D19） | ✅ 新增 `tests/test_store.py`（8）+ `tests/test_server_dispatch.py`（14），合计 41 passed |
+
+### 8.4 尚未处理 ⏳
 
 | 项 | 说明 |
 |---|---|
 | Tool 未带 `annotations` | 数据里的 `readOnly` / `destructive` 未映射到 Tool 定义 |
 | `structuredContent` | 待依赖下限提到 `>=1.30` 后可启用 |
-| JSON 读容错 + 原子写（D12/D13） | 单个坏文件会拖垮整个服务，**建议下一轮优先** |
-| `lastSynced` 真实时间戳 | 当前仍是历史上的 `"now"` 字面量 |
-| `get_backend_logs` 的 `limit=0` 边界（D9） | `-0 == 0` 会返回全部日志 |
-| 日志级别未真正过滤（D10） | debug 心跳会挤满 500 条 deque |
-| 连接配置无法热更新（D14） | 改 JSON 后需重启 MCP Server |
 | 工具变更通知 | `notifications/tools/list_changed` 未发送（顶层工具集静态，影响小） |
 | 标准 logging capability | 目前用自定义 Tool 查日志 |
+| 命名与语义一致性（D17/D18/D21） | `source`/`kind` 分叉、搜索不含 `id`、README 与数据命名不一致 |
 
 > 完整清单见 [`code-review.md`](code-review.md) 与 [`mcp-conformance.md`](mcp-conformance.md)。
 
@@ -349,9 +357,9 @@ python src/server.py
 | `server.py` `dispatch_tool` | 12 个工具的分发（if/elif 链） |
 | `server.py` `read_resource` | 返回 `Iterable[ReadResourceContents]` |
 | `server.py` `main` | stdio 事件循环 + `finally` 关闭全部后端 |
-| `store.py` `load_json` / `save_json` | JSON 读写（无容错 / 非原子写，见 code-review D12/D13） |
+| `store.py` `load_json` / `save_json` | JSON 读写：读有容错（坏文件跳过），写走 `mkstemp` + `os.replace` 原子替换 |
 | `registry.py` `search_tools` | 关键词匹配 name / displayName / description / tags（不含 id） |
 | `backend_client.py` `BackendClient.start` | 子进程启动、连接、预热工具列表、起心跳 |
-| `backend_client.py` `BackendClient._cleanup` | 资源清理（两个 context 共用 try，见 D5） |
-| `backend_client.py` `BackendClient.call_tool` | 转发调用（无超时保护，见 D6） |
-| `backend_client.py` `BackendManager` | 连接池、`tool_id` → client 映射 |
+| backend_client.py 新增的 `_cleanup_lock` 保证清理串行且幂等（第一轮修复前两个 context 共用 try） |
+| `backend_client.py` `BackendClient.call_tool` | 转发调用，`wait_for` 限时，超时标记连接不可用 |
+| `backend_client.py` `BackendManager.get_client` | 连接池；以磁盘配置为真相源，空闲时按新 `connection` 重建 |

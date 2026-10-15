@@ -206,10 +206,12 @@ MCP **不规定** Server 内部如何持久化数据，因此 `data/tools/` + `d
 MCP Tool 还可携带 `title` / `annotations` / `outputSchema`，这些在同步时丢失了。
 建议在 `_refresh_tools_cache` 里一并保存，供未来结构化输出与安全提示使用。
 
-### 3.4 `lastSynced` 字段 ⚠️
+### 3.4 `lastSynced` 字段 ✅
 
-目录下 writer 曾硬编码 `"lastSynced": "now"`（历史数据里现在还是这个值），
-无法用于判断缓存新鲜度。已在规范文档中改为 ISO 8601，代码修复排入后续迭代。
+writer 曾硬编码 `"lastSynced": "now"`（历史数据里存的就是这个值），无法判断缓存新鲜度。
+现已写入 `datetime.now(timezone.utc)` 的 `%Y-%m-%dT%H:%M:%SZ`，与 `docs/format.md` 的示例
+格式一致；真实后端回归后 `data/backend-tools/everything-search-mcp.json` 已更新为
+`"2026-10-15T12:04:56Z"`。
 
 ---
 
@@ -242,9 +244,10 @@ AttributeError: 'Server' object has no attribute 'list_tools'
 | ✅ 已完成 | `read_resource` 返回 `ReadResourceContents` | 2.3 |
 | ✅ 已完成 | 依赖锁定 `mcp<2.0.0` | 4 |
 | ✅ 已完成 | 参数名统一 `tool_id`，修正 prompt 模板 | - |
+| ✅ 已完成 | `lastSynced` 写真实 ISO 8601 时间（`%Y-%m-%dT%H:%M:%SZ`） | 3.4 |
+| ✅ 已完成 | 数据文件读写补齐：坏 JSON 跳过 + 原子写盘 | code-review D12/D13 |
 | P1 | Tool 补 `annotations`（映射 `readOnly` / `destructive`） | 2.4 |
 | P2 | 依赖下限提到 `>=1.30` 后改用 `structuredContent` + `outputSchema` | 2.2 |
 | P2 | 同步后端工具时保留 `title` / `annotations` / `outputSchema` | 3.3 |
-| P2 | `lastSynced` 写真实 ISO 8601 时间 | 3.4 |
 | P3 | 工具集动态化时补 `notifications/tools/list_changed` | 1.2 |
 | P3 | 考虑接入标准 logging capability | 1.3 |

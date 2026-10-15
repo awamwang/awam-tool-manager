@@ -54,7 +54,19 @@
 - [x] 后端调用统一超时（默认 30s，可用 `connection.timeout` 覆盖）
 - [x] start / stop 串行化，start 前清理上次残留连接
 - [x] 心跳失败与调用超时都会释放连接，不再留孤儿子进程
-- [x] `tests/test_backend_client.py`（8 用例）覆盖上述稳定性修复
+- [x] JSON 读容错：坏文件 / 非对象文件跳过并告警，不再拖垮整个服务
+- [x] JSON 原子写：临时文件 → `fsync` → `os.replace`，崩溃不会留下半截 JSON
+- [x] `get_backend_logs` 的 `limit<=0` 返回空列表（此前 `-0 == 0` 会返回全部）
+- [x] `_log()` 按日志级别过滤后再入队（此前 debug 心跳会挤掉 error）
+- [x] `connection` 配置热更新：后端空闲时按磁盘最新配置重建，无需重启 MCP Server
+- [x] `lastSynced` 写真实 UTC 时间戳（此前是字面量 `"now"`）
+
+### 测试覆盖
+- [x] `tests/test_registry.py` - store / registry 基础路径
+- [x] `tests/test_backend_client.py`（14 用例）- 稳定性与 P2 修复
+- [x] `tests/test_store.py`（8 用例）- 容错、原子写、时间戳
+- [x] `tests/test_server_dispatch.py`（14 用例）- 12 条分发路径、错误载荷、资源读取
+- [x] 合计 41 passed；真实后端子进程启停 + 调用回归通过
 
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
@@ -75,10 +87,10 @@
 - [ ] launch_tool 真正执行启动（目前只返回命令）
 
 ### P1 - 体验完善
-- [ ] 工具自动同步：通过 MCP 从启动器拉取子工具列表
-- [ ] 启动器自动发现：检测本机安装了哪些启动器
-- [ ] 工具标签分类和筛选优化
+- [ ] 工具自动发现：检测本机已安装哪些可作为 MCP 后端接入的工具
+- [ ] 工具标签分类和筛选优化（`kind` / `tags` 之外的维度）
 - [ ] 工具帮助文档查看（--help 输出）
+- [ ] `jsonschema` 校验：加载 `data/**/*.json` 时按 `docs/format.md` 校验并跳过不合规条目
 
 ### P2 - 生态扩展
 - [ ] 接入 Scoop（写 CLI 适配器）

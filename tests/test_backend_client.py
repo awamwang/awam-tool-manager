@@ -181,6 +181,96 @@ def test_call_tool_timeout_marks_broken():
     assert "超时" in client.last_error
 
 
+class FakeStore:
+    """最小化的 store，只提供 get_client 需要的 load_tool"""
+
+    def __init__(self, tools: dict | None = None):
+        self.tools = tools or {}
+
+    def load_tool(self, tool_id: str):
+        return self.tools.get(tool_id)
+
+
+def _mcp_tool(connection: dict) -> dict:
+    return {"id": "mcp1", "kind": "mcp", "connection": connection}
+
+
+def test_get_logs_limit_zero_returns_empty():
+    """D9：limit=0 必须是「不要」，不能因为 -0 == 0 变成全量"""
+    client = BackendClient("fake", {"type": "stdio"})
+    for i in range(3):
+        client._log("info", f"第 {i} 条")
+
+    assert len(client.logs) == 3
+    assert client.get_logs(limit=0) == []
+    assert len(client.get_logs(limit=2)) == 2
+
+
+def test_log_level_filters_before_enqueue():
+    """D10：低级别日志不入队，避免心跳 debug 把 error 挤出 500 条 deque"""
+    client = BackendClient("fake", {"type": "stdio"})
+    client.log_level = "warning"
+
+    client._log("debug", "心跳正常")
+    client._log("info", "启动成功")
+    assert len(client.logs) == 0, "低于 warning 的日志不应进入队列"
+
+    client._log("error", "炸了")
+    assert len(client.logs) == 1
+    assert client.logs[0]["level"] == "error"
+
+
+def test_set_log_level_rejects_unknown():
+    client = BackendClient("fake", {"type": "stdio"})
+    result = client.set_log_level("trace")
+    assert result["success"] is False
+    assert client.log_level == "info"  # 不能被非法值污染
+
+
+def test_idle_client_is_rebuilt_when_config_changed():
+    """D14：停止状态下改 connection，下一次取用应拿到新配置"""
+    store = FakeStore({"mcp1": _mcp_tool({"type": "stdio", "command": "old"})})
+    manager = BackendManager(store)
+
+    first = manager.get_client("mcp1")
+    assert first.connection_config["command"] == "old"
+    first._log("warning", "这段历史要留着")
+
+    # 改配置并停掉（stopped 才允许热替换）
+    store.tools["mcp1"] = _mcp_tool({"type": "stdio", "command": "new"})
+    first.status = BackendClient.STATUS_STOPPED
+
+    second = manager.get_client("mcp1")
+    assert second is not first
+    assert second.connection_config["command"] == "new"
+    # 日志历史必须跟着走，否则排障时刚看过的日志会凭空消失
+    assert [l["message"] for l in second.logs] == ["这段历史要留着"]
+
+
+def test_running_client_is_not_replaced():
+    """D14：运行中的连接不能被热替换，否则会留下孤儿子进程"""
+    store = FakeStore({"mcp1": _mcp_tool({"type": "stdio", "command": "old"})})
+    manager = BackendManager(store)
+
+    first = manager.get_client("mcp1")
+    first.status = BackendClient.STATUS_RUNNING
+
+    store.tools["mcp1"] = _mcp_tool({"type": "stdio", "command": "new"})
+    assert manager.get_client("mcp1") is first
+
+
+def test_missing_tool_yields_no_client():
+    """工具从磁盘删掉后，不应再返回缓存里的旧客户端"""
+    store = FakeStore({"mcp1": _mcp_tool({"type": "stdio", "command": "x"})})
+    manager = BackendManager(store)
+
+    client = manager.get_client("mcp1")
+    client.status = BackendClient.STATUS_STOPPED
+    del store.tools["mcp1"]
+
+    assert manager.get_client("mcp1") is None
+
+
 def test_heartbeat_failure_cleans_up():
     """心跳失败不只改状态，还要释放子进程"""
 

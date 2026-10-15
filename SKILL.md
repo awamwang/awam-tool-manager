@@ -56,8 +56,8 @@ awam-tool-manager/
 | `start_backend` | `tool_id`(必填) | 启动后端并自动同步工具目录 |
 | `stop_backend` | `tool_id`(必填) | 停止后端 |
 | `get_backend_status` | `tool_id` | 查看单个或全部后端状态 |
-| `get_backend_logs` | `tool_id`(必填)、`level`、`limit` | 查看后端日志 |
-| `set_backend_log_level` | `tool_id`、`level`(必填) | 设置后端日志级别 |
+| `get_backend_logs` | `tool_id`(必填)、`level`、`limit` | 查看后端日志（`limit<=0` 返回空） |
+| `set_backend_log_level` | `tool_id`、`level`(必填) | 设置后端日志级别（低于该级别的日志不再入队/打印） |
 | `sync_backend_tools` | `tool_id`(必填) | 手动同步子工具目录 |
 
 另有 3 个 Resource：`awam://tools`、`awam://mcp-servers`、`awam://backends/status`。
@@ -78,6 +78,10 @@ awam-tool-manager/
 1. 在 `data/tools/` 下新建 `{tool_id}.json`（字段见 `docs/format.md`）
 2. 普通应用写 `kind=app` + `launch`；MCP 工具写 `kind=mcp` + `connection`
 3. MCP 工具调用 `start_backend(tool_id=...)` 建立连接并自动同步子工具目录
+
+> 修改已有工具的 `connection` 时，若后端当前是停止/错误状态，**下次调用会用新配置重建连接**，
+> 无需重启 MCP Server；运行中则不受影响（避免留下孤儿进程），需先 `stop_backend` 再 `start_backend`。
+> 坏掉的 JSON 会被跳过并打印 stderr 告警，不会导致整个服务不可用。
 
 ## 依赖约束
 

@@ -30,6 +30,10 @@ class BackendClient:
     # 工具列表缓存有效期（秒）
     TOOLS_CACHE_TTL = 300
 
+    VALID_LOG_LEVELS = ["debug", "info", "warning", "error"]
+    # 级别优先级：低于当前 log_level 的消息不入队
+    LOG_LEVEL_PRIORITY = {"debug": 10, "info": 20, "warning": 30, "error": 40}
+
     def __init__(self, tool_id: str, connection_config: dict):
         self.tool_id = tool_id
         self.connection_config = connection_config
@@ -61,7 +65,16 @@ class BackendClient:
         self._client_context = None
 
     def _log(self, level: str, message: str):
-        """记录日志"""
+        """记录日志
+
+        过滤必须发生在**入队之前**。self.logs 是定长 500 的 deque：心跳每 30s
+        一条 debug，不在这一层拦掉的话，约 4 小时就能把队列填满并把真正的
+        error 挤出去 —— 而排查故障时最需要的恰恰就是被挤掉的那部分。
+        只在 get_logs() 里按 level 筛是没用的，那时数据已经丢了。
+        """
+        if self.LOG_LEVEL_PRIORITY.get(level, 20) < self.LOG_LEVEL_PRIORITY.get(self.log_level, 20):
+            return
+
         timestamp = time.strftime("%H:%M:%S")
         self.logs.append({"time": timestamp, "level": level, "message": message})
         # 打印到 stderr，不能污染 stdout 协议通道
@@ -320,15 +333,23 @@ class BackendClient:
         }
 
     def get_logs(self, level: str | None = None, limit: int = 50) -> list[dict]:
-        """获取日志"""
+        """获取最近的日志
+
+        limit<=0 明确返回空列表。这里不能用 logs[-limit:] 兜底：Python 里
+        -0 == 0，切片 [0:] 返回的是**全部**日志 —— 传 0 本意是「不要」，
+        结果变成「全量」，语义正好相反。
+        """
         logs = list(self.logs)
         if level:
             logs = [l for l in logs if l["level"] == level]
+
+        if limit is None or limit <= 0:
+            return []
         return logs[-limit:]
 
     def set_log_level(self, level: str) -> dict:
         """设置日志级别"""
-        valid_levels = ["debug", "info", "warning", "error"]
+        valid_levels = self.VALID_LOG_LEVELS
         if level not in valid_levels:
             return {"success": False, "error": f"无效的日志级别，可选: {valid_levels}"}
         self.log_level = level
@@ -344,10 +365,27 @@ class BackendManager:
         self.clients: dict[str, BackendClient] = {}
 
     def get_client(self, tool_id: str) -> BackendClient | None:
-        """获取指定 MCP 工具的后端客户端"""
-        if tool_id in self.clients:
-            return self.clients[tool_id]
+        """获取（或按需创建）指定 MCP 工具的后端客户端
 
+        缓存会被复用，但创建时快照了一份 connection 配置用于比对：
+
+        - 工具已从磁盘删除 / 不再是 mcp 类型 / 没有 connection → 不再返回旧
+          缓存对象，避免出现「配置项已删但还能启后端」的幽灵连接；
+        - 空闲（stopped/error，即没有活子进程）且磁盘配置已变 → 就地重建，
+          改完 tools/*.json 不必重启 MCP Server 就能生效；
+        - 正在运行/启动中时**绝不重建**：那会把正在跑的子进程丢成孤儿，
+          且调用方手里的旧引用与被替换的新对象从此不是同一个。
+        """
+        # 运行中的连接先返回：热替换会让调用方手里的引用与新对象分家，
+        # 也会把活着的子进程丢成孤儿。改配置请先 stop 再 start。
+        client = self.clients.get(tool_id)
+        if client is not None and client.status not in (
+            BackendClient.STATUS_STOPPED,
+            BackendClient.STATUS_ERROR,
+        ):
+            return client
+
+        # 空闲（stopped/error）或从未连接：一律以磁盘上的当前配置为准
         tool_config = self.store.load_tool(tool_id)
         if not tool_config:
             return None
@@ -360,7 +398,16 @@ class BackendManager:
         if not connection:
             return None
 
+        # 配置没变就继续复用旧对象，避免平白丢掉日志历史
+        if client is not None and client.connection_config == connection:
+            return client
+
+        previous = self.clients.pop(tool_id, None)
         client = BackendClient(tool_id, connection)
+        if previous is not None:
+            # 继承日志与日志级别：重建不应让运维刚查过的历史日志凭空消失
+            client.logs = previous.logs
+            client.log_level = previous.log_level
         self.clients[tool_id] = client
         return client
 
