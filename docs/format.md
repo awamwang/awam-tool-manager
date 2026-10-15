@@ -35,6 +35,7 @@
 | `connection.command` | string | - | 拉起子进程的命令 |
 | `connection.args` | array | - | 子进程参数 |
 | `connection.env` | object | - | 子进程环境变量 |
+| `connection.timeout` | number | - | 后端操作超时（秒），缺省 `30`。覆盖 initialize / list_tools / call_tool / ping |
 | `update` | object | - | 更新方式 |
 | `update.method` | string | - | `winget` / `scoop` / `npm` / `manual` |
 | `update.packageId` | string | - | 包管理器中的包 ID |

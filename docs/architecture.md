@@ -213,9 +213,16 @@ call_backend_tool(tool_id, tool_name, arguments)
            └────── stop() ────────┴──── error ◄─────────┘
 ```
 
-- `start()` 成功后会**预热工具列表**并启动 30s 心跳任务；
+- `start()` 成功后会**预热工具列表**并启动心跳任务（间隔 30s，探测超时 10s）；
 - `BackendManager.start_backend()` 在启动成功后**自动执行一次 `sync_tools_catalog`**；
-- 心跳失败仅把状态改为 `error`，**不清理连接、不自动重连**。
+- 心跳失败会把状态置为 `error` 并**主动清理连接**（不再留僵尸子进程）；
+- 调用超时同样会把连接标记为 `error` 并后台清理，让后续请求快速失败而不是继续卡住。
+
+**并发与清理约束**：
+
+- `start()` 与 `stop()` 共用 `_lock`，避免状态与真实连接不一致；
+- `start()` 开头会清理上次残留的 context（例如心跳失败后遗留的）；
+- 所有清理统一走 `_cleanup()`，用独立的 `_cleanup_lock` 保证**串行且幂等**。
 
 ---
 
@@ -255,7 +262,7 @@ call_backend_tool(tool_id, tool_name, arguments)
 ### 6.3 Prompts（3 个）
 
 `getting_started`、`how_to_search`、`how_to_call_backend`
-（⚠️ `how_to_call_backend` 正文使用的参数名已过期，见审核报告 D16）
+（示例参数已于本轮修正为 `tool_id`，见审核报告 D16）
 
 ---
 
@@ -280,15 +287,17 @@ python src/server.py
 | 日志统一输出 stderr，不污染 stdout 协议通道 | ✅ 正确且关键 |
 | 所有工具返回统一 JSON 字符串 | ✅ 便于 AI 解析 |
 | 后端连接懒加载 + 连接池缓存 | ✅ 合理 |
-| 工具列表 5 分钟缓存 + `force_refresh` | ✅ 合理 |
-| 子进程目录同步到磁盘 | ✅ 便于离线查询 |
+| 工具列表缓存（`TOOLS_CACHE_TTL` = 300s）+ `force_refresh` | ✅ 合理 |
+| 子进程目录同步到磁盘 | ✅ 便于离线查询；空结果不覆盖已有缓存 |
+| 后端调用统一超时（默认 30s，`connection.timeout` 可覆盖） | ✅ 避免子进程卡死拖垮服务 |
+| `start` / `stop` 共用锁 + 独立清理锁 | ✅ 状态与真实连接一致，清理幂等 |
 | `store` 每次请求全量重读 JSON | ⚠️ 小规模可接受，无缓存层 |
 
 ---
 
 ## 8. 已同步项与遗留缺口
 
-### 8.1 本次已修复 / 已同步 ✅
+### 8.1 第一轮已修复 / 已同步 ✅（P0）
 
 | 项 | 处理 |
 |---|---|
@@ -300,13 +309,29 @@ python src/server.py
 | `read_resource` 返回 `TextContent`（缺 `.content` 属性必报错） | ✅ 改为 `ReadResourceContents` |
 | Prompt 模板教 AI 用错误参数名 | ✅ 修正示例并补充错误类型说明 |
 
-### 8.2 尚未处理 ⏳
+### 8.2 第二轮已修复 ✅（P1）
+
+| 项 | 处理 |
+|---|---|
+| 同步失败时用空结果覆盖 backend-tools 缓存 | ✅ 空列表拒绝写盘，保留原缓存 |
+| `_cleanup` 共用 try 导致子进程泄漏 | ✅ 两个 context 各自独立 try/finally |
+| 清理可能并发（心跳失败 vs `stop`） | ✅ 引入 `_cleanup_lock`，清理串行且幂等 |
+| 后端调用无任何超时保护 | ✅ `initialize`/`list_tools`/`call_tool`/`ping` 全部限时，超时标记连接不可用 |
+| `stop()` 未加锁与 `start()` 竞态 | ✅ 共用 `_lock`；start 前先清残留 |
+| 启动日志拼接假定 `args` 全为字符串 | ✅ 改为 `str(a)` |
+| backend_client 零测试 | ✅ 新增 `tests/test_backend_client.py`（8 用例） |
+
+### 8.3 尚未处理 ⏳
 
 | 项 | 说明 |
 |---|---|
 | Tool 未带 `annotations` | 数据里的 `readOnly` / `destructive` 未映射到 Tool 定义 |
 | `structuredContent` | 待依赖下限提到 `>=1.30` 后可启用 |
+| JSON 读容错 + 原子写（D12/D13） | 单个坏文件会拖垮整个服务，**建议下一轮优先** |
 | `lastSynced` 真实时间戳 | 当前仍是历史上的 `"now"` 字面量 |
+| `get_backend_logs` 的 `limit=0` 边界（D9） | `-0 == 0` 会返回全部日志 |
+| 日志级别未真正过滤（D10） | debug 心跳会挤满 500 条 deque |
+| 连接配置无法热更新（D14） | 改 JSON 后需重启 MCP Server |
 | 工具变更通知 | `notifications/tools/list_changed` 未发送（顶层工具集静态，影响小） |
 | 标准 logging capability | 目前用自定义 Tool 查日志 |
 

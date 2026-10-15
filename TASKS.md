@@ -48,9 +48,17 @@
 - [x] `call_backend_tool` - 路由转发到后端 MCP 执行
 - [x] `list_backend_tools` - 列出后端 MCP 提供的工具
 
+### 稳定性
+- [x] Tool 目录同步失败时不会用空结果覆盖已有缓存
+- [x] 连接清理：client / stdio 各自独立 try + 独立清理锁（串行幂等）
+- [x] 后端调用统一超时（默认 30s，可用 `connection.timeout` 覆盖）
+- [x] start / stop 串行化，start 前清理上次残留连接
+- [x] 心跳失败与调用超时都会释放连接，不再留孤儿子进程
+- [x] `tests/test_backend_client.py`（8 用例）覆盖上述稳定性修复
+
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
-- [x] Everything Search MCP（`kind=mcp`，已实测连接与调用跑通）
+- [x] Everything Search MCP（`kind=mcp`，已实测连接、调用、启停跑通）
 
 ### 其他
 - [x] Git 仓库初始化，代码版本管理

@@ -6,7 +6,26 @@
 
 ---
 
-## 0. 第二次更新：P0 已修复 + 协议一致性专项（2026-10-15 晚）
+## 0. 第三次更新：P1 已修复（2026-10-15 晚）
+
+按第二批计划修复了全部 4 项 P1，并补了首个 backend_client 单元测试文件（13 passed）。
+
+| 编号 | 问题 | 处理方式 |
+|---|---|---|
+| D4 | 同步失败用空结果覆盖缓存 | `sync_tools_catalog` 遇空列表拒绝写盘，返回错误保留原缓存 |
+| D5 | `_cleanup` 共用 try 泄漏子进程 | 两个 context 各自独立 try/finally；另加 `_cleanup_lock` 保证串行幂等 |
+| D6 | 后端调用无超时 | `initialize` / `list_tools` / `call_tool` / `ping` 全部 `wait_for`，默认 30s 可由 `connection.timeout` 覆盖；超时后连接标记不可用并后台清理 |
+| D7 | `stop()` 未加锁 | stop 与 start 共用 `_lock`；start 前先清理上次残留 context |
+| D8 | 无异常兜底、错误风格不一 | 上一轮已随 `ToolError` 机制一并解决 |
+| 附带 | 启动日志 join 假定参数全为字符串 | 改为 `str(a)` 拼接（原 D11） |
+| 附带 | `_log` 每次import sys、魔法数字 30/300 散落 | 提到模块顶层并抽为类常量 |
+
+验证：真实后端子进程启停回归通过（启动→同步 3 工具→停止，状态正确回到 stopped），
+新增 `tests/test_backend_client.py` 覆盖上述四个修复（含"client 退出失败仍要保证 stdio 被释放"的用例）。
+
+---
+
+## 0.0 第二次更新：P0 已修复 + 协议一致性专项（2026-10-15 晚）
 
 按审核结论执行了首轮修复，并在做 MCP 协议一致性对比时**新发现一个 P0 级缺陷**。
 
@@ -40,9 +59,10 @@ handler 内部无法修改。也就是说：本项目原先所有 `{"success": f
 **在 MCP 协议层都被标记为"调用成功"**。唯一让客户端感知失败的途径是抛异常。
 已据此重构错误处理，详见 [`mcp-conformance.md`](mcp-conformance.md)。
 
-### 0.4 剩余问题
+### 0.4 第三轮修复后的剩余问题
 
-D4、D5、D6、D7（P1）与 D9–D15（P2）尚未处理，仍然是有效待办，清单见下。
+P0 与 P1 已全部关闭。剩余有效待办为 P2 的 D9–D15、P3 的 D17/D18/D19/D21/D22，清单见下。
+其中 D12/D13（JSON 容错与原子写）建议优先，它们会让单个坏文件拖垮整个服务。
 
 ---
 
@@ -52,12 +72,12 @@ D4、D5、D6、D7（P1）与 D9–D15（P2）尚未处理，仍然是有效待�
 |---|---|
 | 架构设计 | ⭐⭐⭐⭐ 分层清晰（接口 / 领域 / 存储 / 路由），职责边界干净 |
 | 契约一致性 | ⭐⭐⭐⭐ 修复后已对齐（原 ⭐⭐） |
-| 健壮性 | ⭐⭐ **仍弱** —— 关键路径缺少超时、缓存保护、容错 |
-| 可维护性 | ⭐⭐⭐ 代码可读性尚可，但 schema 内联、测试覆盖不足 |
+| 健壮性 | ⭐⭐⭐⭐ 修复后超时、清理、缓存保护均已到位（原 ⭐⭐） |
+| 可维护性 | ⭐⭐⭐⭐ 后端模块已有针对性测试（原 ⭐⭐） |
 | 协议合规 | ⭐⭐⭐⭐ 修复后主体合规，annotations / structuredContent 待补 |
 
-**共发现 23 项问题**：P0 级 4 项、P1 级 5 项、P2 级 8 项、P3 级 4 项、协议类 2 项。
-其中 **P0 全部已修复**，下一批重点是 P1 的 D4/D5/D6/D7。
+**共发现 25 项问题**：P0 级 4 项、P1 级 5 项、P2 级 8 项、P3 级 4 项、后续新增 4 项。
+**P0 与 P1 已全部修复**，下一批重点是 P2 的 D9–D15。
 
 ---
 
@@ -159,7 +179,7 @@ pytest>=7.0.0
 
 ## 4. P1 —— 数据丢失 / 资源泄漏 / 挂起
 
-### D4. 同步失败时会用空结果覆盖已有的工具目录缓存
+### D4. ✅ 已修复 —— 同步失败时会用空结果覆盖已有的工具目录缓存
 
 **位置**：`src/backend_client.py:306-323`
 
@@ -179,7 +199,7 @@ if not tools:
     return {"success": False, "error": "后端返回空工具列表，保留原缓存未覆盖"}
 ```
 
-### D5. 资源清理共用 try，异常会导致子进程泄漏
+### D5. ✅ 已修复 —— 资源清理共用 try，异常会导致子进程泄漏
 
 **位置**：`src/backend_client.py:131-142`
 
@@ -195,7 +215,7 @@ try:
 
 **修复建议**：两段 `__aexit__` 各自独立 try/except。
 
-### D6. 所有后端调用无超时保护
+### D6. ✅ 已修复 —— 所有后端调用无超时保护
 
 **位置**：`backend_client.py:91`（`initialize`）、`167`（`list_tools`）、`201`（`call_tool`）
 
@@ -204,7 +224,7 @@ try:
 
 **修复建议**：统一用 `asyncio.wait_for(..., timeout=20)` 包裹，并对超时执行 `stop()` + 状态置 error。
 
-### D7. `stop()` 未加锁，与 `start()` 存在并发竞态
+### D7. ✅ 已修复 —— `stop()` 未加锁，与 `start()` 存在并发竞态
 
 **位置**：`backend_client.py:113-129`
 
@@ -219,7 +239,7 @@ try:
 - `stop()` 也纳入 `self._lock`；
 - `start()` 开头先判断 `if self._stdio_context or self._client_context: await self._cleanup()`。
 
-### D8. 工具调用 handler 无异常兜底，且错误风格不统一
+### D8. ✅ 已修复 —— 工具调用 handler 无异常兜底，且错误风格不统一
 
 **位置**：`src/server.py:243-390`
 
@@ -255,7 +275,7 @@ Python 中 `-0 == 0`，`logs[-0:]` 等价于 `logs[0:]` → **返回全部**。
 
 **修复建议**：`_log()` 开头按级别过滤；`_log` 里的 `import sys` 提到模块顶层。
 
-### D11. 启动日志拼接假定 `args` 全为字符串
+### D11. ✅ 已修复 —— 启动日志拼接假定 `args` 全为字符串
 
 **位置**：`src/backend_client.py:79`
 
@@ -354,12 +374,14 @@ call_backend_tool(launcher_id="everything", tool_name="everything_search", ...)
 而 `get_tool_info` 的参数说明把 `tool_id` 举例如 `everything`、`everything-search-mcp`
 （这其实是"工具 ID"，但命名和历史上的"启动器 ID"混在一起），容易误用。
 
-### D19. 测试覆盖薄弱
+### D19. ✅ 部分改善 —— 测试覆盖薄弱
 
-- `tests/test_registry.py` 只覆盖 store + registry 的 happy path；
-- `backend_client.py`（411 行，含子进程 / 连接 / 缓存 / 心跳）**零测试**；
-- `server.py` 的 12 个分发分支、未知工具、异常路径**零测试**；
-- 根目录 8 个 `test_*.py` 调试脚本被 `.gitignore` 排除，无法进入回归。
+- `tests/test_registry.py` 覆盖 store + registry 的 happy path；
+- **`tests/test_backend_client.py`（新增，8 个用例）** 针对性覆盖 P1 修复：
+  清理顺序（client 退出失败仍要保证 stdio 被释放）、清理幂等、stop/start 串行、
+  残留连接清理、空结果不覆盖缓存、超时标记、心跳失败清理；
+- `server.py` 的 12 个分发分支仍无自动化测试，目前靠手工脚本回归（见第 9 节）；
+- 根目录 8 个 `test_*.py` 调试脚本已被 `.gitignore` 排除。
 
 ### D20. ✅ 已修复 —— 代码组织细节
 
@@ -436,11 +458,18 @@ SDK 对 Iterable 执行 `[create_content(item.content, item.mime_type) for item 
 5. ~~**D20** —— 文件中部 import~~ → 已合并至顶部
 6. ~~**D23 / D24** —— 协议合规（resources 返回值、isError 映射）~~ → 已修复并实测
 
-**第二批（下一轮，稳定性）**
+**第二批（已完成 ✅）**
 
-7. **D4 / D5 / D7** —— 缓存覆盖保护、清理逻辑拆分、stop 加锁；
-8. **D6** —— 后端调用统一加超时；
-9. **D12 / D13** —— JSON 读容错 + 原子写。
+7. ~~**D4 / D5 / D7** —— 缓存覆盖保护、清理逻辑拆分、stop 加锁~~
+   另加 `_cleanup_lock` 保证清理串行幂等（心跳失败与 stop 并发的场景）
+8. ~~**D6** —— 后端调用统一加超时~~ 默认 30s，可用 `connection.timeout` 覆盖
+9. ~~**D11** —— `args` 拼接改 `str(a)`~~
+10. ~~**D8** —— 随上一轮的 `ToolError` 机制一并解决~~
+
+**第三批（下一轮，健壮性）**
+
+11. **D12 / D13** —— JSON 读容错 + 原子写（**建议优先**：单个坏文件会拖垮整个服务）；
+12. **D9 / D10 / D14 / D15** —— 边界与配置问题；
 
 **第三批（迭代，一致性）**
 
@@ -459,8 +488,8 @@ pip install "mcp>=1.9.0,<2.0.0" pytest
 # 2) 静态检查
 python -m py_compile src/*.py tests/*.py
 
-# 3) 单元测试
-python -m pytest tests/ -q          # 5 passed
+# 3) 单元测试（13 项：store/registry + backend_client 稳定性）
+python -m pytest tests/ -q
 
 # 4) import 验证（mcp 2.x 下会 AttributeError）
 python -c "import sys; sys.path.insert(0,'src'); import server; print('OK')"
@@ -481,8 +510,24 @@ async def main():
 asyncio.run(main())
 PY
 
-# 6) limit 边界 bug 复现（D9，尚未修复）
+# 6) 真实子进程启停回归（必须跑通：启动 -> 同步 -> 停止 -> 状态回到 stopped）
+python - <<'PY'
+import sys, asyncio, json
+sys.path.insert(0, 'src')
+from store import JsonStore
+from backend_client import BackendManager
+async def main():
+    m = BackendManager(JsonStore("data"))
+    print(await asyncio.wait_for(m.start_backend("everything-search-mcp"), timeout=90))
+    print(m.get_backend_status("everything-search-mcp")["status"]["status"])
+    print((await m.stop_backend("everything-search-mcp")))
+asyncio.run(main())
+PY
+
+# 7) limit 边界 bug 复现（D9，尚未修复）
 python -c "logs=[{'i':i} for i in range(5)]; print(len(logs[-0:]))"   # 输出 5，预期 0
 ```
 
-本次审核中 **D2、D9、D23、D24** 均通过上述方式实测确认。
+本次审核中 **D2、D9、D23、D24** 均通过上述方式实测确认；
+D4 / D5 / D6 / D7 的修复由新增的 `tests/test_backend_client.py` 回归覆盖，
+并已用真实后端子进程做过一轮完整启停验证。
