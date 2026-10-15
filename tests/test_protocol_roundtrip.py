@@ -132,3 +132,47 @@ def test_prompt_over_protocol_teaches_real_params():
     assert "mcp_tool_id=" not in text
     assert "tool_id=" in text
     assert "search_files" in text
+
+
+def test_successful_call_carries_structured_content():
+    """structuredContent：客户端应收到可解析的结构化结果，而非只有文本
+
+    这是 mcp 1.30 的 structuredContent 能力。dispatch_tool 仍返回 JSON 文本
+    （既有的纯文本通道保持不变，向后兼容），call_tool 额外附带 structuredContent。
+    """
+
+    async def go():
+        async with create_connected_server_and_client_session(server.app) as session:
+            return await session.call_tool("list_tools", {})
+
+    result = run(go())
+
+    assert not result.isError
+    # 文本通道仍然可用（向后兼容）
+    payload = json.loads(result.content[0].text)
+    assert payload["success"] is True
+    # 结构化通道：客户端无需再 json.loads 文本
+    sc = result.structuredContent
+    assert isinstance(sc, dict), f"structuredContent 不是 dict: {sc!r}"
+    assert sc["success"] is True
+    assert isinstance(sc["tools"], list)
+    assert len(sc["tools"]) == len(payload["tools"])
+
+
+def test_tools_list_carries_output_schema():
+    """outputSchema：客户端在 tools/list 里应读到每个工具的 outputSchema
+
+    本项目用统一的 SHARED_OUTPUT_SCHEMA 声明所有工具输出都含顶层
+    success(bool)，其余字段随工具而异（additionalProperties=true）。
+    """
+
+    async def go():
+        async with create_connected_server_and_client_session(server.app) as session:
+            return (await session.list_tools()).tools
+
+    tools = {t.name: t for t in run(go())}
+    assert len(tools) == 12
+    for t in tools.values():
+        assert t.outputSchema is not None, f"{t.name} 缺少 outputSchema"
+        assert t.outputSchema["required"] == ["success"]
+        assert t.outputSchema["properties"]["success"]["type"] == "boolean"

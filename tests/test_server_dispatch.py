@@ -179,11 +179,22 @@ def test_backend_busy_maps_to_typed_error(monkeypatch):
 
 
 def test_call_tool_wrapper_returns_text_content():
-    """MCP 入口：成功回包必须是 TextContent 列表"""
-    contents = run(server.call_tool("list_tools", {}))
-    assert len(contents) == 1
-    assert contents[0].type == "text"
-    assert json.loads(contents[0].text)["success"] is True
+    """MCP 入口：成功回包是 CallToolResult，content 为单条 TextContent，且带 structuredContent
+
+    此测试锁定「call_tool 的返回契约」：1.30 起直接返回 CallToolResult，
+    文本通道保留（向后兼容），同时附带结构化结果。
+    """
+    from mcp.types import CallToolResult
+
+    result = run(server.call_tool("list_tools", {}))
+    assert isinstance(result, CallToolResult)
+    assert result.isError is False
+    assert len(result.content) == 1
+    assert result.content[0].type == "text"
+    assert json.loads(result.content[0].text)["success"] is True
+    # 1.30 的 structuredContent 能力：客户端无需再 json.loads 文本
+    assert isinstance(result.structuredContent, dict)
+    assert result.structuredContent["success"] is True
 
 
 def test_call_tool_wrapper_propagates_tool_error():
@@ -282,3 +293,21 @@ def test_get_unknown_prompt_raises():
         run(server.get_prompt("nope"))
 
     assert payload_of(exc)["errorType"] == "unknown_prompt"
+
+
+def test_call_tool_returns_structured_result():
+    """call_tool 现在直接返回 CallToolResult，并附带 structuredContent（mcp 1.30 能力）
+
+    dispatch_tool 仍返回 JSON 文本（单测依赖它），call_tool 在其上包一层
+    CallToolResult：文本通道保留，同时给出结构化结果。
+    """
+    from mcp.types import CallToolResult
+
+    res = run(server.call_tool("list_tools", {}))
+
+    assert isinstance(res, CallToolResult), f"call_tool 未返回 CallToolResult: {type(res)}"
+    assert res.isError is False
+    assert isinstance(res.structuredContent, dict)
+    assert res.structuredContent["success"] is True
+    # 文本通道保留（向后兼容）
+    assert "tools" in json.loads(res.content[0].text)

@@ -6,7 +6,25 @@
 
 ---
 
-## 0. 第七次更新：A4 —— 文档改由 schema 反向生成（最新）
+## 0. 第八次更新：structuredContent / outputSchema 启用（最新）
+
+最后一项可选增强落地：把 `mcp` 依赖下限从 `>=1.9.0` 提到 `>=1.30.0`（structuredContent /
+outputSchema 是 1.30 起稳定的能力），并真正用上它们：
+
+| 变更 | 说明 |
+|---|---|
+| `requirements.txt` | 下限 `>=1.9.0` → `>=1.30.0`（仍锁 `<2.0.0`） |
+| `src/server.py` | `call_tool` 改为直接返回 `CallToolResult`，在保留文本通道的同时附带 `structuredContent`（dict）；`list_tools` 给每个工具挂统一 `outputSchema`（`SHARED_OUTPUT_SCHEMA`：顶层 `success` 为 bool、`additionalProperties=true`，既声明能力又不触发 1.30 的输出校验失败） |
+| `tests/test_server_dispatch.py` | `call_tool` 返回 `CallToolResult` 且带 `structuredContent` 的单测；既有「返回 TextContent 列表」的测试同步到新契约 |
+| `tests/test_protocol_roundtrip.py` | 协议层验证：成功调用客户端真实收到 `structuredContent`；`tools/list` 下发 `outputSchema` |
+
+验证：协议回环里 `list_tools` 调用 `isError=False` 且 `structuredContent["success"]==True`、
+`tools/list` 12 个工具均带 `outputSchema`（含 `required:["success"]`）—— 证明 1.30 的
+outputSchema 输出校验确实通过，未出现 `Output validation error`。合计 **89 passed**（7 个测试文件）。
+
+---
+
+## 0. 第七次更新：A4 —— 文档改由 schema 反向生成
 
 A4 此前只是"部分改善"：字段分叉补回文档后，靠"记得同步两边"的约定维系，
 时间一长必然再漂。**现在收口为单向依赖**：
@@ -135,16 +153,17 @@ P0 与 P1 已全部关闭。剩余有效待办为 P2 的 D9–D15、P3 的 D17/D
 | 架构设计 | ⭐⭐⭐⭐ 分层清晰（接口 / 领域 / 存储 / 路由），职责边界干净 |
 | 契约一致性 | ⭐⭐⭐⭐ 修复后已对齐（原 ⭐⭐） |
 | 健壮性 | ⭐⭐⭐⭐⭐ 超时、清理、JSON 容错、原子写均已到位（原 ⭐⭐） |
-| 可维护性 | ⭐⭐⭐⭐⭐ 7 个测试文件共 82 个用例，含协议层回环与文档漂移检测（原 ⭐⭐） |
-| 协议合规 | ⭐⭐⭐⭐⭐ annotations 已下发、destructive 门禁已落地，仅 `structuredContent` 待依赖升级 |
+| 可维护性 | ⭐⭐⭐⭐⭐ 7 个测试文件共 89 个用例，含协议层回环与文档漂移检测（原 ⭐⭐） |
+| 协议合规 | ⭐⭐⭐⭐⭐ annotations 已下发、destructive 门禁已落地、structuredContent / outputSchema 已启用（mcp>=1.30） |
 | 文档一致性 | ⭐⭐⭐⭐⭐ 字段表由 schema 生成，示例与 data/ 真实文件均入校验（原 ⭐⭐） |
 
 **共发现 27 项问题**：P0 级 4 项、P1 级 5 项、P2 级 8 项、P3 级 4 项、后续新增 6 项
 （D23/D24 来自协议专项，**D25/D26 来自协议层回环测试**）。
 **P0 / P1 / P2（D9–D15）/ P3 的 D17/D18/D19/D21/D22 已全部修复**；
 架构议题中 **A1（schema 校验）、A2（annotations + destructive 门禁）、
-A3（单后端串行 + 超限报 busy）、A4（由 schema 反向生成文档）均已落地**。
-审核发现的问题至此全部收口。
+A3（单后端串行 + 超限报 busy）、A4（由 schema 反向生成文档）均已落地**，
+最后一项可选增强 **A5（structuredContent / outputSchema，依赖下限提到 mcp>=1.30）** 也已完成。
+审核发现的问题与协议增强至此全部收口。
 
 > **A3 的收口方式（方案 2）**：同一后端任意时刻只允许一个 `call_tool` 在飞，
 > 并发调用直接抛 `BackendBusyError` 并由 `manager.call_backend_tool` 转成
@@ -230,7 +249,7 @@ IMPORT FAILED -> AttributeError: 'Server' object has no attribute 'list_tools'
 **修复建议**：
 
 ```
-mcp>=1.9.0,<2.0.0
+mcp>=1.30.0,<2.0.0
 pytest>=7.0.0
 ```
 
@@ -703,9 +722,14 @@ GetPromptResult"）→ **prompts/get 全部失败**。
     `BackendBusyError` → `errorType=backend_busy`，合计 86 passed；
     要升级信号量上限 + 等待队列只需调 `MAX_CONCURRENT_CALLS`（见 §9 A3）
 
-**后续可选增强（非缺陷）**
+**第八批（已完成 ✅）**
 
-23. 依赖下限提到 `mcp>=1.30` 后启用 `structuredContent` / `outputSchema`。
+23. ~~**A5** —— 依赖下限 `mcp>=1.9.0` → `>=1.30.0`，启用 `structuredContent` /
+    `outputSchema`~~ → `call_tool` 返回带 `structuredContent` 的 `CallToolResult`、
+    `list_tools` 给每个工具挂统一 `outputSchema`，合计 **89 passed**（见 §0 第八次更新）；
+    协议回环已验证输出校验不报错。
+
+> 原先 §8 里有一个重复编号的「第三批（迭代，一致性）」小节，已合并到上面的批次。
 
 > 原先 §8 里有一个重复编号的「第三批（迭代，一致性）」小节，已合并到上面的批次。
 
@@ -714,8 +738,8 @@ GetPromptResult"）→ **prompts/get 全部失败**。
 ## 9. 验证方法（可在本机复现）
 
 ```bash
-# 1) 依赖约束 —— 必须是 1.x
-pip install "mcp>=1.9.0,<2.0.0" pytest
+# 1) 依赖约束 —— 必须是 1.x（>=1.30 才能用 structuredContent / outputSchema）
+pip install "mcp>=1.30.0,<2.0.0" pytest
 
 # 2) 静态检查
 python -m py_compile src/*.py tests/*.py scripts/*.py
@@ -783,6 +807,7 @@ D9 / D10 / D12 / D13 / D14 / D15 由新增的 `tests/test_store.py`、`test_back
 与 `tests/test_server_dispatch.py` 覆盖，
 D17 / D18 / A1 / A2 由 `tests/test_registry_policy.py` 覆盖，
 D24 / D25 / D26 由 `tests/test_protocol_roundtrip.py`（真实 MCP 会话）覆盖，
-A4 由 `tests/test_docs_sync.py` 覆盖（合计 `82 passed`），
+A4 由 `tests/test_docs_sync.py` 覆盖，A5（structuredContent / outputSchema）由
+`tests/test_protocol_roundtrip.py` + `tests/test_server_dispatch.py` 覆盖（合计 `89 passed`），
 并已用真实后端子进程做过完整启停 + 调用回归：启动成功 → 自动同步 3 个工具 →
 `lastSynced` 写入真实时间戳 → 调用 `search_files` 返回结果 → 停止后状态回到 `stopped`。

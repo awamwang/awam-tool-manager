@@ -4,7 +4,11 @@
 # read_resource()/list_prompts() 等低层装饰器，handler 签名也变更。
 # 本项目 server.py 依赖 1.x API，安装 2.x 会导致 import 阶段直接
 # AttributeError 而无法启动。迁移到 2.x 需同步重写 server.py 的注册方式。
-mcp>=1.9.0,<2.0.0
+# structuredContent / outputSchema 是 mcp 1.30 才稳定的能力（见 src/server.py 的
+# call_tool 与 list_tools）。下限提到 1.30.0；仍锁 <2.0.0：2.0 起 mcp.server.Server
+# 移除了 list_tools()/call_tool() 等低层装饰器，handler 签名也变更，会导致 import
+# 阶段 AttributeError 而无法启动。
+mcp>=1.30.0,<2.0.0
 
 # 工具条目校验（A1）：按 docs/format.md 的规范校验 data/tools/*.json。
 # 可选依赖 —— 未安装时 src/schema.py 会自动降级为「必填 + 类型 + 枚举」的基础校验，

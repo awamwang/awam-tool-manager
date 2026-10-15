@@ -93,7 +93,11 @@
 - [x] **A3 并发限流（方案 2：单后端串行 + 超限报 busy）** - `BackendClient._call_lock` +
       `BackendBusyError` → `errorType=backend_busy`（不排队）；并发两个 `call_tool`
       一个成功、一个 busy 的回归已钉住
-- [x] 合计 **86 passed**（7 个文件）；真实后端子进程启停 + 调用回归通过
+- [x] **A5 structuredContent / outputSchema（mcp>=1.30）** - `call_tool` 返回带
+      `structuredContent` 的 `CallToolResult`，`list_tools` 给每个工具挂统一 `outputSchema`
+      （`SHARED_OUTPUT_SCHEMA`）；`test_protocol_roundtrip.py` 验证客户端真实收到
+      structuredContent 且 outputSchema 校验通过（无 `Output validation error`）
+- [x] 合计 **89 passed**（7 个文件）；真实后端子进程启停 + 调用回归通过
 
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）

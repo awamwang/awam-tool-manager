@@ -122,23 +122,31 @@ def fail(error: str, error_type: str = "invalid_params", **extra) -> None:
 launch 无配置 -> {"success": false, "errorType": "config_error", "error": "Tool has no launch config: ..."}
 ```
 
-### 2.2 可选优化：`structuredContent` ⚠️
+### 2.2 可选优化：`structuredContent` ✅（已启用）
 
-当前所有结果都是**手动 `json.dumps` 成字符串**塞进 `TextContent.text`。
+当前所有结果仍由 `dispatch_tool` 手动 `json.dumps` 成字符串，但 `call_tool` 在其上
+**额外返回结构化结果**，客户端无需再抓取文本：
 
-mcp 1.30 起支持 handler 直接返回 `dict`，SDK 会自动填充 `structuredContent` 并序列化到 content：
+mcp 1.30 起 handler 返回 `CallToolResult` 会被原样透传，因此 `call_tool` 直接构造
+`CallToolResult(content=[TextContent(...)], structuredContent=<dict>)`——文本通道保留
+（向后兼容），`structuredContent` 一并下发：
 
 ```python
-elif isinstance(results, dict):
-    maybe_structured_content = results
-    unstructured_content = [TextContent(type="text", text=json.dumps(results, indent=2))]
+structured = _result_to_structured(result)   # json.loads(result)，解析失败兜底为 None
+return CallToolResult(
+    content=[TextContent(type="text", text=result)],
+    structuredContent=structured,
+    isError=False,
+)
 ```
 
-MCP 2025-06-18 规范也推荐使用 `outputSchema` + `structuredContent`，便于客户端按 schema 消费。
+同时 `list_tools` 给每个工具挂统一 `outputSchema`（`SHARED_OUTPUT_SCHEMA`：顶层 `success`
+为 bool，`additionalProperties=true`），启用 MCP 2025-06-18 推荐的 `outputSchema` +
+`structuredContent` 组合，便于客户端按 schema 消费。
 
-**为何暂不采用**：该返回值支持是较新版本才有的，`requirements.txt` 目前允许 `>=1.9.0`，
-直接返回 dict 会在老版本上报类型错误。
-若后续把依赖下限提到 `>=1.30`，即可改造一行获得结构化输出。
+**依赖下限**：`requirements.txt` 已从 `>=1.9.0` 提到 `>=1.30.0`（仍锁 `<2.0.0`，
+2.x 会移除 1.x 低层装饰器）。协议回环测试已验证：挂了 `outputSchema` 的成功调用
+确实返回 `structuredContent`，且未被 SDK 的 outputSchema 校验拒掉（`Output validation error`）。
 
 ### 2.3 `resources/read` 返回值类型错误 ❌（已修复）
 
@@ -274,7 +282,7 @@ AttributeError: 'Server' object has no attribute 'list_tools'
 | ✅ 已完成 | 工具条目 schema 校验（数据格式不再是纸面标准） | code-review A1 |
 | ✅ 已完成 | `resources/read` 参数归一化（`AnyUrl` 不等于 str） | code-review D25 |
 | ✅ 已完成 | `prompts/get` 返回 `GetPromptResult` | code-review D26 |
-| P2 | 依赖下限提到 `>=1.30` 后改用 `structuredContent` + `outputSchema` | 2.2 |
+| ✅ 已完成 | 依赖下限提到 `>=1.30` 并启用 `structuredContent` + `outputSchema` | 2.2 |
 | P2 | 同步后端工具时保留 `title` / `annotations` / `outputSchema` | 3.3 |
 | P3 | 工具集动态化时补 `notifications/tools/list_changed` | 1.2 |
 | P3 | 考虑接入标准 logging capability | 1.3 |

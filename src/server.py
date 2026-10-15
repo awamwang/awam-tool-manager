@@ -9,7 +9,14 @@ import sys
 from pathlib import Path
 
 from mcp.server import Server
-from mcp.types import Resource, Prompt, PromptMessage, TextContent, Tool
+from mcp.types import (
+    Resource,
+    Prompt,
+    PromptMessage,
+    TextContent,
+    Tool,
+    CallToolResult,
+)
 import mcp.server.stdio
 
 try:  # mcp >=1.9 起才有 ReadResourceContents，老版本退回纯文本返回形式
@@ -70,6 +77,20 @@ TOOL_ANNOTATION_HINTS: dict[str, dict[str, bool]] = {
     "set_backend_log_level": {},
     # 转发到后端 MCP，属于"与外部世界交互"但静态无法判定副作用
     "call_backend_tool": {"openWorldHint": True},
+}
+
+# 所有工具的成功输出都带顶层 `success`（bool），其余字段随工具而异（如 list 类
+# 工具的 `tools` 数组、backend 类工具的 `result` 自由结构）。用一张宽松但准确的
+# outputSchema 声明这一不变式：既让客户端能可靠按 `success` 分支，又不会因
+# 工具自有的自由字段触发 mcp 1.30 的 outputSchema 校验失败（additionalProperties=true）。
+# 注意：只要在 list_tools 里给工具挂了 outputSchema，mcp 就要求每次调用都返回
+# structuredContent，否则会返回 "Output validation error"，因此 call_tool 必须为
+# 每个成功结果附带 structuredContent（见下方 _to_structured）。
+SHARED_OUTPUT_SCHEMA: dict = {
+    "type": "object",
+    "properties": {"success": {"type": "boolean"}},
+    "required": ["success"],
+    "additionalProperties": True,
 }
 
 
@@ -307,14 +328,40 @@ async def list_tools() -> list[Tool]:
             hints = TOOL_ANNOTATION_HINTS.get(tool.name)
             if hints:
                 tool.annotations = ToolAnnotations(**hints)
+    # 每个工具都声明统一的 outputSchema（见 SHARED_OUTPUT_SCHEMA 说明）：
+    # 启用 mcp 1.30 的 outputSchema 能力，客户端据此知道输出结构。
+    for tool in tools:
+        tool.outputSchema = SHARED_OUTPUT_SCHEMA
 
     log(f"返回 {len(tools)} 个工具定义")
     return tools
 
 
+def _result_to_structured(result: str) -> dict | None:
+    """把 dispatch_tool 返回的 JSON 文本解析成结构化结果（dict）。
+
+    返回 None 表示无法解析（理论上不会发生：dispatch_tool 永远 json.dumps）。
+    此时调用方应跳过 structuredContent，避免把非法结构透传给客户端。
+    """
+    try:
+        parsed = json.loads(result)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if isinstance(parsed, dict):
+        return parsed
+    # 个别工具万一返回非对象（不应发生），用 {"value": ...} 包一层，保证结构化可用
+    return {"value": parsed}
+
+
 @app.call_tool()
-async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    """MCP tools/call 入口：把分发结果包成 TextContent"""
+async def call_tool(name: str, arguments: dict) -> CallToolResult:
+    """MCP tools/call 入口：包成 CallToolResult 并附带结构化结果。
+
+    dispatch_tool 始终返回 JSON 文本；这里在不破坏既有文本输出的前提下，
+    额外附带 structuredContent（dict），让 MCP 客户端能可靠地按结构解析，
+    而不必抓取文本。成功路径直接返回 CallToolResult，由 SDK 原样透传；
+    失败路径仍抛 ToolError，由 SDK 转成 isError=True。
+    """
     log(f"收到工具调用: {name} | 参数: {arguments}")
 
     try:
@@ -326,8 +373,18 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         log(f"工具 {name} 执行异常: {type(e).__name__}: {e}")
         fail(f"内部错误: {type(e).__name__}: {e}", error_type="internal_error")
 
+    structured = _result_to_structured(result)
+    if structured is None:
+        # 兜底：极少数情况下解析失败，退化为纯文本（不挂结构化，避免触发 outputSchema 校验失败）
+        log(f"⚠️ 工具 {name} 的返回无法解析为 JSON，仅返回文本")
+        return CallToolResult(content=[TextContent(type="text", text=result)], isError=False)
+
     log(f"工具 {name} 执行完成，返回 {len(result)} 字符")
-    return [TextContent(type="text", text=result)]
+    return CallToolResult(
+        content=[TextContent(type="text", text=result)],
+        structuredContent=structured,
+        isError=False,
+    )
 
 
 async def dispatch_tool(name: str, arguments: dict) -> str:

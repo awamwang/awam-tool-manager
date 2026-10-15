@@ -39,7 +39,7 @@ awam-tool-manager/
 │   └── schema.py             # 两层数据的 JSON Schema 校验 + 文档生成源
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 82 个用例（含真实 MCP 会话与文档漂移检测）
+└── tests/                    # 89 个用例（含真实 MCP 会话与文档漂移检测）
 ```
 
 > 早期版本曾有 `data/launchers/`（启动器配置）与 `src/adapters/`（启动器适配器），
@@ -81,6 +81,10 @@ awam-tool-manager/
 - **`backend_busy`**：同一后端正在处理另一个调用（单后端串行，并发调用会被直接拒绝，不排队）。
   调用方应稍后重试，不要无限重试打满。
 
+成功结果除文本通道（JSON 文本）外，还附带 **`structuredContent`**（dict），客户端无需
+再解析文本即可按结构消费；每个工具的 `outputSchema` 统一声明输出含顶层 `success`（bool）。
+依赖下限为 `mcp>=1.30`（structuredContent / outputSchema 是 1.30 起稳定的能力）。
+
 ## 安全约定
 
 - 工具条目里的 `readOnly` / `destructive` 会映射到 MCP Tool annotations
@@ -103,7 +107,7 @@ awam-tool-manager/
 
 ## 依赖约束
 
-`requirements.txt` 锁定 `mcp>=1.9.0,<2.0.0`。
+`requirements.txt` 锁定 `mcp>=1.30.0,<2.0.0`（1.30 起支持 structuredContent / outputSchema）。
 **mcp 2.x 移除了本项目依赖的低层装饰器 API，不可直接升级**，迁移需重写 `server.py`。
 
 ## 数据格式

@@ -81,7 +81,7 @@ awam-tool-manager/
 │   └── backend_client.py     # 后端 MCP 客户端与连接池（547 行）
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表（148 行）
-└── tests/                    # 7 个文件，82 个用例（含真实 MCP 会话与文档漂移检测）
+└── tests/                    # 7 个文件，89 个用例（含真实 MCP 会话与文档漂移检测）
 ```
 
 > 根目录下的 `test_*.py`、`test_output.txt` 是调试期临时脚本，已被 `.gitignore` 排除。
@@ -310,7 +310,7 @@ python src/server.py
 | SKILL.md / README.md / TASKS.md / format.md 里的 launcher、adapters 描述 | ✅ 全部改为当前两层结构 |
 | `list_launchers` / `get_launcher_info` 的虚假声明 | ✅ 从文档移除；未知工具改为返回协议层错误 |
 | 参数名混乱（`mcp_tool_id` / `launcher_id`） | ✅ 统一为 `tool_id` |
-| `requirements.txt` 无上界导致新环境装 2.x 后崩溃 | ✅ 锁定 `mcp>=1.9.0,<2.0.0` |
+| `requirements.txt` 无上界导致新环境装 2.x 后崩溃 | ✅ 锁定 `mcp>=1.30.0,<2.0.0`（D2 先锁 `<2.0.0`，A5 再把下限提到 1.30 以启用 structuredContent / outputSchema） |
 | 业务失败不被 MCP 客户端感知（`isError` 恒为 False） | ✅ 改为抛 `ToolError` |
 | `read_resource` 返回 `TextContent`（缺 `.content` 属性必报错） | ✅ 改为 `ReadResourceContents` |
 | Prompt 模板教 AI 用错误参数名 | ✅ 修正示例并补充错误类型说明 |
@@ -371,11 +371,11 @@ python src/server.py
 **单向依赖方向**：`src/schema.py` →（生成）→ `docs/format.md` →（被测试校验）→
 与 `data/*.json` 三方一致。改字段只改 schema，文档与测试会强制跟随。
 
-### 8.7 尚未处理 ⏳
+### 8.7 后续项（部分已收口）
 
 | 项 | 说明 |
 |---|---|
-| `structuredContent` | 待依赖下限提到 `>=1.30` 后可启用 |
+| `structuredContent` | ✅ 已启用（mcp>=1.30）：`call_tool` 返回带 `structuredContent` 的 `CallToolResult`，`list_tools` 给每个工具挂统一 `outputSchema`（见 `SHARED_OUTPUT_SCHEMA`） |
 | 工具变更通知 | `notifications/tools/list_changed` 未发送（顶层工具集静态，影响小） |
 | 标准 logging capability | 目前用自定义 Tool 查日志 |
 | 并发限流（A3 ✅ 已收口） | 单后端串行（`_call_lock`），并发调用报 `backend_busy`；要升级信号量 + 排队只需调 `MAX_CONCURRENT_CALLS` |
