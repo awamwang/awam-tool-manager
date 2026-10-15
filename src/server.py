@@ -254,6 +254,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = f"启动器 {launcher_id} 的后端 MCP 提供 {len(tools)} 个工具：\n"
             for t in tools:
                 result += f"- {t['name']}: {t.get('description', '')[:60]}\n"
+            # 日志里打印详细内容
+            log(f"后端工具列表: {[t['name'] for t in tools]}")
         else:
             result = f"❌ 获取失败: {res.get('error', '未知错误')}"
 
@@ -274,12 +276,17 @@ async def main():
     log("等待客户端连接...")
     log("=" * 50)
 
-    async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
-        await app.run(
-            read_stream,
-            write_stream,
-            app.create_initialization_options()
-        )
+    try:
+        async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
+            await app.run(
+                read_stream,
+                write_stream,
+                app.create_initialization_options()
+            )
+    finally:
+        log("服务退出，关闭所有后端连接...")
+        await backend_manager.close_all()
+        log("清理完成")
 
 
 if __name__ == "__main__":

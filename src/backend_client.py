@@ -75,10 +75,12 @@ class BackendClient:
         try:
             if self._client_context:
                 await self._client_context.__aexit__(None, None, None)
+                self._client_context = None
             if self._stdio_context:
                 await self._stdio_context.__aexit__(None, None, None)
-        except Exception:
-            pass
+                self._stdio_context = None
+        except Exception as e:
+            print(f"[awam-tool-manager] 关闭后端连接时出错: {e}", flush=True)
         self._connected = False
         self.session = None
 
