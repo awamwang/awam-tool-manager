@@ -1,4 +1,4 @@
-"""JSON 存储层：读写启动器配置和工具条目"""
+"""JSON 存储层：读写工具条目和后端 MCP 子工具"""
 
 import json
 from pathlib import Path
@@ -10,8 +10,8 @@ class JsonStore:
 
     def __init__(self, base_dir: str | Path):
         self.base_dir = Path(base_dir)
-        self.launchers_dir = self.base_dir / "launchers"
         self.tools_dir = self.base_dir / "tools"
+        self.backend_tools_dir = self.base_dir / "backend-tools"
 
     def load_json(self, path: Path) -> dict[str, Any] | None:
         """读取 JSON 文件，不存在返回 None"""
@@ -26,40 +26,58 @@ class JsonStore:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
-    # ---- 启动器 ----
+    # ---- 工具条目（tools/ 目录）----
 
-    def get_launcher_path(self, launcher_id: str) -> Path:
-        return self.launchers_dir / f"{launcher_id}.json"
+    def get_tool_path(self, tool_id: str) -> Path:
+        return self.tools_dir / f"{tool_id}.json"
 
-    def load_launcher(self, launcher_id: str) -> dict[str, Any] | None:
-        return self.load_json(self.get_launcher_path(launcher_id))
+    def load_tool(self, tool_id: str) -> dict[str, Any] | None:
+        """读取单个工具条目"""
+        return self.load_json(self.get_tool_path(tool_id))
 
-    def save_launcher(self, launcher_id: str, data: dict[str, Any]) -> None:
-        self.save_json(self.get_launcher_path(launcher_id), data)
+    def save_tool(self, tool_id: str, data: dict[str, Any]) -> None:
+        """保存单个工具条目"""
+        self.save_json(self.get_tool_path(tool_id), data)
 
-    def list_launchers(self) -> list[str]:
-        """列出所有已注册的启动器 ID"""
-        if not self.launchers_dir.exists():
+    def list_tools(self) -> list[dict[str, Any]]:
+        """列出所有工具条目"""
+        if not self.tools_dir.exists():
             return []
-        return [f.stem for f in self.launchers_dir.glob("*.json")]
+        tools = []
+        for f in self.tools_dir.glob("*.json"):
+            data = self.load_json(f)
+            if data:
+                tools.append(data)
+        return tools
 
-    # ---- 工具 ----
+    # ---- 后端 MCP 子工具（backend-tools/ 目录）----
 
-    def get_tools_path(self, source: str) -> Path:
-        return self.tools_dir / f"{source}.json"
+    def get_backend_tools_path(self, parent_id: str) -> Path:
+        return self.backend_tools_dir / f"{parent_id}.json"
 
-    def load_tools(self, source: str) -> list[dict[str, Any]]:
-        """读取某个启动器的所有工具"""
-        data = self.load_json(self.get_tools_path(source))
+    def load_backend_tools(self, parent_id: str) -> list[dict[str, Any]]:
+        """读取某个 MCP 工具的所有子工具"""
+        data = self.load_json(self.get_backend_tools_path(parent_id))
         if data is None:
             return []
         return data.get("tools", [])
 
-    def save_tools(self, source: str, tools: list[dict[str, Any]]) -> None:
-        """保存某个启动器的所有工具"""
+    def save_backend_tools(self, parent_id: str, tools: list[dict[str, Any]]) -> None:
+        """保存某个 MCP 工具的所有子工具"""
         data = {
-            "schemaVersion": "1.0",
-            "source": source,
+            "parent": parent_id,
+            "lastSynced": "now",
+            "source": "auto",
             "tools": tools
         }
-        self.save_json(self.get_tools_path(source), data)
+        self.save_json(self.get_backend_tools_path(parent_id), data)
+
+    def list_backend_tools(self) -> dict[str, list[dict[str, Any]]]:
+        """列出所有后端 MCP 的子工具"""
+        if not self.backend_tools_dir.exists():
+            return {}
+        result = {}
+        for f in self.backend_tools_dir.glob("*.json"):
+            parent_id = f.stem
+            result[parent_id] = self.load_backend_tools(parent_id)
+        return result

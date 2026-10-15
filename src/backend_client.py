@@ -261,23 +261,31 @@ class BackendManager:
         self.store = store
         self.clients: dict[str, BackendClient] = {}
 
-    def get_client(self, launcher_id: str) -> BackendClient | None:
-        """获取指定启动器的后端客户端"""
-        if launcher_id in self.clients:
-            return self.clients[launcher_id]
+    def get_client(self, mcp_tool_id: str) -> BackendClient | None:
+        """获取指定 MCP 工具的后端客户端"""
+        if mcp_tool_id in self.clients:
+            return self.clients[mcp_tool_id]
 
-        launcher_config = self.store.load_launcher(launcher_id)
-        if not launcher_config:
+        tool_config = self.store.load_tool(mcp_tool_id)
+        if not tool_config:
             return None
 
-        mcp_config = launcher_config.get("mcp", {})
-        connection = mcp_config.get("connection")
+        # 只有 mcp 类型的工具才有后端连接
+        if tool_config.get("kind") != "mcp":
+            return None
+
+        connection = tool_config.get("connection")
         if not connection:
             return None
 
-        client = BackendClient(launcher_id, connection)
-        self.clients[launcher_id] = client
+        client = BackendClient(mcp_tool_id, connection)
+        self.clients[mcp_tool_id] = client
         return client
+
+    def list_mcp_tools(self) -> list[str]:
+        """列出所有已配置的 MCP 类工具 ID"""
+        tools = self.store.list_tools()
+        return [t["id"] for t in tools if t.get("kind") == "mcp"]
 
     async def start_backend(self, launcher_id: str) -> dict:
         """启动指定后端，成功后自动同步工具目录"""
@@ -295,11 +303,11 @@ class BackendManager:
                 result["message"] += f"\n工具目录同步失败：{sync_result.get('error', '')}"
         return result
 
-    async def sync_tools_catalog(self, launcher_id: str) -> dict:
-        """同步后端工具目录到启动器配置"""
-        client = self.get_client(launcher_id)
+    async def sync_tools_catalog(self, mcp_tool_id: str) -> dict:
+        """同步后端工具目录到 backend-tools/"""
+        client = self.get_client(mcp_tool_id)
         if not client:
-            return {"success": False, "error": f"启动器 '{launcher_id}' 未配置"}
+            return {"success": False, "error": f"MCP 工具 '{mcp_tool_id}' 未配置"}
 
         if client.status != BackendClient.STATUS_RUNNING:
             return {"success": False, "error": "后端未运行，请先启动"}
@@ -307,20 +315,8 @@ class BackendManager:
         try:
             tools = await client.list_tools(force_refresh=True)
 
-            # 加载启动器配置
-            launcher_config = self.store.load_launcher(launcher_id)
-            if not launcher_config:
-                return {"success": False, "error": "启动器配置不存在"}
-
-            # 更新 toolsCatalog
-            mcp_config = launcher_config.setdefault("mcp", {})
-            tools_catalog = mcp_config.setdefault("toolsCatalog", {})
-            tools_catalog["lastSynced"] = "now"
-            tools_catalog["source"] = "auto"
-            tools_catalog["tools"] = tools
-
-            # 保存配置
-            self.store.save_launcher(launcher_id, launcher_config)
+            # 保存到 backend-tools/ 目录
+            self.store.save_backend_tools(mcp_tool_id, tools)
 
             return {"success": True, "count": len(tools)}
         except Exception as e:
@@ -333,18 +329,18 @@ class BackendManager:
             return {"success": False, "error": f"启动器 '{launcher_id}' 未配置后端 MCP 连接"}
         return await client.stop()
 
-    def get_backend_status(self, launcher_id: str | None = None) -> dict:
+    def get_backend_status(self, mcp_tool_id: str | None = None) -> dict:
         """获取后端状态"""
-        if launcher_id:
-            client = self.get_client(launcher_id)
+        if mcp_tool_id:
+            client = self.get_client(mcp_tool_id)
             if not client:
-                return {"success": False, "error": f"启动器 '{launcher_id}' 未配置"}
+                return {"success": False, "error": f"MCP 工具 '{mcp_tool_id}' 未配置"}
             return {"success": True, "status": client.get_status()}
 
         # 返回所有后端状态
         all_status = []
-        for lid in self.store.list_launchers():
-            client = self.get_client(lid)
+        for mid in self.list_mcp_tools():
+            client = self.get_client(mid)
             if client:
                 all_status.append(client.get_status())
         return {"success": True, "backends": all_status}

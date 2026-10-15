@@ -1,4 +1,4 @@
-"""工具注册中心：管理所有启动器和工具的查询"""
+"""工具注册中心：管理所有工具的查询"""
 
 from typing import Any
 
@@ -11,56 +11,18 @@ class ToolRegistry:
     def __init__(self, store: JsonStore):
         self.store = store
 
-    # ---- 启动器 ----
+    # ---- 工具查询 ----
 
-    def list_launchers(self) -> list[dict[str, Any]]:
-        """列出所有启动器概览"""
-        result = []
-        for lid in self.store.list_launchers():
-            data = self.store.load_launcher(lid)
-            if data:
-                result.append({
-                    "id": data.get("id"),
-                    "name": data.get("name"),
-                    "displayName": data.get("displayName"),
-                    "type": data.get("type"),
-                    "installed": data.get("installed", False),
-                    "description": data.get("description", ""),
-                })
-        return result
-
-    def get_launcher(self, launcher_id: str) -> dict[str, Any] | None:
-        return self.store.load_launcher(launcher_id)
-
-    # ---- 工具 ----
-
-    def _launcher_to_tool(self, launcher_config: dict[str, Any]) -> dict[str, Any]:
-        """把启动器配置包装成工具条目"""
-        lid = launcher_config.get("id")
-        return {
-            "id": lid,
-            "name": launcher_config.get("name"),
-            "displayName": launcher_config.get("displayName", launcher_config.get("name")),
-            "kind": "launcher",
-            "description": launcher_config.get("description", ""),
-            "installed": launcher_config.get("installed", False),
-            "type": launcher_config.get("type"),
-            "tags": ["启动器", "工具集"],
-            "actions": ["manage", "sync"],
-            "source": lid,
-        }
-
-    def list_all_tools(self, source: str | None = None) -> list[dict[str, Any]]:
-        """列出所有工具（不包含 launcher 类型，launcher 只是 MCP 配置容器）"""
-        tools = []
-        sources = [source] if source else self.store.list_launchers()
-        for src in sources:
-            tools.extend(self.store.load_tools(src))
+    def list_all_tools(self, kind: str | None = None) -> list[dict[str, Any]]:
+        """列出所有工具，可按类型筛选"""
+        tools = self.store.list_tools()
+        if kind:
+            tools = [t for t in tools if t.get("kind") == kind]
         return tools
 
-    def search_tools(self, keyword: str, source: str | None = None) -> list[dict[str, Any]]:
+    def search_tools(self, keyword: str, kind: str | None = None) -> list[dict[str, Any]]:
         """按关键词搜索工具"""
-        all_tools = self.list_all_tools(source)
+        all_tools = self.list_all_tools(kind)
         keyword_lower = keyword.lower()
 
         results = []
@@ -77,20 +39,23 @@ class ToolRegistry:
         return results
 
     def get_tool(self, tool_id: str) -> dict[str, Any] | None:
-        """根据 ID 获取工具详情，支持 launcher（无冒号）和普通工具（source:name）"""
-        # 先尝试找 launcher（ID 不带冒号的）
-        if ":" not in tool_id:
-            launcher_config = self.store.load_launcher(tool_id)
-            if launcher_config:
-                return self._launcher_to_tool(launcher_config)
-            return None
+        """根据 ID 获取工具详情"""
+        return self.store.load_tool(tool_id)
 
-        # 普通工具：source:name
-        source, _ = tool_id.split(":", 1)
-        for tool in self.store.load_tools(source):
-            if tool.get("id") == tool_id:
+    # ---- 后端 MCP 子工具 ----
+
+    def list_backend_tools(self, parent_id: str) -> list[dict[str, Any]]:
+        """列出某个 MCP 工具的所有子工具"""
+        return self.store.load_backend_tools(parent_id)
+
+    def get_backend_tool(self, parent_id: str, tool_name: str) -> dict[str, Any] | None:
+        """获取某个 MCP 工具的具体子工具"""
+        for tool in self.store.load_backend_tools(parent_id):
+            if tool.get("name") == tool_name:
                 return tool
         return None
+
+    # ---- 启动 ----
 
     def launch_tool(self, tool_id: str) -> dict[str, Any]:
         """启动工具（返回启动信息，实际执行由调用方完成）"""
@@ -99,6 +64,9 @@ class ToolRegistry:
             return {"success": False, "error": f"Tool not found: {tool_id}"}
 
         launch = tool.get("launch", {})
+        if not launch:
+            return {"success": False, "error": f"Tool has no launch config: {tool_id}"}
+
         return {
             "success": True,
             "toolId": tool_id,
