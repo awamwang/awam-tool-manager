@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "1.0",
+  "id": "everything",
+  "name": "Everything",
+  "displayName": "Everything 文件搜索",
+  "type": "utility",
+  "description": "Windows 极速文件搜索工具，毫秒级搜索百万文件",
+  "detected": true,
+  "installed": true,
+  "installPath": "C:\\Program Files\\Everything\\Everything.exe",
+  "mcp": {
+    "serverName": "everything-mcp",
+    "installMethod": "npm",
+    "installCommand": "npm i -g everything-mcp",
+    "packageName": "everything-mcp",
+    "capabilities": [
+      {
+        "name": "search",
+        "description": "搜索文件",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "keyword": {
+              "type": "string",
+              "description": "搜索关键词"
+            },
+            "limit": {
+              "type": "number",
+              "description": "返回数量上限，默认 20"
+            }
+          },
+          "required": ["keyword"]
+        }
+      }
+    ]
+  },
+  "sync": {
+    "enabled": false,
+    "method": "manual",
+    "tool": "",
+    "mapFields": {}
+  },
+  "createdAt": "2026-10-15T13:30:00Z",
+  "updatedAt": "2026-10-15T13:30:00Z"
+}
