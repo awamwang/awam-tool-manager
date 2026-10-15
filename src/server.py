@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -263,19 +264,39 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         keyword = arguments.get("keyword", "")
         source = arguments.get("source")
         tools = registry.search_tools(keyword, source)
-        result = f"找到 {len(tools)} 个工具：\n"
-        for t in tools:
-            result += f"- [{t['id']}] {t.get('displayName', t['name'])}: {t.get('description', '')[:50]}\n"
+        result = json.dumps({
+            "success": True,
+            "keyword": keyword,
+            "count": len(tools),
+            "tools": [
+                {
+                    "id": t["id"],
+                    "name": t.get("displayName", t["name"]),
+                    "kind": t.get("kind", "unknown"),
+                    "description": t.get("description", "")[:100],
+                    "installed": t.get("installed", True)
+                }
+                for t in tools
+            ]
+        }, ensure_ascii=False, indent=2)
 
     elif name == "list_tools":
         source = arguments.get("source")
         tools = registry.list_all_tools(source)
-        result = f"共 {len(tools)} 个工具：\n"
-        for t in tools:
-            kind = t.get("kind", "unknown")
-            installed = t.get("installed", True)
-            install_mark = "✅" if installed else "❌"
-            result += f"- {install_mark} [{t['id']}] {t.get('displayName', t['name'])} ({kind})\n"
+        result = json.dumps({
+            "success": True,
+            "count": len(tools),
+            "tools": [
+                {
+                    "id": t["id"],
+                    "name": t.get("displayName", t["name"]),
+                    "kind": t.get("kind", "unknown"),
+                    "description": t.get("description", "")[:100],
+                    "installed": t.get("installed", True)
+                }
+                for t in tools
+            ]
+        }, ensure_ascii=False, indent=2)
 
     elif name == "get_tool_info":
         tool_id = arguments.get("tool_id", "")
@@ -313,8 +334,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 backend_res = backend_manager.get_backend_status(tool_id)
                 if backend_res.get("success"):
                     status = backend_res.get("status", {})
-                    status_emoji = {"running": "🟢", "starting": "🟡", "stopped": "⚪", "error": "🔴"}.get(status.get("status"), "⚪")
-                    result += f"- 后端 MCP 状态: {status_emoji} {status.get('status', '未知')}\n"
+                    status_text = {"running": "运行中", "starting": "启动中", "stopped": "已停止", "error": "错误"}.get(status.get("status"), "未知")
+                    result += f"- 后端 MCP 状态: {status_text}\n"
 
             elif kind == "app":
                 result += f"- 版本: {tool.get('version', '未知')}\n"
@@ -325,8 +346,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 backend_res = backend_manager.get_backend_status(source)
                 if backend_res.get("success"):
                     status = backend_res.get("status", {})
-                    status_emoji = {"running": "🟢", "starting": "🟡", "stopped": "⚪", "error": "🔴"}.get(status.get("status"), "⚪")
-                    result += f"- 后端 MCP 状态: {status_emoji} {status.get('status', '未知')}\n"
+                    status_text = {"running": "运行中", "starting": "启动中", "stopped": "已停止", "error": "错误"}.get(status.get("status"), "未知")
+                    result += f"- 后端 MCP 状态: {status_text}\n"
 
         # 再从后端 MCP 工具目录找（mcp_tool 类型）
         elif source:
@@ -358,8 +379,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     backend_res = backend_manager.get_backend_status(source)
                     if backend_res.get("success"):
                         status = backend_res.get("status", {})
-                        status_emoji = {"running": "🟢", "starting": "🟡", "stopped": "⚪", "error": "🔴"}.get(status.get("status"), "⚪")
-                        result += f"- 后端 MCP 状态: {status_emoji} {status.get('status', '未知')}\n"
+                        status_text = {"running": "运行中", "starting": "启动中", "stopped": "已停止", "error": "错误"}.get(status.get("status"), "未知")
+                        result += f"- 后端 MCP 状态: {status_text}\n"
                 else:
                     result = f"未找到工具: {tool_id}\n"
                     result += f"提示：{source} 启动器下的后端工具有 {len(tools_catalog)} 个，可用 list_backend_tools 查看"
