@@ -161,6 +161,20 @@ return [ReadResourceContents(content=text, mime_type="application/json")]
 
 实测：`awam://tools` 返回 `list[ReadResourceContents]`，`mime_type = application/json`。
 
+**⚠️ 同类问题 D25（后由协议回环测试发现）**：返回值修对了，参数却没修 ——
+`req.params.uri` 是 `pydantic.AnyUrl`，`AnyUrl("awam://tools") == "awam://tools"` 恒为 `False`，
+三个资源仍全部落到"未知资源"分支。现在入口先 `str(uri)` 归一化。
+教训：**参数类型与返回值类型都要在真实会话里验一遍**。
+
+### 2.3.1 `prompts/get` 返回类型（D26，协议回环测试发现）
+
+mcp 1.30 的实现是 `return types.ServerResult(await func(req.params.name, ...))`，
+即 handler 的返回值**直接**作为 `GetPromptResult` 参与 pydantic 校验；
+返回 `list[PromptMessage]` 会被拒（报 `Input should be a valid dictionary or instance of
+GetPromptResult`）。协议在 2025-06-18 之后就是这个要求，早期版本才接受裸列表。
+
+现按版本兼容：`GetPromptResult` 可导入时返回它，否则退回 `list[PromptMessage]`。
+
 ### 2.4 Tool annotations ✅
 
 MCP Tool 支持 `annotations`（`title` / `readOnlyHint` / `destructiveHint` / `idempotentHint`
@@ -258,6 +272,8 @@ AttributeError: 'Server' object has no attribute 'list_tools'
 | ✅ 已完成 | 数据文件读写补齐：坏 JSON 跳过 + 原子写盘 | code-review D12/D13 |
 | ✅ 已完成 | Tool `annotations` 下发 + `destructive` 转发门禁 | 2.4 |
 | ✅ 已完成 | 工具条目 schema 校验（数据格式不再是纸面标准） | code-review A1 |
+| ✅ 已完成 | `resources/read` 参数归一化（`AnyUrl` 不等于 str） | code-review D25 |
+| ✅ 已完成 | `prompts/get` 返回 `GetPromptResult` | code-review D26 |
 | P2 | 依赖下限提到 `>=1.30` 后改用 `structuredContent` + `outputSchema` | 2.2 |
 | P2 | 同步后端工具时保留 `title` / `annotations` / `outputSchema` | 3.3 |
 | P3 | 工具集动态化时补 `notifications/tools/list_changed` | 1.2 |

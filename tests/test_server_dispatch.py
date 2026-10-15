@@ -205,3 +205,53 @@ def test_read_unknown_resource_raises():
         run(read_resource("awam://nope"))
 
     assert payload_of(exc)["errorType"] == "unknown_resource"
+
+
+def test_read_resource_accepts_anyurl():
+    """SDK 传进来的是 pydantic AnyUrl，不是 str
+
+    `AnyUrl("awam://tools") == "awam://tools"` 恒为 False，不归一化会让
+    三个资源全部落到「未知资源」分支 —— 这个坑只有真实会话调用才会暴露。
+    """
+    from mcp.types import AnyUrl
+
+    items = list(run(read_resource(AnyUrl("awam://tools"))))
+    assert json.loads(items[0].content)
+
+
+def test_list_resources_definitions():
+    resources = run(server.list_resources())
+    uris = {str(r.uri) for r in resources}
+
+    assert uris == {"awam://tools", "awam://mcp-servers", "awam://backends/status"}
+    assert all(r.mimeType == "application/json" for r in resources)
+
+
+def test_prompts_do_not_teach_legacy_params():
+    """D16 回归：prompt 里不能把已废弃的参数名当用法教给 AI"""
+    prompts = {p.name for p in run(server.list_prompts())}
+    assert prompts == {"getting_started", "how_to_search", "how_to_call_backend"}
+
+    for name in prompts:
+        messages = run(server.get_prompt(name))
+        # 新版 SDK 返回 GetPromptResult，老版本返回裸列表，两种都要能取到文本
+        text = (
+            messages.messages[0].content.text
+            if hasattr(messages, "messages")
+            else messages[0].content.text
+        )
+        assert "launcher_id=" not in text
+        assert "mcp_tool_id=" not in text
+
+    how_to = run(server.get_prompt("how_to_call_backend"))
+    messages = how_to.messages if hasattr(how_to, "messages") else how_to
+    body = messages[0].content.text
+    assert "tool_id=" in body
+    assert "search_files" in body
+
+
+def test_get_unknown_prompt_raises():
+    with pytest.raises(ToolError) as exc:
+        run(server.get_prompt("nope"))
+
+    assert payload_of(exc)["errorType"] == "unknown_prompt"

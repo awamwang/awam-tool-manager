@@ -5,6 +5,7 @@
 """
 import asyncio
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -182,13 +183,16 @@ def test_call_tool_timeout_marks_broken():
 
 
 class FakeStore:
-    """最小化的 store，只提供 get_client 需要的 load_tool"""
+    """最小化的 store，只提供 BackendManager 需要的读取接口"""
 
     def __init__(self, tools: dict | None = None):
         self.tools = tools or {}
 
     def load_tool(self, tool_id: str):
         return self.tools.get(tool_id)
+
+    def list_tools(self):
+        return list(self.tools.values())
 
 
 def _mcp_tool(connection: dict) -> dict:
@@ -269,6 +273,122 @@ def test_missing_tool_yields_no_client():
     del store.tools["mcp1"]
 
     assert manager.get_client("mcp1") is None
+
+
+def test_call_backend_tool_error_classification():
+    """后端异常要按 errorType 归类，客户端才能区分「没启动」和「参数错」"""
+
+    class BoomClient(FakeBackendClient):
+        def __init__(self, exc):
+            super().__init__(tool_id="boom")
+            self.exc = exc
+
+        async def call_tool(self, tool_name, arguments):
+            raise self.exc
+
+    async def run():
+        # 客户端必须能在 store 里找到对应配置，否则会被判成 config_error
+        store = FakeStore({"boom": _mcp_tool({"type": "stdio"})})
+        manager = BackendManager(store)
+        results = {}
+        for label, exc in [
+            ("connection", ConnectionError("后端未运行")),
+            ("runtime", RuntimeError("后端返回错误")),
+            ("unknown", ValueError("别的什么")),
+        ]:
+            manager.clients["boom"] = BoomClient(exc)
+            results[label] = await manager.call_backend_tool("boom", "x", {})
+        return results
+
+    results = asyncio.run(run())
+
+    assert results["connection"]["errorType"] == "connection_error"
+    assert results["runtime"]["errorType"] == "runtime_error"
+    assert results["unknown"]["errorType"] == "unknown_error"
+    assert all(not r["success"] for r in results.values())
+
+
+def test_call_backend_tool_on_unknown_tool():
+    """没配过 MCP 后端的工具（或被误传成 app 类型）→ config_error"""
+    manager = BackendManager(FakeStore({"app1": {"id": "app1", "kind": "app"}}))
+    result = asyncio.run(manager.call_backend_tool("app1", "x", {}))
+    assert result["errorType"] == "config_error"
+
+
+def test_list_mcp_tools_only_returns_mcp_kind():
+    store = FakeStore({
+        "app1": {"id": "app1", "kind": "app"},
+        "mcp1": {"id": "mcp1", "kind": "mcp", "connection": {"type": "stdio"}},
+        "mcp2": {"id": "mcp2", "kind": "mcp"},  # 缺 connection，仍算 mcp 类工具
+    })
+    manager = BackendManager(store)
+    assert manager.list_mcp_tools() == ["mcp1", "mcp2"]
+
+
+def test_close_all_stops_every_client_and_clears_pool():
+    async def run():
+        manager = BackendManager(FakeStore())
+        clients = []
+        for tool_id in ("a", "b"):
+            client = FakeBackendClient(tool_id=tool_id)
+            client.status = BackendClient.STATUS_RUNNING
+            client.attach()
+            manager.clients[tool_id] = client
+            clients.append(client)
+
+        await manager.close_all()
+        return manager, clients
+
+    manager, clients = asyncio.run(run())
+
+    assert manager.clients == {}
+    assert all(c.status == BackendClient.STATUS_STOPPED for c in clients)
+    assert all("exit:stdio" in c.tracker for c in clients)  # 子进程被释放
+
+
+def test_tools_cache_respects_ttl_and_force_refresh():
+    """缓存命中时不重复打后端；force_refresh 与 TTL 过期都会重新拉取"""
+
+    class CountingClient(FakeBackendClient):
+        async def _refresh_tools_cache(self):
+            self.refreshes = getattr(self, "refreshes", 0) + 1
+            self._cached_tools = [{"name": "t"}]
+            self._tools_cache_time = time.time()
+
+    async def run():
+        client = CountingClient()
+        client.status = BackendClient.STATUS_RUNNING
+        client.TOOLS_CACHE_TTL = 300  # 缓存命中
+        await client.list_tools()
+        await client.list_tools()
+        after_cache = client.refreshes
+
+        await client.list_tools(force_refresh=True)
+        after_force = client.refreshes
+
+        client.TOOLS_CACHE_TTL = 0  # 视为已过期
+        await client.list_tools()
+        return after_cache, after_force, client.refreshes
+
+    after_cache, after_force, after_expire = asyncio.run(run())
+
+    assert after_cache == 1, "缓存有效期内不应重复拉取"
+    assert after_force == 2, "force_refresh 必须重新拉取"
+    assert after_expire == 3, "TTL 过期后应重新拉取"
+
+
+def test_list_tools_rejects_when_not_running():
+    client = FakeBackendClient()
+    client.status = BackendClient.STATUS_STOPPED
+
+    async def run():
+        try:
+            await client.list_tools()
+        except ConnectionError as e:
+            return str(e)
+        return None  # pragma: no cover
+
+    assert "未运行" in asyncio.run(run())
 
 
 def test_heartbeat_failure_cleans_up():

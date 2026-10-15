@@ -107,6 +107,20 @@ def test_launch_tool_errors_carry_error_type(tmp_path):
     assert no_launch["errorType"] == "config_error"
 
 
+def test_get_backend_tool_lookup(tmp_path):
+    """按名字查找后端子工具：命中返回条目，未命中返回 None"""
+    store = JsonStore(tmp_path)
+    store.save_backend_tools("mcp1", [
+        {"name": "search_files", "description": "搜索"},
+        {"name": "get_file_info", "description": "详情"},
+    ])
+
+    registry = ToolRegistry(store)
+    assert registry.get_backend_tool("mcp1", "search_files")["description"] == "搜索"
+    assert registry.get_backend_tool("mcp1", "nope") is None
+    assert registry.get_backend_tool("unknown-parent", "search_files") is None
+
+
 # ---- D18：搜索覆盖 id ----
 
 

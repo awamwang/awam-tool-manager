@@ -346,7 +346,16 @@ python src/server.py
 | 安全元数据形同装饰（A2） | ✅ 只读工具下发 `readOnlyHint`；`call_backend_tool` 新增 destructive 门禁（`allowDestructive`） |
 | 测试 | ✅ 新增 `test_registry_policy.py`（13 例），合计 54 passed |
 
-### 8.5 尚未处理 ⏳
+### 8.5 第五轮已修复 ✅（协议层回环测试发现）
+
+| 项 | 处理 |
+|---|---|
+| `read_resource` 用 `AnyUrl` 与字符串比较（D25） | ✅ 入口 `str(uri)` 归一化；此前三个 Resource **全部**读不出来 |
+| `get_prompt` 返回类型不合规（D26） | ✅ 按版本返回 `GetPromptResult`（老 SDK 退回裸列表）；此前 prompts/get 全部失败 |
+| 协议层契约无回归保护 | ✅ 新增 `tests/test_protocol_roundtrip.py`（7 例，真实 MCP 会话，不 mock SDK） |
+| 其他必要测试 | ✅ BackendManager 错误分类 / `close_all` / 缓存 TTL、resources 与 prompts 定义、子工具查找，合计 **72 passed** |
+
+### 8.6 尚未处理 ⏳
 
 | 项 | 说明 |
 |---|---|

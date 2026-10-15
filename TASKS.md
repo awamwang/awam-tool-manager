@@ -38,6 +38,8 @@
 
 ### 协议合规
 - [x] 后端工具参数名统一为 `tool_id`（移除历史遗留的 mcp_tool_id / launcher_id）
+- [x] `read_resource` 参数归一化：SDK 传的是 `AnyUrl`，直接与字符串比较会全部落到未知资源
+- [x] `get_prompt` 按协议返回 `GetPromptResult`（老版本 SDK 退回裸列表）
 - [x] 失败返回 MCP 协议层 `isError`（此前 success:false 被协议层当成成功）
 - [x] `read_resource` 返回 `Iterable[ReadResourceContents]`（此前返回 TextContent 会报错）
 - [x] `requirements.txt` 锁定 `mcp<2.0.0`（2.x 移除了本项目的低层装饰器 API）
@@ -79,7 +81,11 @@
 - [x] `tests/test_store.py`（8 用例）- 容错、原子写、时间戳
 - [x] `tests/test_server_dispatch.py`（14 用例）- 12 条分发路径、错误载荷、资源读取
 - [x] `tests/test_registry_policy.py`（13 用例）- 搜索语义、schema 校验、annotations、门禁
-- [x] 合计 54 passed；真实后端子进程启停 + 调用回归通过
+- [x] `tests/test_protocol_roundtrip.py`（7 用例）- **真实 MCP 会话**：isError 映射、
+  resources/read、prompts/get、annotations 下发（不 mock SDK）
+- [x] `tests/test_backend_client.py` 补 BackendManager：错误归类、`close_all`、缓存 TTL
+- [x] `tests/test_server_dispatch.py` 补 `AnyUrl` 参数、resources 与 prompts 定义回归
+- [x] 合计 72 passed；真实后端子进程启停 + 调用回归通过
 
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）

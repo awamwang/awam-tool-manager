@@ -6,7 +6,23 @@
 
 ---
 
-## 0. 第五次更新：语义一致性与合规（最新）
+## 0. 第六次更新：协议层回环测试发现两个潜伏缺陷（最新）
+
+补 `tests/test_protocol_roundtrip.py`（用真实 MCP 会话驱动 server，不 mock SDK）时，
+**又抓出两个此前完全没有暴露的缺陷** —— 它们和 D23 是同一类：能力从未被真正调用过，
+所以"看起来是好的"。单元测试只验证到 `dispatch_tool`，而这两处的问题发生在
+**SDK 与 handler 的接缝上**，只有跑完整协议栈才会现形。
+
+| 编号 | 问题 | 现状 |
+|---|---|---|
+| **D25（P0）** | `read_resource` 拿 `AnyUrl` 和字符串比 | `req.params.uri` 是 pydantic `AnyUrl`，`AnyUrl("awam://tools") == "awam://tools"` 恒为 **False** → 三个资源**全部**落到"未知资源"分支。已改为入口 `str(uri)` 归一化 |
+| **D26（P0）** | `get_prompt` 返回类型不符合当前协议 | mcp 1.30 的 handler 直接把返回值塞进 `ServerResult`，要求 `GetPromptResult`；返回 `list[PromptMessage]` 在 pydantic 校验阶段就被拒 → prompts/get **全部失败**。已按版本兼容返回 |
+
+同时补齐了第二批"必要测试"，合计 **72 passed**（6 个测试文件）。
+
+---
+
+## 0.0 第五次更新：语义一致性与合规
 
 | 编号 | 问题 | 处理方式 |
 |---|---|---|
@@ -103,13 +119,18 @@ P0 与 P1 已全部关闭。剩余有效待办为 P2 的 D9–D15、P3 的 D17/D
 | 架构设计 | ⭐⭐⭐⭐ 分层清晰（接口 / 领域 / 存储 / 路由），职责边界干净 |
 | 契约一致性 | ⭐⭐⭐⭐ 修复后已对齐（原 ⭐⭐） |
 | 健壮性 | ⭐⭐⭐⭐⭐ 超时、清理、JSON 容错、原子写均已到位（原 ⭐⭐） |
-| 可维护性 | ⭐⭐⭐⭐⭐ 5 个测试文件共 54 个用例（原 ⭐⭐） |
+| 可维护性 | ⭐⭐⭐⭐⭐ 6 个测试文件共 72 个用例，含协议层回环（原 ⭐⭐） |
 | 协议合规 | ⭐⭐⭐⭐⭐ annotations 已下发、destructive 门禁已落地，仅 `structuredContent` 待依赖升级 |
 
-**共发现 25 项问题**：P0 级 4 项、P1 级 5 项、P2 级 8 项、P3 级 4 项、后续新增 4 项。
+**共发现 27 项问题**：P0 级 4 项、P1 级 5 项、P2 级 8 项、P3 级 4 项、后续新增 6 项
+（D23/D24 来自协议专项，**D25/D26 来自协议层回环测试**）。
 **P0 / P1 / P2（D9–D15）/ P3 的 D17/D18/D19/D21/D22 已全部修复**；
 架构议题中 **A1（schema 校验）、A2（annotations + destructive 门禁）已落地**。
 剩余待办只有 **A3（并发限流）** 与 **A4（文档/数据双真相源的长期治理）**。
+
+> **方法论结论**：D23 / D25 / D26 三个缺陷的共性是"能力存在但从未被真正调用过"，
+> 因此单测覆盖不到。凡是"SDK 与 handler 的接缝"（参数类型、返回值类型、错误映射），
+> 都必须用真实会话跑一遍 —— `tests/test_protocol_roundtrip.py` 就是为此存在的。
 
 ---
 
@@ -497,6 +518,33 @@ SDK 对 Iterable 执行 `[create_content(item.content, item.mime_type) for item 
 **修复**：返回 `[ReadResourceContents(content=text, mime_type="application/json")]`，
 并对 mcp <1.9（无该类）降级为 deprecated 的 str 形式。实测 `awam://tools` 读取正常。
 
+### D25. ✅ 已修复 —— `read_resource` 用 `AnyUrl` 直接与字符串比较（协议回环测试发现）
+
+**位置**：`src/server.py` `read_resource`
+
+```python
+if uri == "awam://mcp-servers":   # uri 实际是 pydantic AnyUrl
+```
+
+协议层传进来的是 `pydantic.AnyUrl`，**不是 str**，且 `AnyUrl("awam://tools") == "awam://tools"`
+返回 `False`（不做隐式比较）。后果：三个 Resource **全部**返回"未知资源"，
+而 D23 那次修复只解决了返回值类型，没碰参数比较，所以症状一直是"能列出来但读不出来"。
+
+**修复**：入口 `uri = str(uri)` 归一化后再匹配；
+`tests/test_server_dispatch.py::test_read_resource_accepts_anyurl` 与协议回环用例双重覆盖。
+
+### D26. ✅ 已修复 —— `get_prompt` 返回类型不符合当前协议（协议回环测试发现）
+
+**位置**：`src/server.py` `get_prompt`
+
+mcp 1.30 的实现是 `return types.ServerResult(await func(...))`，
+要求 handler 返回 `types.GetPromptResult`；本项目返回 `list[PromptMessage]`，
+在 pydantic 校验阶段即被拒绝（报"Input should be a valid dictionary or instance of
+GetPromptResult"）→ **prompts/get 全部失败**。
+
+**修复**：`GetPromptResult` 存在时返回 `GetPromptResult(description=..., messages=[...])`，
+老版本 SDK 退回裸列表（与 `ReadResourceContents` 同样的兼容写法）。
+
 ### D24. ✅ 已修复 —— 业务失败未映射为 MCP 协议的 `isError`
 
 详见 [`mcp-conformance.md §2.1`](mcp-conformance.md#21-严重问题iserror-从未置位-已修复)。
@@ -588,11 +636,17 @@ SDK 对 Iterable 执行 `[create_content(item.content, item.mime_type) for item 
 17. ~~**A1** —— `src/schema.py` + `jsonschema`（可选依赖）校验并跳过脏条目~~
 18. ~~**A2** —— annotations 下发 + `call_backend_tool` 的 destructive 门禁~~
 
-**第五批（待做）**
+**第五批（已完成 ✅）**
 
-19. **A3** —— `BackendManager` 并发限流与排队（并发调用同一 session 的正确性目前依赖后端实现）；
-20. **A4** —— 由 schema 反向生成文档，彻底消除双真相源；
-21. 依赖下限提到 `mcp>=1.30` 后启用 `structuredContent` / `outputSchema`。
+19. ~~**D25 / D26** —— 协议层回环测试发现的 resources / prompts 裂隙~~
+20. ~~补齐必要测试~~ —— 协议回环（7）、BackendManager 错误分类与清理、缓存 TTL、
+    resources/prompts 定义、子工具查找，合计 72 passed
+
+**第六批（待做）**
+
+21. **A3** —— `BackendManager` 并发限流与排队（并发调用同一 session 的正确性目前依赖后端实现）；
+22. **A4** —— 由 schema 反向生成文档，彻底消除双真相源；
+23. 依赖下限提到 `mcp>=1.30` 后启用 `structuredContent` / `outputSchema`。
 
 > 原先 §8 里有一个重复编号的「第三批（迭代，一致性）」小节，已合并到上面的批次。
 
@@ -607,8 +661,8 @@ pip install "mcp>=1.9.0,<2.0.0" pytest
 # 2) 静态检查
 python -m py_compile src/*.py tests/*.py
 
-# 3) 单元测试（54 项：store/registry + backend_client 稳定性 + store 容错/原子写
-#    + server 分发 + 搜索语义/schema 校验/annotations/destructive 门禁）
+# 3) 单元测试（72 项：store/registry + backend_client 稳定性 + store 容错/原子写
+#    + server 分发 + 搜索语义/schema 校验/annotations/destructive 门禁 + 协议层回环）
 python -m pytest tests/ -q
 
 # 4) import 验证（mcp 2.x 下会 AttributeError）
@@ -663,6 +717,7 @@ print('残留:', [f.name for f in p.iterdir() if f.name.startswith('.')])
 D4 / D5 / D6 / D7 的修复由 `tests/test_backend_client.py` 覆盖，
 D9 / D10 / D12 / D13 / D14 / D15 由新增的 `tests/test_store.py`、`test_backend_client.py`
 与 `tests/test_server_dispatch.py` 覆盖，
-D17 / D18 / A1 / A2 由 `tests/test_registry_policy.py` 覆盖（合计 `54 passed`），
+D17 / D18 / A1 / A2 由 `tests/test_registry_policy.py` 覆盖，
+D24 / D25 / D26 由 `tests/test_protocol_roundtrip.py`（真实 MCP 会话）覆盖（合计 `72 passed`），
 并已用真实后端子进程做过完整启停 + 调用回归：启动成功 → 自动同步 3 个工具 →
 `lastSynced` 写入真实时间戳 → 调用 `search_files` 返回结果 → 停止后状态回到 `stopped`。

@@ -22,6 +22,11 @@ try:  # Tool annotations 同样是 1.9 才引入的能力
 except ImportError:  # pragma: no cover
     ToolAnnotations = None
 
+try:  # prompts/get 的返回类型：2025-06-18 之后要求 GetPromptResult
+    from mcp.types import GetPromptResult
+except ImportError:  # pragma: no cover
+    GetPromptResult = None
+
 # 添加 src 目录到路径
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -525,7 +530,12 @@ async def read_resource(uri: str):
     MCP 规范要求返回 str / bytes / Iterable[ReadResourceContents]，
     而不是 TextContent —— SDK 会读取每个条目的 .content 与 .mime_type 字段，
     返回 TextContent 会因为没有 .content 属性而报 AttributeError。
+
+    另外 `req.params.uri` 是 pydantic 的 `AnyUrl`，**不是 str**：
+    `AnyUrl("awam://tools") == "awam://tools"` 恒为 False（不会隐式比较），
+    直接拿它和字符串比会导致三个资源全部落到"未知资源"分支。必须先 str() 归一化。
     """
+    uri = str(uri)
     log(f"收到 read_resource 请求: {uri}")
 
     if uri == "awam://mcp-servers":
@@ -654,7 +664,10 @@ awam-tool-manager 是一个统一的工具管理器，聚合各种 MCP 工具和
     else:
         fail(f"未知提示模板: {name}", error_type="unknown_prompt", promptName=name)
 
-    return [PromptMessage(role="user", content=TextContent(type="text", text=text))]
+    messages = [PromptMessage(role="user", content=TextContent(type="text", text=text))]
+    if GetPromptResult is None:  # 老版本 SDK 接受裸列表
+        return messages
+    return GetPromptResult(description=f"{name} 提示模板", messages=messages)
 
 
 async def main():
