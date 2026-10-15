@@ -4,9 +4,10 @@
 """
 
 import asyncio
+import contextlib
+import sys
 import time
 from collections import deque
-from typing import Any
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -22,6 +23,13 @@ class BackendClient:
     STATUS_RUNNING = "running"
     STATUS_ERROR = "error"
 
+    # 心跳间隔 / 心跳探测超时 / 各类后端操作的默认超时（秒）
+    HEARTBEAT_INTERVAL = 30
+    HEARTBEAT_TIMEOUT = 10
+    DEFAULT_TIMEOUT = 30.0
+    # 工具列表缓存有效期（秒）
+    TOOLS_CACHE_TTL = 300
+
     def __init__(self, tool_id: str, connection_config: dict):
         self.tool_id = tool_id
         self.connection_config = connection_config
@@ -29,6 +37,9 @@ class BackendClient:
         self.status = self.STATUS_STOPPED
         self.last_error: str | None = None
         self.started_at: float | None = None
+
+        # 后端调用超时，可在 connection 配置里用 timeout 覆盖
+        self.timeout = float(connection_config.get("timeout") or self.DEFAULT_TIMEOUT)
 
         # 日志
         self.logs: deque = deque(maxlen=500)  # 最多保留 500 条
@@ -43,12 +54,14 @@ class BackendClient:
         self._last_heartbeat: float = 0
 
         self._lock = asyncio.Lock()
+        # cleanup 独立的锁：心跳失败、stop()、start() 的失败回滚都可能触发清理，
+        # 用一把专用锁保证清理串行执行且幂等，避免两个协程同时 __aexit__ 同一个 context
+        self._cleanup_lock = asyncio.Lock()
         self._stdio_context = None
         self._client_context = None
 
     def _log(self, level: str, message: str):
         """记录日志"""
-        import sys
         timestamp = time.strftime("%H:%M:%S")
         self.logs.append({"time": timestamp, "level": level, "message": message})
         # 打印到 stderr，不能污染 stdout 协议通道
@@ -63,6 +76,12 @@ class BackendClient:
             if self.status == self.STATUS_RUNNING:
                 return {"success": True, "message": "已在运行中"}
 
+            # 上一次连接可能残留（例如心跳失败后置为 error 但没清理），
+            # 必须先清理干净，否则旧的子进程会变成孤儿进程
+            if self._stdio_context or self._client_context or self.session:
+                self._log("warning", "检测到上次连接的残留资源，先清理")
+                await self._cleanup()
+
             self.status = self.STATUS_STARTING
             self.last_error = None
             self._log("info", "正在启动后端 MCP...")
@@ -76,19 +95,22 @@ class BackendClient:
                 args = self.connection_config.get("args", [])
                 env = self.connection_config.get("env")
 
-                self._log("info", f"启动命令: {command} {' '.join(args)}")
+                # args 里可能是数字/布尔，拼接前统一转字符串
+                self._log("info", f"启动命令: {command} {' '.join(str(a) for a in args)}")
 
                 params = StdioServerParameters(command=command, args=args, env=env)
 
-                # 启动子进程并连接
+                # 启动子进程并连接（整体限时，避免子进程卡住拖死整个服务）
                 self._stdio_context = stdio_client(params)
-                read_stream, write_stream = await self._stdio_context.__aenter__()
+                read_stream, write_stream = await asyncio.wait_for(
+                    self._stdio_context.__aenter__(), timeout=self.timeout
+                )
 
                 self._client_context = ClientSession(read_stream, write_stream)
                 await self._client_context.__aenter__()
                 self.session = self._client_context
 
-                await self.session.initialize()
+                await asyncio.wait_for(self.session.initialize(), timeout=self.timeout)
                 self.status = self.STATUS_RUNNING
                 self.started_at = time.time()
                 self._last_heartbeat = time.time()
@@ -111,52 +133,100 @@ class BackendClient:
                 return {"success": False, "error": self.last_error}
 
     async def stop(self) -> dict:
-        """停止后端 MCP Server"""
+        """停止后端 MCP Server
+
+        与 start() 共用同一把锁：并发调用时不会有「start 刚建好连接、stop 已把它
+        标记为 stopped」这类状态与真实连接不一致的情况。
+        """
         if self.status == self.STATUS_STOPPED:
             return {"success": True, "message": "已停止"}
 
-        self._log("info", "正在停止...")
-
         # 取消心跳任务
-        if self._heartbeat_task:
-            self._heartbeat_task.cancel()
-            self._heartbeat_task = None
+        task, self._heartbeat_task = self._heartbeat_task, None
+        if task:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
 
-        await self._cleanup()
+        async with self._lock:
+            if self.status == self.STATUS_STOPPED:
+                return {"success": True, "message": "已停止"}
+
+            self._log("info", "正在停止...")
+            await self._cleanup()
+
         self.status = self.STATUS_STOPPED
         self._cached_tools = None
+        self._tools_cache_time = 0
+        self.started_at = None
         self._log("info", "已停止")
         return {"success": True, "message": "已停止"}
 
     async def _cleanup(self):
-        """清理连接资源"""
-        try:
-            if self._client_context:
-                await self._client_context.__aexit__(None, None, None)
+        """清理连接资源（串行且幂等）
+
+        - client 与 stdio 两个 context 必须各自独立 try：
+          共用 try 时，若第一个 __aexit__ 抛异常，第二个就不会执行，
+          而 stdio context 持有子进程，不 exit 会留下孤儿进程。
+        - 并发调用时被 _cleanup_lock 串行化，重复调用直接返回。
+        """
+        async with self._cleanup_lock:
+            if not (self._client_context or self._stdio_context or self.session):
+                return
+
+            try:
+                if self._client_context:
+                    await self._client_context.__aexit__(None, None, None)
+            except Exception as e:
+                self._log("warning", f"清理会话时出错: {e}")
+            finally:
                 self._client_context = None
-            if self._stdio_context:
-                await self._stdio_context.__aexit__(None, None, None)
+
+            try:
+                if self._stdio_context:
+                    await self._stdio_context.__aexit__(None, None, None)
+            except Exception as e:
+                self._log("warning", f"清理 stdio 连接时出错: {e}")
+            finally:
                 self._stdio_context = None
+
+            self.session = None
+
+    def _mark_broken(self, reason: str):
+        """连接已不可用时调用：置为 error 并在后台清理，避免继续复用坏连接"""
+        self.status = self.STATUS_ERROR
+        self.last_error = reason
+        self._log("error", f"连接不可用: {reason}")
+        if self._stdio_context or self._client_context:
+            asyncio.create_task(self._safe_cleanup())
+
+    async def _safe_cleanup(self):
+        """后台清理，吞掉异常避免在 task 里抛出无人接收的异常"""
+        try:
+            await self._cleanup()
         except Exception as e:
-            self._log("warning", f"清理连接时出错: {e}")
-        self.session = None
+            self._log("warning", f"自动清理失败: {e}")
 
     async def _heartbeat_loop(self):
         """心跳检测循环"""
         while self.status == self.STATUS_RUNNING:
             try:
-                await asyncio.sleep(30)  # 每 30 秒检测一次
+                await asyncio.sleep(self.HEARTBEAT_INTERVAL)
                 if self.session:
-                    await self.session.ping()
+                    await asyncio.wait_for(
+                        self.session.ping(), timeout=self.HEARTBEAT_TIMEOUT
+                    )
                     self._last_heartbeat = time.time()
                     self._log("debug", "心跳正常")
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                self._log("warning", f"心跳失败: {e}")
-                # 心跳失败，标记为错误
+                # 心跳失败说明连接已断：标记不可用并主动清理，
+                # 否则子进程会一直残留，且状态会停在虚假的 running
                 self.status = self.STATUS_ERROR
                 self.last_error = f"心跳失败: {e}"
+                self._log("warning", f"心跳失败，连接标记为不可用: {e}")
+                await self._cleanup()
                 break
 
     async def _refresh_tools_cache(self):
@@ -164,7 +234,9 @@ class BackendClient:
         if not self.session:
             return
         try:
-            tools = await self.session.list_tools()
+            tools = await asyncio.wait_for(
+                self.session.list_tools(), timeout=self.timeout
+            )
             self._cached_tools = [
                 {
                     "name": t.name,
@@ -175,6 +247,8 @@ class BackendClient:
             ]
             self._tools_cache_time = time.time()
             self._log("info", f"工具列表已刷新，共 {len(self._cached_tools)} 个工具")
+        except asyncio.TimeoutError:
+            self._mark_broken(f"刷新工具列表超时（{self.timeout}s）")
         except Exception as e:
             self._log("warning", f"刷新工具列表失败: {e}")
 
@@ -183,9 +257,9 @@ class BackendClient:
         if self.status != self.STATUS_RUNNING:
             raise ConnectionError(f"后端未运行，当前状态: {self.status}")
 
-        # 缓存有效期 5 分钟
+        # 缓存有效期见 TOOLS_CACHE_TTL
         cache_age = time.time() - self._tools_cache_time
-        if force_refresh or not self._cached_tools or cache_age > 300:
+        if force_refresh or not self._cached_tools or cache_age > self.TOOLS_CACHE_TTL:
             await self._refresh_tools_cache()
 
         return self._cached_tools or []
@@ -198,7 +272,14 @@ class BackendClient:
         self._log("debug", f"调用工具: {tool_name}")
 
         try:
-            result = await self.session.call_tool(tool_name, arguments)
+            result = await asyncio.wait_for(
+                self.session.call_tool(tool_name, arguments), timeout=self.timeout
+            )
+        except asyncio.TimeoutError:
+            # 超时通常意味着连接已经废了，标记后让后续请求快速失败而不是继续卡
+            reason = f"调用工具 '{tool_name}' 超时（{self.timeout}s）"
+            self._mark_broken(reason)
+            raise TimeoutError(reason) from None
         except Exception as e:
             self._log("error", f"调用工具失败: {e}")
             raise RuntimeError(f"后端 MCP 调用工具 '{tool_name}' 失败: {type(e).__name__}: {e}") from e
@@ -235,6 +316,7 @@ class BackendClient:
             "log_level": self.log_level,
             "tools_count": len(self._cached_tools) if self._cached_tools else 0,
             "last_heartbeat": self._last_heartbeat,
+            "timeout": self.timeout,
         }
 
     def get_logs(self, level: str | None = None, limit: int = 50) -> list[dict]:
@@ -314,6 +396,14 @@ class BackendManager:
 
         try:
             tools = await client.list_tools(force_refresh=True)
+
+            # 后端异常时 list_tools 可能返回空列表，此时写盘会用空结果覆盖上一次
+            # 成功同步的缓存，导致已缓存的工具目录永久丢失。宁可不同步。
+            if not tools:
+                return {
+                    "success": False,
+                    "error": "后端返回空工具列表，保留原缓存未覆盖"
+                }
 
             # 保存到 backend-tools/ 目录
             self.store.save_backend_tools(tool_id, tools)
