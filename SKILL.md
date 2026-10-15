@@ -1,54 +1,88 @@
 ---
 name: awam-tool-manager
-description: 统一工具管理器，维护启动器工具集名单，提供统一的工具注册、搜索、启动能力。作为 MCP Server 暴露给 AI 客户端，支持搜索工具、列出工具、启动工具、查看启动器信息等。
+description: 统一工具管理器，维护本机工具名单，提供统一的工具注册、搜索、启动能力。作为 MCP Server 暴露给 AI 客户端，支持搜索工具、列出工具、启动工具、路由调用后端 MCP、管理后端进程等。
 ---
 
 # awam-tool-manager 技能
 
-统一管理本机各种启动器/工具集下的工具，提供统一的注册、搜索、启动能力。
+统一管理本机各类工具，提供统一的注册、搜索、启动与**后端路由调用**能力。
+
+MCP 只是工具的一种类型（`kind=mcp`），普通应用是另一种（`kind=app`），
+两者共用同一套 `tool_id` 体系，不再区分"启动器"与"子工具"。
 
 ## 核心能力
 
-- **启动器管理**：维护已接入的启动器列表（Steam、WinGet、Everything、uTools 等）
-- **工具注册**：统一格式存储所有子工具的元数据
-- **MCP 服务**：作为 MCP Server 暴露给 AI 客户端
-- **MCP 推荐**：指定启动器时，推荐适配的 MCP Server 安装方式
+- **工具注册**：以 JSON 文件为单位登记工具元数据（`data/tools/`）
+- **MCP 服务**：作为 MCP Server 暴露给 AI 客户端（stdio 模式）
+- **路由调用**：把调用转发给 `kind=mcp` 工具对应的后端 MCP Server
+- **进程管理**：管理后端 MCP 子进程的启停、状态、日志
+- **目录同步**：拉取后端 MCP 的子工具清单并缓存到本地
 
 ## 目录结构
 
 ```
 awam-tool-manager/
-├── SKILL.md                    # 本文件
-├── docs/format.md              # 格式规范文档
+├── SKILL.md                  # 本文件
+├── docs/
+│   ├── format.md             # 数据格式规范
+│   ├── architecture.md       # 架构说明
+│   ├── mcp-conformance.md    # MCP 协议一致性对比
+│   └── code-review.md        # 代码审核报告
 ├── data/
-│   ├── launchers/              # 启动器配置（每个一个 JSON）
-│   └── tools/                  # 工具条目（每个启动器一个 JSON）
+│   ├── tools/                # 工具条目（每个工具一个 JSON）
+│   └── backend-tools/        # 后端 MCP 子工具缓存（自动生成）
 └── src/
-    ├── server.py               # MCP Server 入口
-    ├── store.py                # JSON 存储层
-    ├── registry.py             # 工具注册中心
-    └── adapters/              # 启动器适配器
-        ├── base.py             # 适配器基类
-        └── everything.py       # Everything 适配器
+    ├── server.py             # MCP Server 入口 + 对外工具定义 + 分发
+    ├── store.py              # JSON 存储层
+    ├── registry.py           # 工具注册中心（查询语义）
+    └── backend_client.py     # 后端 MCP 客户端与连接池
 ```
+
+> 早期版本曾有 `data/launchers/`（启动器配置）与 `src/adapters/`（启动器适配器），
+> 已在重构中移除，**相关概念不再存在于代码**，请勿参照旧版说明扩展。
 
 ## 对外 MCP 工具
 
-| 工具名 | 说明 |
-|---|---|
-| `search_tools` | 搜索工具 |
-| `list_tools` | 列出工具 |
-| `get_tool_info` | 查看工具详情 |
-| `launch_tool` | 启动工具 |
-| `list_launchers` | 列出所有启动器 |
-| `get_launcher_info` | 查看启动器详情 |
+后端相关工具统一使用 **`tool_id`** 指定目标工具（不存在 `mcp_tool_id` / `launcher_id`）。
 
-## 新增启动器步骤
+| 工具名 | 参数 | 说明 |
+|---|---|---|
+| `search_tools` | `keyword`(必填)、`kind` | 按关键词搜索工具 |
+| `list_tools` | `kind` | 列出所有工具 |
+| `get_tool_info` | `tool_id`(必填) | 查看工具详情 |
+| `launch_tool` | `tool_id`(必填) | 返回工具的启动命令（**目前不实际执行**） |
+| `call_backend_tool` | `tool_id`、`tool_name`(必填)、`arguments` | 路由调用后端 MCP 的子工具 |
+| `list_backend_tools` | `tool_id`(必填)、`force_refresh` | 列出后端子工具（含参数 schema） |
+| `start_backend` | `tool_id`(必填) | 启动后端并自动同步工具目录 |
+| `stop_backend` | `tool_id`(必填) | 停止后端 |
+| `get_backend_status` | `tool_id` | 查看单个或全部后端状态 |
+| `get_backend_logs` | `tool_id`(必填)、`level`、`limit` | 查看后端日志 |
+| `set_backend_log_level` | `tool_id`、`level`(必填) | 设置后端日志级别 |
+| `sync_backend_tools` | `tool_id`(必填) | 手动同步子工具目录 |
 
-1. 在 `data/launchers/` 新建 `{id}.json` 配置
-2. 在 `data/tools/` 新建 `{id}.json` 工具列表
-3. 在 `src/adapters/` 新建适配器（可选，用于自动检测和同步）
-4. 在 `registry.py` 中注册适配器
+另有 3 个 Resource：`awam://tools`、`awam://mcp-servers`、`awam://backends/status`。
+
+## 错误处理约定
+
+调用失败时走 **MCP 协议层错误**（`isError=true`），文本内容是可解析的 JSON：
+
+```json
+{ "success": false, "errorType": "not_found", "error": "未找到工具: xxx" }
+```
+
+`errorType` 取值：`not_found` / `unknown_tool` / `unknown_resource` / `invalid_params`
+/ `connection_error` / `runtime_error` / `config_error` / `internal_error`。
+
+## 新增工具步骤
+
+1. 在 `data/tools/` 下新建 `{tool_id}.json`（字段见 `docs/format.md`）
+2. 普通应用写 `kind=app` + `launch`；MCP 工具写 `kind=mcp` + `connection`
+3. MCP 工具调用 `start_backend(tool_id=...)` 建立连接并自动同步子工具目录
+
+## 依赖约束
+
+`requirements.txt` 锁定 `mcp>=1.9.0,<2.0.0`。
+**mcp 2.x 移除了本项目依赖的低层装饰器 API，不可直接升级**，迁移需重写 `server.py`。
 
 ## 数据格式
 

@@ -1,6 +1,6 @@
 # awam-tool-manager
 
-统一工具管理器 - 维护启动器工具集名单，提供统一的工具注册、搜索、启动能力。
+统一工具管理器 —— 维护本机工具名单，提供统一的注册、搜索、启动与后端路由调用能力。
 
 ## 快速开始
 
@@ -9,6 +9,9 @@
 ```bash
 pip install -r requirements.txt
 ```
+
+> `requirements.txt` 锁定 `mcp>=1.9.0,<2.0.0`。
+> mcp 2.x 移除了本项目使用的低层装饰器 API（`@app.list_tools()` 等），升级会导致无法启动。
 
 ### 运行 MCP Server
 
@@ -30,16 +33,34 @@ python server.py
 }
 ```
 
-## 已接入启动器
+## 已登记工具
 
-- [x] Everything（文件搜索）
-- [ ] Steam（游戏平台）- 待接入
-- [ ] WinGet（包管理器）- 待接入
-- [ ] npm（包管理器）- 待接入
-- [ ] Scoop（包管理器）- 待接入
-- [ ] uTools（效率启动器）- 待接入
-- [ ] WeGame（游戏平台）- 待接入
+| tool_id | kind | 说明 |
+|---|---|---|
+| `everything` | app | Everything 文件搜索（返回启动命令） |
+| `everything-search-mcp` | mcp | Everything 的 MCP 接口，可路由调用 `search_files` 等 |
+
+后续可接入：Steam、WinGet、npm、Scoop、uTools、WeGame、Quicker、PowerToys 等，
+按 [新增工具步骤](SKILL.md#新增工具步骤) 添加 JSON 即可。
+
+## 目录结构
+
+```
+data/
+├── tools/           # 工具条目，每个工具一个 JSON
+└── backend-tools/   # 后端 MCP 子工具缓存（由 sync_backend_tools 自动生成）
+src/
+├── server.py        # MCP Server 入口
+├── store.py         # JSON 存储层
+├── registry.py      # 工具注册中心
+└── backend_client.py# 后端 MCP 客户端与连接池
+```
+
+> `data/launchers/` 与 `src/adapters/` 属于早期版本遗留，已在重构中移除，代码中不存在。
 
 ## 文档
 
-- [格式规范](docs/format.md)
+- [数据格式规范](docs/format.md)
+- [架构说明](docs/architecture.md)
+- [MCP 协议一致性对比](docs/mcp-conformance.md)
+- [代码审核报告](docs/code-review.md)

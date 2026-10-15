@@ -1,0 +1,250 @@
+# MCP 协议一致性对比
+
+对比对象：**本项目的实现**（`src/server.py` 等）vs **MCP 规范 + mcp Python SDK 1.x 的实际行为**。
+
+校验基准：
+- MCP 规范确的能力清单（Tools / Resources / Prompts / Logging / Completion）
+- 实测 SDK 版本 `mcp 1.30.0`（`requirements.txt` 锁定 `<2.0.0`）
+- 所有"SDK 实际行为"结论均来自阅读 SDK 源码 `mcp/server/lowlevel/server.py` + 本地实跑
+
+---
+
+## 0. 结论速览
+
+| 对比维度 | 状态 | 说明 |
+|---|---|---|
+| 提供的方法（能力覆盖面） | ⚠️ 基本覆盖，缺 2 项 | 缺工具变更通知、未用标准 logging 能力 |
+| 返回的方式 | ❌→✅ 已修复 | 失败曾不置 `isError`；`read_resource` 返回值类型错误 |
+| 存储数据的结构 | ✅ 符合 | 内部存储自由，inputSchema 均为合法 JSON Schema |
+| 命名与参数约定 | ⚠️→✅ 已统一 | 参数名统一为 `tool_id` |
+
+---
+
+## 1. 提供的方法
+
+### 1.1 Server 能力覆盖
+
+| MCP 方法 | 规范 | 本项目 | 评价 |
+|---|---|---|---|
+| `tools/list` | 必需（声明 tools 能力时） | ✅ `@app.list_tools()` | 一致 |
+| `tools/call` | 必需 | ✅ `@app.call_tool()` | 一致 |
+| `resources/list` | 声明 resources 能力时 | ✅ 3 个 Resource | 一致 |
+| `resources/read` | 同上 | ✅ | 返回值类型**曾不合规**，已修复（见 2.3） |
+| `resources/templates/list` | 声明 templates 能力时 | ❌ 未声明 | 无模板资源，合法 |
+| `resources/subscribe` | 可选 | ❌ 未实现 | 静态资源无需订阅，可接受 |
+| `prompts/list` / `prompts/get` | 声明 prompts 能力时 | ✅ 3 个 Prompt | 一致 |
+| `logging/setLevel` | 可选（内置日志能力） | ❌ 未使用 | **建议改进**，见 1.3 |
+| `completion/complete` | 可选 | ❌ 未实现 | Prompt 无动态参数，可接受 |
+| `ping` | 传输层保活 | ✅ SDK 内置 | 一致 |
+
+### 1.2 缺失：工具变更通知 ⚠️
+
+规范提供了 `notifications/tools/list_changed`，Server 在工具集合变化时应主动通知客户端刷新。
+
+本项目中以下操作**都会改变可见工具**，但均未发通知：
+
+- `start_backend` / `sync_backend_tools` → 后端子工具目录变化
+- 手工往 `data/tools/` 增删 JSON
+
+后果：客户端缓存的 `tools/list` 结果过期。虽然本 Server 的**顶层工具集是固定的**（12 个不变），
+后端子工具又是透过 `list_backend_tools` 动态查询的，因此实际影响有限，
+但严格来说属于未履行的协议约定。
+
+建议：若未来顶层工具集变为动态，务必补 `app.request_context.session.send_notifications...`。
+
+### 1.3 日志能力未走标准通道 ⚠️
+
+MCP 规范定义了标准的 `logging` 能力（`logging/setLevel` + `notifications/message`），
+让 Server 把日志结构化上报给客户端。
+
+本项目改为两条自定义 Tool：`get_backend_logs` / `set_backend_log_level`，
+外加 `print(..., file=sys.stderr)`。
+
+| 做法 | 评价 |
+|---|---|
+| stderr 输出 | ✅ **必须**且正确 —— stdio 传输下 stdout 只能是 JSON-RPC |
+| 自定义 Tool 查日志 | ⚠️ 合法但笨重 —— AI 要额外消耗一次 tool call 才能看到日志 |
+
+建议：保留 Tool 作为主动查询，同时考虑接入标准 logging capability 做被动推送。
+
+### 1.4 分页 ⚠️
+
+`tools/list`、`resources/list`、`prompts/list` 都支持 `cursor` / `nextCursor` 游标分页。
+本项目 handler 签名不含 cursor，SDK 会返回不带 `nextCursor` 的结果 —— 当前 12 个工具规模下完全够用，
+属于**有意不为**，不是缺陷。
+
+---
+
+## 2. 返回的方式
+
+### 2.1 严重问题：`isError` 从未置位 ❌（已修复）
+
+mcp SDK 1.x 的 `call_tool` handler 包装逻辑（源码实证）：
+
+```python
+async def handler(req):
+    try:
+        results = await func(req.params.name, req.params.arguments or {})
+        return ServerResult(CallToolResult(content=list(results), isError=False))   # ← 恒为 False
+    except Exception as e:
+        return self._make_error_result(str(e))                                       # ← 恒为 True
+```
+
+**结论：正常返回值的 `isError` 被硬编码为 `False`，handler 内部无法修改。**
+
+而本项目所有失败场景（工具未找到、后端未运行、连接超时……）都是返回一个文本内容为
+`{"success": false, "error": "..."}` 的普通结果。
+
+后果：
+
+- MCP 客户端 / 调试面板显示为**"调用成功"**
+- 依赖 `isError` 做重试、告警、统计的客户端逻辑完全失效
+- AI 必须自己读懂文本里的 `success: false` 才知道失败了 —— 脆弱且浪费 token
+
+**唯一正解是抛异常**，让 SDK 转成 `isError=True`。已按此修复：
+
+```python
+class ToolError(Exception):
+    """业务级失败，由 SDK 转成 CallToolResult(isError=True)"""
+
+def fail(error: str, error_type: str = "invalid_params", **extra) -> None:
+    payload = {"success": False, "errorType": error_type, "error": error}
+    payload.update(extra)
+    raise ToolError(json.dumps(payload, ensure_ascii=False))
+```
+
+业务错误仍保留 JSON 正文，所以客户端**既**能感知失败，**也**能读到可读原因。
+实测输出：
+
+```
+未知工具      -> {"success": false, "errorType": "unknown_tool", "error": "未知工具: no_such_tool", ...}
+未找到工具    -> {"success": false, "errorType": "not_found", "error": "未找到工具: nope", ...}
+launch 无配置 -> {"success": false, "errorType": "config_error", "error": "Tool has no launch config: ..."}
+```
+
+### 2.2 可选优化：`structuredContent` ⚠️
+
+当前所有结果都是**手动 `json.dumps` 成字符串**塞进 `TextContent.text`。
+
+mcp 1.30 起支持 handler 直接返回 `dict`，SDK 会自动填充 `structuredContent` 并序列化到 content：
+
+```python
+elif isinstance(results, dict):
+    maybe_structured_content = results
+    unstructured_content = [TextContent(type="text", text=json.dumps(results, indent=2))]
+```
+
+MCP 2025-06-18 规范也推荐使用 `outputSchema` + `structuredContent`，便于客户端按 schema 消费。
+
+**为何暂不采用**：该返回值支持是较新版本才有的，`requirements.txt` 目前允许 `>=1.9.0`，
+直接返回 dict 会在老版本上报类型错误。
+若后续把依赖下限提到 `>=1.30`，即可改造一行获得结构化输出。
+
+### 2.3 `resources/read` 返回值类型错误 ❌（已修复）
+
+SDK 对 `read_resource` 的处理：
+
+```python
+case Iterable() as contents:
+    contents_list = [create_content(item.content, item.mime_type) for item in contents]
+```
+
+它读取的是每个条目的 **`.content` 和 `.mime_type`**，而本项目原先返回的是 `list[TextContent]`。
+`TextContent` 只有 `.text`、没有 `.content` → 读取资源时必然 `AttributeError`。
+（因为没人实际调用过 resources，这个 bug 一直没暴露。）
+
+已改为返回 SDK 要求的 `Iterable[ReadResourceContents]`，并带上正确的 `mimeType`：
+
+```python
+return [ReadResourceContents(content=text, mime_type="application/json")]
+```
+
+实测：`awam://tools` 返回 `list[ReadResourceContents]`，`mime_type = application/json`。
+
+### 2.4 Tool 缺少 annotations ⚠️
+
+MCP Tool 支持 `annotations`（`title` / `readOnlyHint` / `destructiveHint` / `openWorldHint`），
+客户端据此在 UI 上给出"只读/危险"提示。
+
+数据文件里已经有 `readOnly` / `destructive` 字段，但**没有映射到 Tool 定义**，
+等于这两个字段目前纯装饰。
+
+建议：构造 `Tool(...)` 时补 `annotations=ToolAnnotations(readOnlyHint=..., destructiveHint=...)`。
+
+### 2.5 异常兜底
+
+SDK 已自带 `except Exception`，所以单个工具抛异常不会让 Server 崩溃。
+本项目额外加了一层：非 `ToolError` 的意外异常转成 JSON 载荷的内部错误，
+保证客户端拿到的仍是结构化内容而非裸异常文本。
+
+---
+
+## 3. 存储数据的结构
+
+### 3.1 协议未约束的部分 ✅
+
+MCP **不规定** Server 内部如何持久化数据，因此 `data/tools/` + `data/backend-tools/`
+的两层 JSON 设计完全自由，不构成一致性问题。
+
+### 3.2 `inputSchema` 合法性 ✅
+
+协议要求每个 Tool 的 `inputSchema` 是合法 JSON Schema（Draft 2020-12 子集）。
+本项目 12 个工具全部为：
+
+```json
+{ "type": "object", "properties": { ... }, "required": [...] }
+```
+
+符合要求。且从 1.30 起 SDK 会**自动用 jsonschema 校验入参**（`validate_input=True` 默认开启），
+参数错误会在进入 handler 前被拦截。
+
+### 3.3 后端子工具 schema 透传 ⚠️
+
+`data/backend-tools/*.json` 里的 `tools[]` 是从后端透传的，只保留了
+`name` / `description` / `inputSchema`。
+
+MCP Tool 还可携带 `title` / `annotations` / `outputSchema`，这些在同步时丢失了。
+建议在 `_refresh_tools_cache` 里一并保存，供未来结构化输出与安全提示使用。
+
+### 3.4 `lastSynced` 字段 ⚠️
+
+目录下 writer 曾硬编码 `"lastSynced": "now"`（历史数据里现在还是这个值），
+无法用于判断缓存新鲜度。已在规范文档中改为 ISO 8601，代码修复排入后续迭代。
+
+---
+
+## 4. 依赖版本：最大的协议一致性风险
+
+`mcp` 主版本升级会**直接摧毁**本 Server：（已实测）
+
+| 版本 | `Server` 的装饰器 API | 本项目 |
+|---|---|---|
+| **1.x** | `list_tools()` / `call_tool()` / `read_resource()` / `list_prompts()` | ✅ 依赖这套 |
+| **2.3.0** | 上述方法全部移除；handler 签名改为 `(ctx, params)`，返回值要求 `ReadResourceResult` 等 | ❌ `AttributeError` |
+
+实测：
+
+```
+>>> import sys; sys.path.insert(0,'src'); import server
+AttributeError: 'Server' object has no attribute 'list_tools'
+```
+
+原先 `requirements.txt` 写 `mcp>=1.0.0`（无上界）→ 全新环境必然安装 2.x → Server 无法启动。
+现已收紧为 `mcp>=1.9.0,<2.0.0`，安装到 1.30.0 后 `import server` 正常。
+
+---
+
+## 5. 待办清单
+
+| 优先级 | 事项 | 章节 |
+|---|---|---|
+| ✅ 已完成 | 失败返回 MCP 协议层 `isError` | 2.1 |
+| ✅ 已完成 | `read_resource` 返回 `ReadResourceContents` | 2.3 |
+| ✅ 已完成 | 依赖锁定 `mcp<2.0.0` | 4 |
+| ✅ 已完成 | 参数名统一 `tool_id`，修正 prompt 模板 | - |
+| P1 | Tool 补 `annotations`（映射 `readOnly` / `destructive`） | 2.4 |
+| P2 | 依赖下限提到 `>=1.30` 后改用 `structuredContent` + `outputSchema` | 2.2 |
+| P2 | 同步后端工具时保留 `title` / `annotations` / `outputSchema` | 3.3 |
+| P2 | `lastSynced` 写真实 ISO 8601 时间 | 3.4 |
+| P3 | 工具集动态化时补 `notifications/tools/list_changed` | 1.2 |
+| P3 | 考虑接入标准 logging capability | 1.3 |
