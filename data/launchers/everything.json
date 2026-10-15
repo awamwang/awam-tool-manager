@@ -21,23 +21,48 @@
     "capabilities": [
       {
         "name": "search",
-        "description": "搜索文件",
+        "description": "搜索文件，支持 Everything 查询语法（ext:pdf、size:>10mb、path:C:\\Projects 等）",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "keyword": {
+            "query": {
               "type": "string",
-              "description": "搜索关键词"
+              "description": "搜索关键词，支持 Everything 查询语法"
             },
-            "limit": {
+            "max_results": {
               "type": "number",
-              "description": "返回数量上限，默认 20"
+              "description": "返回数量上限，默认 100"
+            },
+            "in_path": {
+              "type": "string",
+              "description": "限定搜索路径（递归）"
             }
           },
-          "required": ["keyword"]
-        }
+          "required": ["query"]
+        },
+        "docsUrl": "https://www.voidtools.com/support/everything/searching/"
       }
-    ]
+    ],
+    "toolsCatalog": {
+      "lastSynced": "2026-10-15T14:30:00Z",
+      "source": "manual",
+      "note": "工具目录手动维护，可通过 list_backend_tools 自动同步更新",
+      "tools": [
+        {
+          "name": "search",
+          "description": "搜索文件",
+          "parameters": {
+            "query": "搜索关键词",
+            "max_results": "结果数量上限（默认100）",
+            "in_path": "限定搜索路径"
+          },
+          "example": {
+            "query": "AI in one-启动器",
+            "in_path": "G:\\Projects"
+          }
+        }
+      ]
+    }
   },
   "sync": {
     "enabled": false,
