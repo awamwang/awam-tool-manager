@@ -512,18 +512,10 @@ async def read_resource(uri: str) -> list[MCPTextContent]:
     """读取资源内容"""
     log(f"收到 read_resource 请求: {uri}")
 
-    if uri == "awam://launchers":
+    if uri == "awam://mcp-servers":
         import json
-        launchers = []
-        for lid in store.list_launchers():
-            config = store.load_launcher(lid)
-            launchers.append({
-                "id": config["id"],
-                "name": config.get("displayName", config["name"]),
-                "type": config.get("type"),
-                "installed": config.get("installed", False)
-            })
-        return [MCPTextContent(type="text", text=json.dumps(launchers, ensure_ascii=False, indent=2))]
+        mcp_tools = registry.list_all_tools(kind="mcp")
+        return [MCPTextContent(type="text", text=json.dumps(mcp_tools, ensure_ascii=False, indent=2, default=str))]
 
     elif uri == "awam://tools":
         import json
@@ -570,20 +562,20 @@ async def get_prompt(name: str, arguments: dict | None = None) -> list[PromptMes
     if name == "getting_started":
         text = """# awam-tool-manager 快速入门
 
-awam-tool-manager 是一个统一的工具管理器，聚合各种启动器（Steam、WinGet、Everything 等）下的工具。
+awam-tool-manager 是一个统一的工具管理器，聚合各种 MCP 工具和应用。
 
 ## 核心能力
 
 1. **搜索工具**：用 `search_tools` 按关键词搜索已注册的工具
 2. **查看详情**：用 `get_tool_info` 查看工具的详细信息
-3. **列出启动器**：用 `list_launchers` 查看所有已接入的启动器
+3. **列出工具**：用 `list_tools` 查看所有已注册的工具（可按类型筛选）
 4. **调用后端**：用 `call_backend_tool` 路由调用后端 MCP 的工具
 5. **管理后端**：用 `start_backend` / `stop_backend` / `get_backend_status` 管理后端连接
 
 ## 快速流程
 
-1. 先 `list_launchers` 看看有哪些启动器
-2. 然后 `list_backend_tools` 看看某个启动器下有什么工具
+1. 先 `list_tools` 看看有哪些工具
+2. 然后 `list_backend_tools` 看看某个 MCP 工具下有什么子工具
 3. 最后 `call_backend_tool` 调用具体工具
 """
 
@@ -647,8 +639,10 @@ async def main():
     log("=" * 50)
     log("awam-tool-manager MCP Server 启动中...")
     log(f"数据目录: {DATA_DIR}")
-    launchers = store.list_launchers()
-    log(f"已加载 {len(launchers)} 个启动器: {', '.join(launchers)}")
+    all_tools = registry.list_all_tools()
+    mcp_tools = [t for t in all_tools if t.get("kind") == "mcp"]
+    log(f"已加载 {len(all_tools)} 个工具: {', '.join([t['id'] for t in all_tools])}")
+    log(f"其中 MCP 类工具: {len(mcp_tools)} 个")
     log("等待客户端连接...")
     log("=" * 50)
 
