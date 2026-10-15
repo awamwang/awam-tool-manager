@@ -244,7 +244,16 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = f"✅ 调用成功 ({launcher_id}/{tool_name})\n\n"
             result += res.get("result", "")
         else:
-            result = f"❌ 调用失败: {res.get('error', '未知错误')}"
+            error_type = res.get("errorType", "unknown")
+            error_msg = res.get("error", "未知错误")
+            result = f"❌ 调用失败\n"
+            result += f"  类型: {error_type}\n"
+            result += f"  错误: {error_msg}\n"
+            # 常见错误的提示
+            if error_type == "connection_error":
+                result += f"  提示: 请确认后端软件（{launcher_id}）是否已启动"
+            elif error_type == "runtime_error":
+                result += f"  提示: 请检查工具名 '{tool_name}' 是否正确，参数是否匹配"
 
     elif name == "list_backend_tools":
         launcher_id = arguments.get("launcher_id", "")

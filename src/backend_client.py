@@ -58,9 +58,21 @@ class BackendClient:
         return [{"name": t.name, "description": t.description} for t in tools.tools]
 
     async def call_tool(self, tool_name: str, arguments: dict) -> str:
-        """调用后端 MCP 的工具"""
+        """调用后端 MCP 的工具，失败时抛出详细异常"""
         await self._ensure_connected()
-        result = await self.session.call_tool(tool_name, arguments)
+        try:
+            result = await self.session.call_tool(tool_name, arguments)
+        except Exception as e:
+            raise RuntimeError(f"后端 MCP 调用工具 '{tool_name}' 失败: {type(e).__name__}: {e}") from e
+
+        # 检查后端返回是否有错误
+        if hasattr(result, "isError") and result.isError:
+            error_texts = []
+            for content in result.content:
+                if hasattr(content, "text"):
+                    error_texts.append(content.text)
+            raise RuntimeError(f"后端 MCP 返回错误: {' | '.join(error_texts)}")
+
         # 提取文本结果
         texts = []
         for content in result.content:
@@ -113,17 +125,37 @@ class BackendManager:
     async def call_backend_tool(self, launcher_id: str, tool_name: str, arguments: dict) -> dict:
         """
         路由调用：转发到后端 MCP
-        返回: { success: bool, result: str, error: str }
+        返回: { success: bool, result: str, error: str, errorType: str }
         """
         client = self.get_client(launcher_id)
         if not client:
-            return {"success": False, "error": f"启动器 {launcher_id} 未配置后端 MCP 连接"}
+            return {
+                "success": False,
+                "errorType": "config_error",
+                "error": f"启动器 '{launcher_id}' 未配置后端 MCP 连接，请检查配置文件"
+            }
 
         try:
             result = await client.call_tool(tool_name, arguments)
             return {"success": True, "result": result}
+        except ConnectionError as e:
+            return {
+                "success": False,
+                "errorType": "connection_error",
+                "error": f"无法连接后端 MCP: {e}（可能后端服务未启动）"
+            }
+        except RuntimeError as e:
+            return {
+                "success": False,
+                "errorType": "runtime_error",
+                "error": str(e)
+            }
         except Exception as e:
-            return {"success": False, "error": f"调用后端失败: {str(e)}"}
+            return {
+                "success": False,
+                "errorType": "unknown_error",
+                "error": f"未知错误 ({type(e).__name__}): {e}"
+            }
 
     async def list_backend_tools(self, launcher_id: str) -> dict:
         """列出后端 MCP 提供的工具"""
