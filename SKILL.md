@@ -31,11 +31,15 @@ awam-tool-manager/
 ├── data/
 │   ├── tools/                # 工具条目（每个工具一个 JSON）
 │   └── backend-tools/        # 后端 MCP 子工具缓存（自动生成）
-└── src/
-    ├── server.py             # MCP Server 入口 + 对外工具定义 + 分发
-    ├── store.py              # JSON 存储层
-    ├── registry.py           # 工具注册中心（查询语义）
-    └── backend_client.py     # 后端 MCP 客户端与连接池
+├── src/
+│   ├── server.py             # MCP Server 入口 + 对外工具定义 + 分发
+│   ├── store.py              # JSON 存储层
+│   ├── registry.py           # 工具注册中心（查询语义）
+│   ├── backend_client.py     # 后端 MCP 客户端与连接池
+│   └── schema.py             # 两层数据的 JSON Schema 校验 + 文档生成源
+├── scripts/
+│   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
+└── tests/                    # 82 个用例（含真实 MCP 会话与文档漂移检测）
 ```
 
 > 早期版本曾有 `data/launchers/`（启动器配置）与 `src/adapters/`（启动器适配器），
@@ -90,6 +94,9 @@ awam-tool-manager/
 > 修改已有工具的 `connection` 时，若后端当前是停止/错误状态，**下次调用会用新配置重建连接**，
 > 无需重启 MCP Server；运行中则不受影响（避免留下孤儿进程），需先 `stop_backend` 再 `start_backend`。
 > 坏掉的 JSON 会被跳过并打印 stderr 告警，不会导致整个服务不可用。
+
+> **新增/修改字段时**：只改 `src/schema.py`，再跑 `python scripts/generate_format_doc.py`
+> 更新 `docs/format.md` 的字段表。直接手改文档会被 `tests/test_docs_sync.py` 判为漂移。
 
 ## 依赖约束
 

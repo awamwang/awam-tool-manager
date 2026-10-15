@@ -70,8 +70,11 @@
 - [x] README / format.md / SKILL.md 的工具命名与数据一致（`everything-search-mcp`）
 
 ### 合规与安全
-- [x] `src/schema.py` - 工具条目 JSON Schema 校验（`jsonschema` 可选依赖，缺失时降级）
+- [x] `src/schema.py` - 两层数据的 JSON Schema 校验（`jsonschema` 可选依赖，缺失时降级）
 - [x] 加载时跳过不合规条目并向 stderr 告警（缺 `id` 不再让 tools/list 整体 KeyError）
+- [x] **字段规范单一真相源**：`docs/format.md` 的字段表由 `scripts/generate_format_doc.py`
+      从 schema 生成，手写改动会被 `tests/test_docs_sync.py` 判为漂移
+- [x] `validate_backend_catalog()` - 第二层数据（后端子工具缓存）的结构校验
 - [x] Tool annotations：只读工具 `readOnlyHint`，启停类 `idempotentHint`，转发类 `openWorldHint`
 - [x] `call_backend_tool` 的 destructive 门禁（`allowDestructive`，默认拒绝）
 
@@ -85,7 +88,9 @@
   resources/read、prompts/get、annotations 下发（不 mock SDK）
 - [x] `tests/test_backend_client.py` 补 BackendManager：错误归类、`close_all`、缓存 TTL
 - [x] `tests/test_server_dispatch.py` 补 `AnyUrl` 参数、resources 与 prompts 定义回归
-- [x] 合计 72 passed；真实后端子进程启停 + 调用回归通过
+- [x] `tests/test_docs_sync.py`（10 用例）- 文档与 schema 一致、示例过校验、
+      `data/` 真实文件全部过校验且 `id` 与文件名一致
+- [x] 合计 **82 passed**（7 个文件）；真实后端子进程启停 + 调用回归通过
 
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
@@ -109,7 +114,7 @@
 - [ ] 工具自动发现：检测本机已安装哪些可作为 MCP 后端接入的工具
 - [ ] 工具标签分类和筛选优化（`kind` / `tags` 之外的维度）
 - [ ] 工具帮助文档查看（--help 输出）
-- [ ] 由 `src/schema.py` 反向生成 `docs/format.md`（彻底消除文档/数据双真相源）
+- [x] 由 `src/schema.py` 反向生成 `docs/format.md`（彻底消除文档/数据双真相源）
 
 ### P2 - 生态扩展
 - [ ] 接入 Scoop（写 CLI 适配器）
@@ -221,14 +226,20 @@ awam-tool-manager/
 │   ├── store.py                # JSON 存储层
 │   ├── registry.py             # 工具注册中心
 │   ├── backend_client.py       # 后端 MCP 客户端与连接池
-│   └── schema.py               # 工具条目 JSON Schema 校验（jsonschema 可选）
+│   └── schema.py               # 两层数据的 JSON Schema 校验 + **文档生成源**
+├── scripts/
+│   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
 └── tests/
     ├── test_store.py
     ├── test_registry.py
     ├── test_registry_policy.py
     ├── test_server_dispatch.py
     ├── test_backend_client.py
-    └── test_protocol_roundtrip.py   # 真实 MCP 会话，不 mock SDK
+    ├── test_protocol_roundtrip.py   # 真实 MCP 会话，不 mock SDK
+    └── test_docs_sync.py            # 文档/示例/data 与 schema 的一致性
 ```
 
 运行：`python -m pytest -q`（未装 pytest-asyncio，异步用例统一用 `asyncio.run`）
+
+**改字段的流程**：只改 `src/schema.py` → `python scripts/generate_format_doc.py`
+→ 提交。手写改 `docs/format.md` 的字段表会被测试判失败。

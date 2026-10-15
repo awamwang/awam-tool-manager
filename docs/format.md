@@ -18,43 +18,52 @@
 
 ### 字段说明
 
+> **本表由 `src/schema.py` 生成，请勿手改。**
+> 改字段请改 `src/schema.py` 的 `TOOL_ENTRY_SCHEMA`，然后运行
+> `python scripts/generate_format_doc.py`（`--check` 可只做漂移检查）。
+> 测试 `tests/test_docs_sync.py` 会在文档与 schema 不一致时直接失败。
+
+<!-- BEGIN:generated:tool-entry -->
+
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `id` | string | ✅ | 工具唯一 ID，**必须与文件名一致** |
-| `name` | string | ✅ | 工具名称（英文/技术名） |
-| `displayName` | string | - | 显示名称（中文/用户友好），缺省回落 `name` |
-| `kind` | string | ✅ | `app`（普通应用）/ `mcp`（MCP 工具） |
-| `description` | string | - | 工具功能描述（参与搜索匹配） |
-| `status` | string | - | `installed` / `not_installed` / `unknown` |
-| `version` | string | - | 版本号 |
-| `publisher` | string | - | 发布者 |
-| `website` | string | - | 官方网站 |
-| `docUrl` | string | - | 文档地址 |
-| `icon` | string | - | 图标路径或 URL |
-| `launch` | object | - | **仅 `kind=app`**：启动方式 |
-| `launch.type` | string | - | `executable` / `protocol` / `command` |
-| `launch.command` | string | - | 启动命令/路径 |
-| `launch.args` | array | - | 启动参数（元素建议统一写字符串） |
-| `connection` | object | - | **仅 `kind=mcp`**：后端 MCP 连接方式 |
-| `connection.type` | string | - | 目前仅支持 `stdio` |
-| `connection.command` | string | - | 拉起子进程的命令 |
-| `connection.args` | array | - | 子进程参数 |
-| `connection.env` | object | - | 子进程环境变量 |
-| `connection.timeout` | number | - | 后端操作超时（秒），缺省 `30`。覆盖 initialize / list_tools / call_tool / ping |
-| `update` | object | - | 更新方式 |
-| `update.method` | string | - | `winget` / `scoop` / `npm` / `manual` |
-| `update.packageId` | string | - | 包管理器中的包 ID |
-| `install` | object | - | 安装方式（`everything-search-mcp` 用的是这个，与 `update` 并存） |
-| `install.method` | string | - | `npm` / `winget` / `manual` ... |
-| `install.command` | string | - | 安装命令 |
-| `tags` | array | - | 标签分类（参与搜索匹配） |
-| `actions` | array | - | 支持的动作（如 `launch` / `search`） |
-| `capabilities` | array | - | 能力标签（如 `search` / `index`） |
-| `readOnly` | boolean | - | 是否只读（对应 MCP 的 readOnlyHint） |
-| `destructive` | boolean | - | 是否有破坏性（对应 MCP 的 destructiveHint，`call_backend_tool` 会据此拦截） |
-| `metadata` | object | - | 扩展元数据 |
-| `createdAt` | string | - | 创建时间 ISO 8601 |
-| `updatedAt` | string | - | 更新时间 ISO 8601 |
+| `id` | `string` | ✅ | 工具唯一 ID，**必须与文件名一致**（须匹配 `^[A-Za-z0-9._-]+$`） |
+| `name` | `string` | ✅ | 工具名称（英文/技术名） |
+| `displayName` | `string` | - | 显示名称（中文/用户友好），缺省回落 `name` |
+| `kind` | `string` | ✅ | 工具类型；决定能否建立后端连接，也决定 `get_tool_info` 的返回形状（取值：`app` / `mcp`） |
+| `description` | `string` | - | 工具功能描述（参与搜索匹配） |
+| `status` | `string` | - | 安装状态（取值：`installed` / `not_installed` / `unknown`） |
+| `version` | `string` | - | 版本号 |
+| `publisher` | `string` | - | 发布者 |
+| `website` | `string` | - | 官方网站 |
+| `docUrl` | `string` | - | 文档地址 |
+| `icon` | `string` | - | 图标路径或 URL |
+| `launch` | `object` | - | **仅 `kind=app`**：启动方式，`launch_tool` 据此返回命令 |
+| `launch.type` | `string` | - | 启动方式类型（取值：`executable` / `protocol` / `command`） |
+| `launch.command` | `string` | - | 启动命令或可执行文件路径 |
+| `launch.args` | `array` | - | 启动参数（元素建议统一写字符串） |
+| `connection` | `object` | - | **仅 `kind=mcp`**：后端 MCP 连接方式，`BackendClient` 据此拉起子进程 |
+| `connection.type` | `string` | ✅ | 连接类型，目前仅支持 stdio（取值：`stdio`） |
+| `connection.command` | `string` | ✅ | 拉起子进程的命令 |
+| `connection.args` | `array` | - | 子进程参数 |
+| `connection.env` | `object` | - | 子进程环境变量 |
+| `connection.timeout` | `number` | - | 后端操作超时（秒），覆盖 initialize / list_tools / call_tool / ping（缺省 `30`；必须 > 0） |
+| `update` | `object` | - | 更新方式 |
+| `update.method` | `string` | - | 更新渠道（取值：`winget` / `scoop` / `npm` / `manual`） |
+| `update.packageId` | `string` | - | 包管理器中的包 ID |
+| `install` | `object` | - | 安装方式（与 `update` 并存，`everything-search-mcp` 用的是这个） |
+| `install.method` | `string` | - | 安装渠道（取值：`npm` / `winget` / `scoop` / `manual`） |
+| `install.command` | `string` | - | 安装命令 |
+| `tags` | `array<string>` | - | 标签分类（参与搜索匹配） |
+| `actions` | `array<string>` | - | 支持的动作（如 `launch` / `search`） |
+| `capabilities` | `array<string>` | - | 能力标签（如 `search` / `index`） |
+| `readOnly` | `boolean` | - | 是否只读（对应 MCP 的 `readOnlyHint`） |
+| `destructive` | `boolean` | - | 是否有破坏性（对应 `destructiveHint`，`call_backend_tool` 会据此拦截） |
+| `metadata` | `object` | - | 扩展元数据，键值对自由 |
+| `createdAt` | `string` | - | 创建时间，ISO 8601 |
+| `updatedAt` | `string` | - | 更新时间，ISO 8601 |
+
+<!-- END:generated:tool-entry -->
 
 ### 示例：`kind=app`
 
@@ -120,15 +129,21 @@
 ## 数据层 2：后端子工具缓存（Backend Tool Catalog）
 
 由 `sync_backend_tools` 自动生成并写入 `data/backend-tools/{tool_id}.json`，**不建议手工编辑**。
+结构同样由 `src/schema.py` 的 `BACKEND_CATALOG_SCHEMA` 定义并生成本表。
 
-| 字段 | 说明 |
-|---|---|
-| `parent` | 父 MCP 工具的 ID |
-| `lastSynced` | 上次同步时间（ISO 8601） |
-| `source` | 固定 `auto`，表示由后端自动拉取 |
-| `tools[].name` | 后端 MCP 提供的子工具名（`call_backend_tool` 的 `tool_name` 参数） |
-| `tools[].description` | 子工具描述 |
-| `tools[].inputSchema` | 透传自后端的 JSON Schema |
+<!-- BEGIN:generated:backend-catalog -->
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `parent` | `string` | ✅ | 父 MCP 工具的 ID |
+| `lastSynced` | `string` | - | 上次同步时间，ISO 8601；用于判断缓存有多旧 |
+| `source` | `string` | - | 来源，表示由后端自动拉取而非人工维护（取值：`auto`） |
+| `tools` | `array<object>` | ✅ | 后端 MCP 提供的子工具列表 |
+| `tools[].name` | `string` | ✅ | 子工具名，即 `call_backend_tool` 的 `tool_name` 参数 |
+| `tools[].description` | `string` | - | 子工具描述 |
+| `tools[].inputSchema` | `object` | - | 透传自后端 MCP 的 JSON Schema |
+
+<!-- END:generated:backend-catalog -->
 
 ```json
 {
@@ -204,5 +219,7 @@
 - 元工具模式：只暴露少量高层工具，内部路由到具体实现
 - `readOnly` / `destructive` 与 MCP Tool annotations 语义对齐：
   只读工具已下发 `readOnlyHint`，`destructive` 已在 `call_backend_tool` 转发前设门禁
-- **本文件即校验依据**：`src/schema.py` 的 `TOOL_ENTRY_SCHEMA` 与之对应，
-  改动字段时应同步两边，避免"文档是纸面标准、data/ 是事实标准"再次分叉
+- **单一真相源**：`src/schema.py` 既是运行期校验依据，也是上面两张字段表的生成源。
+  改字段只改 schema，再跑 `python scripts/generate_format_doc.py`；
+  本文件其余部分（示例、对外契约、错误约定）仍手写，
+  但示例会被 `tests/test_docs_sync.py` 拿去跑校验，不会悄悄腐烂

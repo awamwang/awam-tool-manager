@@ -73,12 +73,15 @@ awam-tool-manager/
 │   │   └── everything-search-mcp.json (kind=mcp)
 │   └── backend-tools/        # 后端 MCP 子工具缓存（自动同步写入）
 │       └── everything-search-mcp.json
-└── src/
-    ├── server.py             # MCP Server 入口 + 全部对外工具定义 + 分发
-    ├── store.py              # JSON 存储层（139 行，读容错 + 原子写）
-    ├── registry.py           # 工具注册中心（140 行，含条目校验过滤）
-    ├── schema.py             # 工具条目的 JSON Schema 与校验（119 行）
-    └── backend_client.py     # 后端 MCP 客户端与连接池（547 行）
+├── src/
+│   ├── server.py             # MCP Server 入口 + 全部对外工具定义 + 分发
+│   ├── store.py              # JSON 存储层（139 行，读容错 + 原子写）
+│   ├── registry.py           # 工具注册中心（140 行，含条目校验过滤）
+│   ├── schema.py             # 两层数据的 JSON Schema 与校验（240 行，**文档生成源**）
+│   └── backend_client.py     # 后端 MCP 客户端与连接池（547 行）
+├── scripts/
+│   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表（148 行）
+└── tests/                    # 7 个文件，82 个用例（含真实 MCP 会话与文档漂移检测）
 ```
 
 > 根目录下的 `test_*.py`、`test_output.txt` 是调试期临时脚本，已被 `.gitignore` 排除。
@@ -186,10 +189,11 @@ awam-tool-manager/
 | 模块 | 行数 | 职责 | 依赖 |
 |---|---|---|---|
 | `store.py` | 139 | JSON 文件的读写与目录遍历，读有容错、写走原子替换，无缓存 | 标准库 |
-| `schema.py` | 119 | 工具条目的 JSON Schema 与校验（`jsonschema` 可选，缺失时降级） | `jsonschema`(可选) |
+| `schema.py` | 240 | 两层数据的 JSON Schema 与校验（`jsonschema` 可选，缺失时降级）；**同时是 `docs/format.md` 字段表的唯一生成源** | `jsonschema`(可选) |
 | `registry.py` | 140 | 工具查询语义（列表 / 搜索含 `id` / 详情 / 启动信息），加载时过滤不合规条目 | `store`、`schema` |
 | `backend_client.py` | 547 | 后端 MCP 子进程的连接管理、调用转发、缓存、心跳、日志 | `mcp`、`store` |
-| `server.py` | 694 | MCP 协议入口，定义并分发全部对外能力（含 annotations 与 destructive 门禁） | `mcp`、`store`、`registry`、`backend_client`、`schema` |
+| `server.py` | 707 | MCP 协议入口，定义并分发全部对外能力（含 annotations 与 destructive 门禁） | `mcp`、`store`、`registry`、`backend_client`、`schema` |
+| `scripts/generate_format_doc.py` | 148 | 读 `schema.py` 渲染字段表并就地替换 `docs/format.md` 的生成区块；`--check` 做漂移检查 | 标准库、`schema` |
 
 ### 5.3 后端路由调用链
 
@@ -355,7 +359,19 @@ python src/server.py
 | 协议层契约无回归保护 | ✅ 新增 `tests/test_protocol_roundtrip.py`（7 例，真实 MCP 会话，不 mock SDK） |
 | 其他必要测试 | ✅ BackendManager 错误分类 / `close_all` / 缓存 TTL、resources 与 prompts 定义、子工具查找，合计 **72 passed** |
 
-### 8.6 尚未处理 ⏳
+### 8.6 第六轮已修复 ✅（A4：文档由 schema 反向生成）
+
+| 项 | 处理 |
+|---|---|
+| 双真相源（A4） | ✅ `src/schema.py` 成为唯一真相源，`docs/format.md` 的两张字段表由 `scripts/generate_format_doc.py` 生成 |
+| 文档手写漂移 | ✅ `tests/test_docs_sync.py` 四条防线：生成块逐字节一致 / 文档示例过校验 / `data/` 真实文件过校验且 `id` 与文件名一致 / schema 字段不得缺 `description` |
+| `update` / `install` 子字段只写在文档里 | ✅ 已补进 schema 并纳入枚举校验（`update.method` 等） |
+| 第二层数据无校验 | ✅ 新增 `BACKEND_CATALOG_SCHEMA` 与 `validate_backend_catalog()` |
+
+**单向依赖方向**：`src/schema.py` →（生成）→ `docs/format.md` →（被测试校验）→
+与 `data/*.json` 三方一致。改字段只改 schema，文档与测试会强制跟随。
+
+### 8.7 尚未处理 ⏳
 
 | 项 | 说明 |
 |---|---|
@@ -363,7 +379,6 @@ python src/server.py
 | 工具变更通知 | `notifications/tools/list_changed` 未发送（顶层工具集静态，影响小） |
 | 标准 logging capability | 目前用自定义 Tool 查日志 |
 | 并发限流（A3） | `BackendManager` 无排队/限流，并发调用同一 session 的正确性依赖后端实现 |
-| 双真相源治理（A4） | 长期方案是由 schema 反向生成文档，当前靠"改字段同步两边"的约定 |
 
 > 完整清单见 [`code-review.md`](code-review.md) 与 [`mcp-conformance.md`](mcp-conformance.md)。
 

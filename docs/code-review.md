@@ -6,7 +6,23 @@
 
 ---
 
-## 0. 第六次更新：协议层回环测试发现两个潜伏缺陷（最新）
+## 0. 第七次更新：A4 —— 文档改由 schema 反向生成（最新）
+
+A4 此前只是"部分改善"：字段分叉补回文档后，靠"记得同步两边"的约定维系，
+时间一长必然再漂。**现在收口为单向依赖**：
+
+| 变更 | 说明 |
+|---|---|
+| `src/schema.py` | 每个字段加 JSON Schema 标准 `description`；新增 `BACKEND_CATALOG_SCHEMA` 与 `validate_backend_catalog()`；补齐 `update` / `install` 子字段（此前 schema 里只有 `{"type":"object"}`，文档却写了子字段） |
+| `scripts/generate_format_doc.py`（新） | 读 schema 渲染两张字段表，按 HTML 注释标记就地替换 `docs/format.md`；`--check` 漂移时退出码 1 |
+| `tests/test_docs_sync.py`（新，10 例） | 生成块逐字节一致、schema 字段不得缺 `description`、生成行数固定、文档示例过校验、`data/` 真实文件过校验且 `id` 与文件名一致、后端缓存坏结构被拒 |
+
+合计 **82 passed**（7 个测试文件）。叙述性内容（示例、对外契约、错误约定）仍手写 ——
+不为了"全自动化"牺牲可读性，但示例会被测试拿去跑校验，不会悄悄腐烂。
+
+---
+
+## 0.0 第六次更新：协议层回环测试发现两个潜伏缺陷
 
 补 `tests/test_protocol_roundtrip.py`（用真实 MCP 会话驱动 server，不 mock SDK）时，
 **又抓出两个此前完全没有暴露的缺陷** —— 它们和 D23 是同一类：能力从未被真正调用过，
@@ -119,14 +135,21 @@ P0 与 P1 已全部关闭。剩余有效待办为 P2 的 D9–D15、P3 的 D17/D
 | 架构设计 | ⭐⭐⭐⭐ 分层清晰（接口 / 领域 / 存储 / 路由），职责边界干净 |
 | 契约一致性 | ⭐⭐⭐⭐ 修复后已对齐（原 ⭐⭐） |
 | 健壮性 | ⭐⭐⭐⭐⭐ 超时、清理、JSON 容错、原子写均已到位（原 ⭐⭐） |
-| 可维护性 | ⭐⭐⭐⭐⭐ 6 个测试文件共 72 个用例，含协议层回环（原 ⭐⭐） |
+| 可维护性 | ⭐⭐⭐⭐⭐ 7 个测试文件共 82 个用例，含协议层回环与文档漂移检测（原 ⭐⭐） |
 | 协议合规 | ⭐⭐⭐⭐⭐ annotations 已下发、destructive 门禁已落地，仅 `structuredContent` 待依赖升级 |
+| 文档一致性 | ⭐⭐⭐⭐⭐ 字段表由 schema 生成，示例与 data/ 真实文件均入校验（原 ⭐⭐） |
 
 **共发现 27 项问题**：P0 级 4 项、P1 级 5 项、P2 级 8 项、P3 级 4 项、后续新增 6 项
 （D23/D24 来自协议专项，**D25/D26 来自协议层回环测试**）。
 **P0 / P1 / P2（D9–D15）/ P3 的 D17/D18/D19/D21/D22 已全部修复**；
-架构议题中 **A1（schema 校验）、A2（annotations + destructive 门禁）已落地**。
-剩余待办只有 **A3（并发限流）** 与 **A4（文档/数据双真相源的长期治理）**。
+架构议题中 **A1（schema 校验）、A2（annotations + destructive 门禁）、
+A4（由 schema 反向生成文档）已落地**。剩余待办只剩 **A3（并发限流）**。
+
+> **A4 的收口方式**：`src/schema.py` 现在是字段规范的唯一真相源，
+> `docs/format.md` 的两张字段表由 `scripts/generate_format_doc.py` 生成，
+> 手写改动会被 `tests/test_docs_sync.py` 判为漂移（另有 3 条防线：
+> 文档示例必须通过校验、`data/` 真实文件必须全部通过校验、schema 字段不得缺
+> `description`）。详见 §9 A4。
 
 > **方法论结论**：D23 / D25 / D26 三个缺陷的共性是"能力存在但从未被真正调用过"，
 > 因此单测覆盖不到。凡是"SDK 与 handler 的接缝"（参数类型、返回值类型、错误映射），
@@ -586,16 +609,26 @@ GetPromptResult"）→ **prompts/get 全部失败**。
 `BackendManager` 是模块级单例，`clients` 字典无锁保护（除 `BackendClient` 内部启动锁）。
 并发 `call_backend_tool` 打到同一个 session 时，正确性完全依赖后端 MCP 的实现，缺少限流与排队。
 
-### A4. ✅ 部分改善 —— 数据与文档双真相源
+### A4. ✅ 已修复（第七轮）—— 数据与文档双真相源
 
 `data/*.json` 是事实标准，`docs/format.md` 是纸面标准，二者已经分叉（D17）。
+第五轮只是把分叉的字段补回文档，方向仍靠"记得同步"维系，时间一长必然再漂。
 
-**已改善（第五轮）**：分叉的字段（`install` / `actions` / `capabilities`）已补进文档，
-且 `format.md` 现在明确写着"改动字段时应同步 `src/schema.py` 的 `TOOL_ENTRY_SCHEMA`" ——
-文档不再只是纸面，它由校验代码背书。
+**现在收口为单向**：`src/schema.py` 是唯一真相源，文档是它的投影。
 
-**仍未解决**：真正的单向真相源要等**由 schema 反向生成文档**（或由数据反推文档）落地，
-否则时间一长仍会再次漂移。
+1. `TOOL_ENTRY_SCHEMA` / `BACKEND_CATALOG_SCHEMA` 的每个字段都带上 JSON Schema 标准
+   `description`（校验器不使用，只供人读和供生成器读取）；`enum` / `pattern` /
+   `default` / `exclusiveMinimum` 等约束也只在 schema 里写一遍；
+2. `scripts/generate_format_doc.py` 读取 schema 渲染两张字段表，按 HTML 注释标记
+   就地替换 `docs/format.md` 的生成区块；叙述性内容（示例、对外契约、错误约定）仍手写，
+   不为了"全自动化"牺牲可读性。脚本支持 `--check`，漂移时退出码 1；
+3. `tests/test_docs_sync.py` 四条防线：生成块逐字节一致（手写改文档直接失败）、
+   文档里的 JSON 示例必须通过校验、`data/` 下真实文件全部通过校验且 `id` 与文件名一致、
+   schema 字段不得缺 `description` 且生成行数固定。
+
+顺带补强：`update` / `install` 此前在 schema 里只有 `{"type": "object"}`，
+文档却写了 `update.method` 等子字段——现已补齐子字段并纳入枚举校验，
+新增 `validate_backend_catalog()` 覆盖第二层数据。
 
 ---
 
@@ -642,10 +675,15 @@ GetPromptResult"）→ **prompts/get 全部失败**。
 20. ~~补齐必要测试~~ —— 协议回环（7）、BackendManager 错误分类与清理、缓存 TTL、
     resources/prompts 定义、子工具查找，合计 72 passed
 
-**第六批（待做）**
+**第六批（已完成 ✅）**
 
-21. **A3** —— `BackendManager` 并发限流与排队（并发调用同一 session 的正确性目前依赖后端实现）；
-22. **A4** —— 由 schema 反向生成文档，彻底消除双真相源；
+21. ~~**A4** —— 由 schema 反向生成文档~~ → `scripts/generate_format_doc.py` +
+    `tests/test_docs_sync.py`（防漂移 4 条防线），合计 82 passed；
+    顺带补齐 `update` / `install` 子字段校验与 `validate_backend_catalog()`
+
+**第七批（待做）**
+
+22. **A3** —— `BackendManager` 并发限流与排队（并发调用同一 session 的正确性目前依赖后端实现）；
 23. 依赖下限提到 `mcp>=1.30` 后启用 `structuredContent` / `outputSchema`。
 
 > 原先 §8 里有一个重复编号的「第三批（迭代，一致性）」小节，已合并到上面的批次。
@@ -659,11 +697,16 @@ GetPromptResult"）→ **prompts/get 全部失败**。
 pip install "mcp>=1.9.0,<2.0.0" pytest
 
 # 2) 静态检查
-python -m py_compile src/*.py tests/*.py
+python -m py_compile src/*.py tests/*.py scripts/*.py
 
-# 3) 单元测试（72 项：store/registry + backend_client 稳定性 + store 容错/原子写
-#    + server 分发 + 搜索语义/schema 校验/annotations/destructive 门禁 + 协议层回环）
+# 3) 单元测试（82 项：store/registry + backend_client 稳定性 + store 容错/原子写
+#    + server 分发 + 搜索语义/schema 校验/annotations/destructive 门禁 + 协议层回环
+#    + 文档与 schema 的一致性）
 python -m pytest tests/ -q
+
+# 3.1) 只查文档漂移（CI 友好，漂移时退出码 1）
+python scripts/generate_format_doc.py --check
+#      需要更新文档时：python scripts/generate_format_doc.py
 
 # 4) import 验证（mcp 2.x 下会 AttributeError）
 python -c "import sys; sys.path.insert(0,'src'); import server; print('OK')"
@@ -718,6 +761,7 @@ D4 / D5 / D6 / D7 的修复由 `tests/test_backend_client.py` 覆盖，
 D9 / D10 / D12 / D13 / D14 / D15 由新增的 `tests/test_store.py`、`test_backend_client.py`
 与 `tests/test_server_dispatch.py` 覆盖，
 D17 / D18 / A1 / A2 由 `tests/test_registry_policy.py` 覆盖，
-D24 / D25 / D26 由 `tests/test_protocol_roundtrip.py`（真实 MCP 会话）覆盖（合计 `72 passed`），
+D24 / D25 / D26 由 `tests/test_protocol_roundtrip.py`（真实 MCP 会话）覆盖，
+A4 由 `tests/test_docs_sync.py` 覆盖（合计 `82 passed`），
 并已用真实后端子进程做过完整启停 + 调用回归：启动成功 → 自动同步 3 个工具 →
 `lastSynced` 写入真实时间戳 → 调用 `search_files` 返回结果 → 停止后状态回到 `stopped`。
