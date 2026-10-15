@@ -22,8 +22,8 @@ class BackendClient:
     STATUS_RUNNING = "running"
     STATUS_ERROR = "error"
 
-    def __init__(self, launcher_id: str, connection_config: dict):
-        self.launcher_id = launcher_id
+    def __init__(self, mcp_tool_id: str, connection_config: dict):
+        self.mcp_tool_id = mcp_tool_id
         self.connection_config = connection_config
         self.session: ClientSession | None = None
         self.status = self.STATUS_STOPPED
@@ -52,7 +52,7 @@ class BackendClient:
         timestamp = time.strftime("%H:%M:%S")
         self.logs.append({"time": timestamp, "level": level, "message": message})
         # 打印到 stderr，不能污染 stdout 协议通道
-        print(f"[awam:{self.launcher_id}][{level}] {message}", file=sys.stderr, flush=True)
+        print(f"[awam:{self.mcp_tool_id}][{level}] {message}", file=sys.stderr, flush=True)
 
     async def start(self) -> dict:
         """启动后端 MCP Server 并建立连接"""
@@ -227,7 +227,7 @@ class BackendClient:
             uptime = round(time.time() - self.started_at, 1)
 
         return {
-            "launcher_id": self.launcher_id,
+            "mcp_tool_id": self.mcp_tool_id,
             "status": self.status,
             "last_error": self.last_error,
             "started_at": self.started_at,
@@ -287,16 +287,16 @@ class BackendManager:
         tools = self.store.list_tools()
         return [t["id"] for t in tools if t.get("kind") == "mcp"]
 
-    async def start_backend(self, launcher_id: str) -> dict:
+    async def start_backend(self, mcp_tool_id: str) -> dict:
         """启动指定后端，成功后自动同步工具目录"""
-        client = self.get_client(launcher_id)
+        client = self.get_client(mcp_tool_id)
         if not client:
-            return {"success": False, "error": f"启动器 '{launcher_id}' 未配置后端 MCP 连接"}
+            return {"success": False, "error": f"启动器 '{mcp_tool_id}' 未配置后端 MCP 连接"}
 
         result = await client.start()
         if result.get("success"):
             # 自动同步工具目录
-            sync_result = await self.sync_tools_catalog(launcher_id)
+            sync_result = await self.sync_tools_catalog(mcp_tool_id)
             if sync_result.get("success"):
                 result["message"] += f"\n工具目录已自动同步：{sync_result.get('count', 0)} 个工具"
             else:
@@ -322,11 +322,11 @@ class BackendManager:
         except Exception as e:
             return {"success": False, "error": f"同步失败: {type(e).__name__}: {e}"}
 
-    async def stop_backend(self, launcher_id: str) -> dict:
+    async def stop_backend(self, mcp_tool_id: str) -> dict:
         """停止指定后端"""
-        client = self.get_client(launcher_id)
+        client = self.get_client(mcp_tool_id)
         if not client:
-            return {"success": False, "error": f"启动器 '{launcher_id}' 未配置后端 MCP 连接"}
+            return {"success": False, "error": f"启动器 '{mcp_tool_id}' 未配置后端 MCP 连接"}
         return await client.stop()
 
     def get_backend_status(self, mcp_tool_id: str | None = None) -> dict:
@@ -345,28 +345,28 @@ class BackendManager:
                 all_status.append(client.get_status())
         return {"success": True, "backends": all_status}
 
-    def get_backend_logs(self, launcher_id: str, level: str | None = None, limit: int = 50) -> dict:
+    def get_backend_logs(self, mcp_tool_id: str, level: str | None = None, limit: int = 50) -> dict:
         """获取后端日志"""
-        client = self.get_client(launcher_id)
+        client = self.get_client(mcp_tool_id)
         if not client:
-            return {"success": False, "error": f"启动器 '{launcher_id}' 未配置"}
+            return {"success": False, "error": f"启动器 '{mcp_tool_id}' 未配置"}
         return {"success": True, "logs": client.get_logs(level, limit)}
 
-    def set_backend_log_level(self, launcher_id: str, level: str) -> dict:
+    def set_backend_log_level(self, mcp_tool_id: str, level: str) -> dict:
         """设置后端日志级别"""
-        client = self.get_client(launcher_id)
+        client = self.get_client(mcp_tool_id)
         if not client:
-            return {"success": False, "error": f"启动器 '{launcher_id}' 未配置"}
+            return {"success": False, "error": f"启动器 '{mcp_tool_id}' 未配置"}
         return client.set_log_level(level)
 
-    async def call_backend_tool(self, launcher_id: str, tool_name: str, arguments: dict) -> dict:
+    async def call_backend_tool(self, mcp_tool_id: str, tool_name: str, arguments: dict) -> dict:
         """路由调用：转发到后端 MCP"""
-        client = self.get_client(launcher_id)
+        client = self.get_client(mcp_tool_id)
         if not client:
             return {
                 "success": False,
                 "errorType": "config_error",
-                "error": f"启动器 '{launcher_id}' 未配置后端 MCP 连接"
+                "error": f"启动器 '{mcp_tool_id}' 未配置后端 MCP 连接"
             }
 
         try:
@@ -391,11 +391,11 @@ class BackendManager:
                 "error": f"未知错误 ({type(e).__name__}): {e}"
             }
 
-    async def list_backend_tools(self, launcher_id: str, force_refresh: bool = False) -> dict:
+    async def list_backend_tools(self, mcp_tool_id: str, force_refresh: bool = False) -> dict:
         """列出后端 MCP 提供的工具（带完整参数 schema）"""
-        client = self.get_client(launcher_id)
+        client = self.get_client(mcp_tool_id)
         if not client:
-            return {"success": False, "error": f"启动器 {launcher_id} 未配置后端 MCP 连接"}
+            return {"success": False, "error": f"启动器 {mcp_tool_id} 未配置后端 MCP 连接"}
 
         try:
             tools = await client.list_tools(force_refresh=force_refresh)

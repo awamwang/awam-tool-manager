@@ -36,19 +36,6 @@ def log(msg: str):
     print(f"[awam-tool-manager] {msg}", file=sys.stderr, flush=True)
 
 
-def resolve_launcher_id(id_str: str) -> str:
-    """
-    统一解析：不管传的是启动器 ID 还是工具 ID，都返回启动器 ID
-    例如：
-      "everything" → "everything"
-      "everything:main" → "everything"
-      "everything:everything_search" → "everything"
-    """
-    if ":" in id_str:
-        return id_str.split(":", 1)[0]
-    return id_str
-
-
 @app.list_tools()
 async def list_tools() -> list[Tool]:
     """列出所有可用工具"""
@@ -137,20 +124,20 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="list_backend_tools",
-            description="列出指定启动器的后端 MCP 提供的所有工具（含完整参数 schema）",
+            description="列出指定 MCP 工具的后端提供的所有子工具（含完整参数 schema）",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "launcher_id": {
+                    "mcp_tool_id": {
                         "type": "string",
-                        "description": "启动器 ID"
+                        "description": "MCP 工具 ID"
                     },
                     "force_refresh": {
                         "type": "boolean",
                         "description": "是否强制刷新缓存"
                     }
                 },
-                "required": ["launcher_id"]
+                "required": ["mcp_tool_id"]
             }
         ),
         Tool(
@@ -159,12 +146,12 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "launcher_id": {
+                    "mcp_tool_id": {
                         "type": "string",
-                        "description": "启动器 ID"
+                        "description": "MCP 工具 ID"
                     }
                 },
-                "required": ["launcher_id"]
+                "required": ["mcp_tool_id"]
             }
         ),
         Tool(
@@ -173,12 +160,12 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "launcher_id": {
+                    "mcp_tool_id": {
                         "type": "string",
-                        "description": "启动器 ID"
+                        "description": "MCP 工具 ID"
                     }
                 },
-                "required": ["launcher_id"]
+                "required": ["mcp_tool_id"]
             }
         ),
         Tool(
@@ -187,9 +174,9 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "launcher_id": {
+                    "mcp_tool_id": {
                         "type": "string",
-                        "description": "启动器 ID，不填则返回所有后端状态"
+                        "description": "MCP 工具 ID，不填则返回所有后端状态"
                     }
                 }
             }
@@ -200,9 +187,9 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "launcher_id": {
+                    "mcp_tool_id": {
                         "type": "string",
-                        "description": "启动器 ID"
+                        "description": "MCP 工具 ID"
                     },
                     "level": {
                         "type": "string",
@@ -213,7 +200,7 @@ async def list_tools() -> list[Tool]:
                         "description": "返回条数上限，默认 50"
                     }
                 },
-                "required": ["launcher_id"]
+                "required": ["mcp_tool_id"]
             }
         ),
         Tool(
@@ -222,16 +209,16 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "launcher_id": {
+                    "mcp_tool_id": {
                         "type": "string",
-                        "description": "启动器 ID"
+                        "description": "MCP 工具 ID"
                     },
                     "level": {
                         "type": "string",
                         "description": "日志级别（debug/info/warning/error）"
                     }
                 },
-                "required": ["launcher_id", "level"]
+                "required": ["mcp_tool_id", "level"]
             }
         ),
         Tool(
@@ -240,12 +227,12 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "launcher_id": {
+                    "mcp_tool_id": {
                         "type": "string",
-                        "description": "启动器 ID"
+                        "description": "MCP 工具 ID"
                     }
                 },
-                "required": ["launcher_id"]
+                "required": ["mcp_tool_id"]
             }
         ),
     ]
@@ -431,18 +418,18 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 status_emoji = {"running": "🟢", "starting": "🟡", "stopped": "⚪", "error": "🔴"}
                 for s in backends:
                     emoji = status_emoji.get(s.get("status"), "⚪")
-                    result += f"{emoji} [{s['launcher_id']}] {s.get('status')} - {s.get('tools_count', 0)} 个工具\n"
+                    result += f"{emoji} [{s['mcp_tool_id']}] {s.get('status')} - {s.get('tools_count', 0)} 个工具\n"
         else:
             result = f"❌ 获取失败: {res.get('error', '未知错误')}"
 
     elif name == "get_backend_logs":
-        launcher_id = resolve_launcher_id(arguments.get("launcher_id", ""))
+        mcp_tool_id = arguments.get("mcp_tool_id", "")
         level = arguments.get("level")
         limit = arguments.get("limit", 50)
-        res = backend_manager.get_backend_logs(launcher_id, level, limit)
+        res = backend_manager.get_backend_logs(mcp_tool_id, level, limit)
         if res.get("success"):
             logs = res.get("logs", [])
-            result = f"后端 {launcher_id} 的日志（最近 {len(logs)} 条）：\n"
+            result = f"后端 {mcp_tool_id} 的日志（最近 {len(logs)} 条）：\n"
             level_emoji = {"debug": "🔵", "info": "⚪", "warning": "🟡", "error": "🔴"}
             for l in logs:
                 emoji = level_emoji.get(l.get("level"), "⚪")
@@ -451,21 +438,21 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = f"❌ 获取失败: {res.get('error', '未知错误')}"
 
     elif name == "set_backend_log_level":
-        launcher_id = resolve_launcher_id(arguments.get("launcher_id", ""))
+        mcp_tool_id = arguments.get("mcp_tool_id", "")
         level = arguments.get("level", "")
-        res = backend_manager.set_backend_log_level(launcher_id, level)
+        res = backend_manager.set_backend_log_level(mcp_tool_id, level)
         if res.get("success"):
             result = f"✅ 日志级别已设置为: {res.get('log_level')}"
         else:
             result = f"❌ 设置失败: {res.get('error', '未知错误')}"
 
     elif name == "sync_backend_tools":
-        launcher_id = resolve_launcher_id(arguments.get("launcher_id", ""))
-        log(f"手动同步后端工具目录: {launcher_id}")
-        res = await backend_manager.sync_tools_catalog(launcher_id)
+        mcp_tool_id = arguments.get("mcp_tool_id", "")
+        log(f"手动同步后端工具目录: {mcp_tool_id}")
+        res = await backend_manager.sync_tools_catalog(mcp_tool_id)
         if res.get("success"):
             result = f"✅ 同步成功，共 {res.get('count', 0)} 个工具"
-            result += f"\n工具目录已自动保存到启动器配置"
+            result += f"\n工具目录已自动保存到 backend-tools/"
         else:
             result = f"❌ 同步失败: {res.get('error', '未知错误')}"
 
