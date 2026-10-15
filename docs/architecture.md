@@ -378,7 +378,7 @@ python src/server.py
 | `structuredContent` | 待依赖下限提到 `>=1.30` 后可启用 |
 | 工具变更通知 | `notifications/tools/list_changed` 未发送（顶层工具集静态，影响小） |
 | 标准 logging capability | 目前用自定义 Tool 查日志 |
-| 并发限流（A3） | `BackendManager` 无排队/限流，并发调用同一 session 的正确性依赖后端实现 |
+| 并发限流（A3 ✅ 已收口） | 单后端串行（`_call_lock`），并发调用报 `backend_busy`；要升级信号量 + 排队只需调 `MAX_CONCURRENT_CALLS` |
 
 > 完整清单见 [`code-review.md`](code-review.md) 与 [`mcp-conformance.md`](mcp-conformance.md)。
 

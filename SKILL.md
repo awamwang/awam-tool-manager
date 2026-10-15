@@ -76,7 +76,10 @@ awam-tool-manager/
 
 `errorType` 取值：`not_found` / `unknown_tool` / `unknown_resource` / `invalid_params`
 / `connection_error` / `runtime_error` / `config_error` / `destructive_blocked`
-/ `internal_error`。
+/ `backend_busy` / `internal_error`。
+
+- **`backend_busy`**：同一后端正在处理另一个调用（单后端串行，并发调用会被直接拒绝，不排队）。
+  调用方应稍后重试，不要无限重试打满。
 
 ## 安全约定
 

@@ -90,7 +90,10 @@
 - [x] `tests/test_server_dispatch.py` 补 `AnyUrl` 参数、resources 与 prompts 定义回归
 - [x] `tests/test_docs_sync.py`（10 用例）- 文档与 schema 一致、示例过校验、
       `data/` 真实文件全部过校验且 `id` 与文件名一致
-- [x] 合计 **82 passed**（7 个文件）；真实后端子进程启停 + 调用回归通过
+- [x] **A3 并发限流（方案 2：单后端串行 + 超限报 busy）** - `BackendClient._call_lock` +
+      `BackendBusyError` → `errorType=backend_busy`（不排队）；并发两个 `call_tool`
+      一个成功、一个 busy 的回归已钉住
+- [x] 合计 **86 passed**（7 个文件）；真实后端子进程启停 + 调用回归通过
 
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）

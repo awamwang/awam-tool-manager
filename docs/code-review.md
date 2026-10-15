@@ -143,7 +143,14 @@ P0 与 P1 已全部关闭。剩余有效待办为 P2 的 D9–D15、P3 的 D17/D
 （D23/D24 来自协议专项，**D25/D26 来自协议层回环测试**）。
 **P0 / P1 / P2（D9–D15）/ P3 的 D17/D18/D19/D21/D22 已全部修复**；
 架构议题中 **A1（schema 校验）、A2（annotations + destructive 门禁）、
-A4（由 schema 反向生成文档）已落地**。剩余待办只剩 **A3（并发限流）**。
+A3（单后端串行 + 超限报 busy）、A4（由 schema 反向生成文档）均已落地**。
+审核发现的问题至此全部收口。
+
+> **A3 的收口方式（方案 2）**：同一后端任意时刻只允许一个 `call_tool` 在飞，
+> 并发调用直接抛 `BackendBusyError` 并由 `manager.call_backend_tool` 转成
+> `errorType=backend_busy`（不排队、不积压），避免对同一个 stdio 会话并发发
+> JSON-RPC 的竞态。要改造成「信号量上限 + 等待队列」只需调大 `MAX_CONCURRENT_CALLS`
+> 并配合 `asyncio.Semaphore` + 排队超时，其余逻辑不变。详见 §9 A3。
 
 > **A4 的收口方式**：`src/schema.py` 现在是字段规范的唯一真相源，
 > `docs/format.md` 的两张字段表由 `scripts/generate_format_doc.py` 生成，
@@ -604,10 +611,19 @@ GetPromptResult"）→ **prompts/get 全部失败**。
 - 静态无法判定副作用的 `call_backend_tool` 只标 `openWorldHint=true`，
   **不谎报 readOnly**。
 
-### A3. 全局单例 + 无并发限流
+### A3. ✅ 已修复（第八轮）—— 单后端串行 + 超限报 busy
 
 `BackendManager` 是模块级单例，`clients` 字典无锁保护（除 `BackendClient` 内部启动锁）。
-并发 `call_backend_tool` 打到同一个 session 时，正确性完全依赖后端 MCP 的实现，缺少限流与排队。
+原实现并发 `call_backend_tool` 打到同一个 session 时，正确性完全依赖后端 MCP 的实现，缺少限流与排队。
+
+**已收口（方案 2）**：
+- `BackendClient` 新增每实例的调用串行锁 `_call_lock`（`MAX_CONCURRENT_CALLS=1`）；
+- `call_tool` 入口先判 `self._call_lock.locked()`，若已有调用在飞立即抛 `BackendBusyError`
+  （只判断不阻塞，避免误判），否则 `async with self._call_lock` 串行执行；
+- `manager.call_backend_tool` 捕获 `BackendBusyError` 返回 `errorType=backend_busy`，
+  经 `server.ensure_success` → `ToolError` 转成协议层 `isError=True`，客户端可读到类型化错误并自行重试；
+- 不排队、不积压：并发调用直接拒绝，符合"单后端串行"语义。要升级成信号量上限 + 等待队列，
+  只需调大 `MAX_CONCURRENT_CALLS` 并配合 `asyncio.Semaphore` + 排队超时（见 `src/backend_client.py` 注释）。
 
 ### A4. ✅ 已修复（第七轮）—— 数据与文档双真相源
 
@@ -681,9 +697,14 @@ GetPromptResult"）→ **prompts/get 全部失败**。
     `tests/test_docs_sync.py`（防漂移 4 条防线），合计 82 passed；
     顺带补齐 `update` / `install` 子字段校验与 `validate_backend_catalog()`
 
-**第七批（待做）**
+**第七批（已完成 ✅）**
 
-22. **A3** —— `BackendManager` 并发限流与排队（并发调用同一 session 的正确性目前依赖后端实现）；
+22. ~~**A3** —— 单后端串行 + 超限报 busy~~ → `BackendClient._call_lock` +
+    `BackendBusyError` → `errorType=backend_busy`，合计 86 passed；
+    要升级信号量上限 + 等待队列只需调 `MAX_CONCURRENT_CALLS`（见 §9 A3）
+
+**后续可选增强（非缺陷）**
+
 23. 依赖下限提到 `mcp>=1.30` 后启用 `structuredContent` / `outputSchema`。
 
 > 原先 §8 里有一个重复编号的「第三批（迭代，一致性）」小节，已合并到上面的批次。

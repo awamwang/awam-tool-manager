@@ -151,6 +151,33 @@ def test_internal_exception_becomes_typed_error(monkeypatch):
     assert "模拟后端崩了" in payload["error"]
 
 
+def test_backend_busy_maps_to_typed_error(monkeypatch):
+    """A3：后端正在处理其他调用时，调用层应透传 backend_busy 类型化错误
+
+    后端并发被拒绝（BackendBusyError）→ manager 返回 errorType=backend_busy
+    → server 经 ensure_success 抛 ToolError → 协议层 isError。
+    """
+
+    async def busy(tool_id, tool_name, arguments):
+        return {
+            "success": False,
+            "errorType": "backend_busy",
+            "error": "后端工具 'everything-search-mcp' 正在处理其他调用，请稍后重试",
+        }
+
+    monkeypatch.setattr(server.backend_manager, "call_backend_tool", busy)
+
+    with pytest.raises(ToolError) as exc:
+        run(server.call_tool(
+            "call_backend_tool",
+            {"tool_id": "everything-search-mcp", "tool_name": "x"}
+        ))
+
+    payload = payload_of(exc)
+    assert payload["errorType"] == "backend_busy"
+    assert payload["success"] is False
+
+
 def test_call_tool_wrapper_returns_text_content():
     """MCP 入口：成功回包必须是 TextContent 列表"""
     contents = run(server.call_tool("list_tools", {}))

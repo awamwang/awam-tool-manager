@@ -15,6 +15,14 @@ from mcp.client.stdio import stdio_client
 from store import JsonStore
 
 
+class BackendBusyError(Exception):
+    """后端正在处理其他调用，并发请求被直接拒绝（见 A3 方案 2：单后端串行 + 超限报 busy）
+
+    与 ConnectionError / RuntimeError 区分：它不表示「坏了」，而是「现在忙」，
+    调用方可以稍后重试。manager.call_backend_tool 会把它映射成 errorType=backend_busy。
+    """
+
+
 class BackendClient:
     """单个后端 MCP Server 的客户端（常驻连接，支持管理操作）"""
 
@@ -29,6 +37,11 @@ class BackendClient:
     DEFAULT_TIMEOUT = 30.0
     # 工具列表缓存有效期（秒）
     TOOLS_CACHE_TTL = 300
+
+    # A3 方案 2：单后端串行，任意时刻只允许一个 call_tool 在飞；
+    # 并发调用直接报 backend_busy（不排队）。要改造成「信号量上限 + 等待队列」，
+    # 只需把这里调大并配合 asyncio.Semaphore + 排队超时，其余逻辑不变。
+    MAX_CONCURRENT_CALLS = 1
 
     VALID_LOG_LEVELS = ["debug", "info", "warning", "error"]
     # 级别优先级：低于当前 log_level 的消息不入队
@@ -58,6 +71,10 @@ class BackendClient:
         self._last_heartbeat: float = 0
 
         self._lock = asyncio.Lock()
+        # 调用串行锁（A3 方案 2）：同一后端任意时刻只允许一个 call_tool 在飞，
+        # 避免对同一个 stdio 会话并发发 JSON-RPC 造成的竞态。与 _lock（start/stop
+        # 串行）分离，二者职责不同，不能共用同一把锁，否则会互相阻塞。
+        self._call_lock = asyncio.Lock()
         # cleanup 独立的锁：心跳失败、stop()、start() 的失败回滚都可能触发清理，
         # 用一把专用锁保证清理串行执行且幂等，避免两个协程同时 __aexit__ 同一个 context
         self._cleanup_lock = asyncio.Lock()
@@ -278,41 +295,57 @@ class BackendClient:
         return self._cached_tools or []
 
     async def call_tool(self, tool_name: str, arguments: dict) -> str:
-        """调用后端 MCP 的工具"""
+        """调用后端 MCP 的工具
+
+        A3 方案 2（单后端串行 + 超限报 busy）：任意时刻只允许一个 call_tool 在飞。
+        若已有调用在执行，立即抛 BackendBusyError 由上层转成 backend_busy，
+        不排队、不积压。这样既能避免对同一个 stdio 会话并发发 JSON-RPC 的竞态，
+        又不会因无界排队把请求闷在服务内部。
+        """
         if self.status != self.STATUS_RUNNING:
             raise ConnectionError(f"后端未运行，当前状态: {self.status}")
 
+        # 单后端串行：已有调用在飞则直接拒绝（只判断不阻塞，避免此处自己 await 造成误判）
+        if self._call_lock.locked():
+            raise BackendBusyError(
+                f"后端工具 '{self.tool_id}' 正在处理其他调用，"
+                f"请稍后重试（单后端串行，并发调用会直接拒绝）"
+            )
+
         self._log("debug", f"调用工具: {tool_name}")
 
-        try:
-            result = await asyncio.wait_for(
-                self.session.call_tool(tool_name, arguments), timeout=self.timeout
-            )
-        except asyncio.TimeoutError:
-            # 超时通常意味着连接已经废了，标记后让后续请求快速失败而不是继续卡
-            reason = f"调用工具 '{tool_name}' 超时（{self.timeout}s）"
-            self._mark_broken(reason)
-            raise TimeoutError(reason) from None
-        except Exception as e:
-            self._log("error", f"调用工具失败: {e}")
-            raise RuntimeError(f"后端 MCP 调用工具 '{tool_name}' 失败: {type(e).__name__}: {e}") from e
+        async with self._call_lock:
+            try:
+                result = await asyncio.wait_for(
+                    self.session.call_tool(tool_name, arguments), timeout=self.timeout
+                )
+            except asyncio.TimeoutError:
+                # 超时通常意味着连接已经废了，标记后让后续请求快速失败而不是继续卡
+                reason = f"调用工具 '{tool_name}' 超时（{self.timeout}s）"
+                self._mark_broken(reason)
+                raise TimeoutError(reason) from None
+            except Exception as e:
+                self._log("error", f"调用工具失败: {e}")
+                raise RuntimeError(
+                    f"后端 MCP 调用工具 '{tool_name}' 失败: {type(e).__name__}: {e}"
+                ) from e
 
-        # 检查后端返回是否有错误
-        if hasattr(result, "isError") and result.isError:
-            error_texts = []
+            # 检查后端返回是否有错误
+            if hasattr(result, "isError") and result.isError:
+                error_texts = []
+                for content in result.content:
+                    if hasattr(content, "text"):
+                        error_texts.append(content.text)
+                error_msg = f"后端 MCP 返回错误: {' | '.join(error_texts)}"
+                self._log("error", error_msg)
+                raise RuntimeError(error_msg)
+
+            # 提取文本结果
+            texts = []
             for content in result.content:
                 if hasattr(content, "text"):
-                    error_texts.append(content.text)
-            error_msg = f"后端 MCP 返回错误: {' | '.join(error_texts)}"
-            self._log("error", error_msg)
-            raise RuntimeError(error_msg)
-
-        # 提取文本结果
-        texts = []
-        for content in result.content:
-            if hasattr(content, "text"):
-                texts.append(content.text)
-        return "\n".join(texts)
+                    texts.append(content.text)
+            return "\n".join(texts)
 
     def get_status(self) -> dict:
         """获取状态信息"""
@@ -509,6 +542,13 @@ class BackendManager:
         try:
             result = await client.call_tool(tool_name, arguments)
             return {"success": True, "result": result}
+        except BackendBusyError as e:
+            # A3 方案 2：后端正忙，直接透传 busy 类型化错误，调用方可重试
+            return {
+                "success": False,
+                "errorType": "backend_busy",
+                "error": str(e)
+            }
         except ConnectionError as e:
             return {
                 "success": False,

@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from backend_client import BackendClient, BackendManager  # noqa: E402
+from backend_client import BackendClient, BackendManager, BackendBusyError  # noqa: E402
 
 
 class FakeContext:
@@ -415,3 +415,84 @@ def test_heartbeat_failure_cleans_up():
     assert client.status == BackendClient.STATUS_ERROR
     assert "exit:stdio" in client.tracker  # 子进程被释放
     assert client._stdio_context is None
+
+
+class _FakeCallResult:
+    """call_tool 成功返回的最小结果对象（isError=False + 文本 content）"""
+
+    def __init__(self, text: str):
+        self.isError = False
+        self.content = [type("C", (), {"text": text})()]
+
+
+class _StubSession:
+    """模拟 ClientSession.call_tool：记录被调用的工具名并休眠模拟耗时"""
+
+    def __init__(self):
+        self.calls = []
+
+    async def call_tool(self, name: str, arguments: dict):
+        self.calls.append(name)
+        await asyncio.sleep(0.05)
+        return _FakeCallResult("ok")
+
+
+def test_call_tool_rejects_when_already_in_flight():
+    """A3：同一后端正在调用时，新的 call_tool 立即报 backend_busy（不排队）"""
+    client = BackendClient("fake", {"type": "stdio"})
+    client.status = BackendClient.STATUS_RUNNING
+
+    async def run():
+        # 模拟「另一个调用正在执行」：先占住调用串行锁
+        await client._call_lock.acquire()
+        try:
+            await client.call_tool("x", {})
+        except BackendBusyError as e:
+            return str(e)
+        return None  # pragma: no cover
+
+    msg = asyncio.run(run())
+    assert msg is not None
+    assert "正在处理其他调用" in msg
+
+
+def test_call_tool_serializes_concurrent_invocations():
+    """A3：并发两个 call_tool，只有一个成功完成，另一个拿到 backend_busy"""
+    client = BackendClient("fake", {"type": "stdio"})
+    client.status = BackendClient.STATUS_RUNNING
+    client.session = _StubSession()
+
+    async def run():
+        async def one(label):
+            try:
+                return ("ok", await client.call_tool(label, {}))
+            except BackendBusyError:
+                return ("busy", label)
+
+        return await asyncio.gather(one("a"), one("b"))
+
+    out = asyncio.run(run())
+    statuses = [r[0] for r in out]
+    assert statuses.count("ok") == 1, "必须恰好一个调用真正打到后端"
+    assert statuses.count("busy") == 1, "并发的另一个必须被拒为 busy"
+    # 成功那次确实通过会话发起了调用
+    assert client.session.calls == ["a"] or client.session.calls == ["b"]
+
+
+def test_call_backend_tool_reports_busy():
+    """A3：后端忙时，manager 透传 backend_busy 类型化错误（用真实调用锁模拟在飞）"""
+
+    async def run():
+        store = FakeStore({"busy1": _mcp_tool({"type": "stdio"})})
+        manager = BackendManager(store)
+        client = BackendClient("busy1", {"type": "stdio"})
+        client.status = BackendClient.STATUS_RUNNING
+        # 模拟「另一个调用正在执行」：先占住调用串行锁，让 call_tool 抛出真 busy
+        await client._call_lock.acquire()
+        manager.clients["busy1"] = client
+        return await manager.call_backend_tool("busy1", "x", {})
+
+    result = asyncio.run(run())
+    assert result["errorType"] == "backend_busy"
+    assert result["success"] is False
+    assert "正在处理其他调用" in result["error"]
