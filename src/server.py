@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from store import JsonStore
 from registry import ToolRegistry
+from backend_client import BackendManager
 
 # 数据目录
 DATA_DIR = Path(__file__).parent.parent / "data"
@@ -23,6 +24,7 @@ DATA_DIR = Path(__file__).parent.parent / "data"
 # 初始化
 store = JsonStore(DATA_DIR)
 registry = ToolRegistry(store)
+backend_manager = BackendManager(store)
 
 # 创建 MCP Server
 app = Server("awam-tool-manager")
@@ -119,6 +121,42 @@ async def list_tools() -> list[Tool]:
                 "required": ["launcher_id"]
             }
         ),
+        Tool(
+            name="call_backend_tool",
+            description="路由调用：转发请求到指定启动器的后端 MCP Server 执行具体操作",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "launcher_id": {
+                        "type": "string",
+                        "description": "启动器 ID（如 everything、steam）"
+                    },
+                    "tool_name": {
+                        "type": "string",
+                        "description": "要调用的后端工具名"
+                    },
+                    "arguments": {
+                        "type": "object",
+                        "description": "调用参数"
+                    }
+                },
+                "required": ["launcher_id", "tool_name"]
+            }
+        ),
+        Tool(
+            name="list_backend_tools",
+            description="列出指定启动器的后端 MCP 提供的所有工具",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "launcher_id": {
+                        "type": "string",
+                        "description": "启动器 ID"
+                    }
+                },
+                "required": ["launcher_id"]
+            }
+        ),
     ]
     log(f"返回 {len(tools)} 个工具定义")
     return tools
@@ -194,6 +232,30 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 result += f"- 安装命令: {mcp.get('installCommand', '')}\n"
         else:
             result = f"未找到启动器: {launcher_id}"
+
+    elif name == "call_backend_tool":
+        launcher_id = arguments.get("launcher_id", "")
+        tool_name = arguments.get("tool_name", "")
+        backend_args = arguments.get("arguments", {})
+
+        log(f"路由调用: {launcher_id}/{tool_name}")
+        res = await backend_manager.call_backend_tool(launcher_id, tool_name, backend_args)
+        if res.get("success"):
+            result = f"✅ 调用成功 ({launcher_id}/{tool_name})\n\n"
+            result += res.get("result", "")
+        else:
+            result = f"❌ 调用失败: {res.get('error', '未知错误')}"
+
+    elif name == "list_backend_tools":
+        launcher_id = arguments.get("launcher_id", "")
+        res = await backend_manager.list_backend_tools(launcher_id)
+        if res.get("success"):
+            tools = res.get("tools", [])
+            result = f"启动器 {launcher_id} 的后端 MCP 提供 {len(tools)} 个工具：\n"
+            for t in tools:
+                result += f"- {t['name']}: {t.get('description', '')[:60]}\n"
+        else:
+            result = f"❌ 获取失败: {res.get('error', '未知错误')}"
 
     else:
         result = f"未知工具: {name}"

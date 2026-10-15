@@ -8,3 +8,6 @@ venv/
 *.egg-info/
 dist/
 build/
+
+# 测试脚本（非产品代码）
+test_*.py

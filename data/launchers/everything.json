@@ -13,6 +13,11 @@
     "installMethod": "npm",
     "installCommand": "npm i -g everything-mcp",
     "packageName": "everything-mcp",
+    "connection": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "everything-mcp"]
+    },
     "capabilities": [
       {
         "name": "search",
