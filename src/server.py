@@ -35,6 +35,19 @@ def log(msg: str):
     print(f"[awam-tool-manager] {msg}", file=sys.stderr, flush=True)
 
 
+def resolve_launcher_id(id_str: str) -> str:
+    """
+    统一解析：不管传的是启动器 ID 还是工具 ID，都返回启动器 ID
+    例如：
+      "everything" → "everything"
+      "everything:main" → "everything"
+      "everything:everything_search" → "everything"
+    """
+    if ":" in id_str:
+        return id_str.split(":", 1)[0]
+    return id_str
+
+
 @app.list_tools()
 async def list_tools() -> list[Tool]:
     """列出所有可用工具"""
@@ -387,7 +400,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = f"未找到启动器: {launcher_id}"
 
     elif name == "call_backend_tool":
-        launcher_id = arguments.get("launcher_id", "")
+        launcher_id = resolve_launcher_id(arguments.get("launcher_id", ""))
         tool_name = arguments.get("tool_name", "")
         backend_args = arguments.get("arguments", {})
 
@@ -409,7 +422,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 result += f"  提示: 请检查工具名 '{tool_name}' 是否正确，参数是否匹配"
 
     elif name == "list_backend_tools":
-        launcher_id = arguments.get("launcher_id", "")
+        launcher_id = resolve_launcher_id(arguments.get("launcher_id", ""))
         force_refresh = arguments.get("force_refresh", False)
         res = await backend_manager.list_backend_tools(launcher_id, force_refresh=force_refresh)
         if res.get("success"):
@@ -434,7 +447,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = f"❌ 获取失败: {res.get('error', '未知错误')}"
 
     elif name == "start_backend":
-        launcher_id = arguments.get("launcher_id", "")
+        launcher_id = resolve_launcher_id(arguments.get("launcher_id", ""))
         log(f"启动后端: {launcher_id}")
         res = await backend_manager.start_backend(launcher_id)
         if res.get("success"):
@@ -443,7 +456,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = f"❌ 启动失败: {res.get('error', '未知错误')}"
 
     elif name == "stop_backend":
-        launcher_id = arguments.get("launcher_id", "")
+        launcher_id = resolve_launcher_id(arguments.get("launcher_id", ""))
         log(f"停止后端: {launcher_id}")
         res = await backend_manager.stop_backend(launcher_id)
         if res.get("success"):
@@ -452,7 +465,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = f"❌ 停止失败: {res.get('error', '未知错误')}"
 
     elif name == "get_backend_status":
-        launcher_id = arguments.get("launcher_id")
+        raw_id = arguments.get("launcher_id")
+        launcher_id = resolve_launcher_id(raw_id) if raw_id else None
         res = backend_manager.get_backend_status(launcher_id)
         if res.get("success"):
             if launcher_id:
@@ -476,7 +490,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = f"❌ 获取失败: {res.get('error', '未知错误')}"
 
     elif name == "get_backend_logs":
-        launcher_id = arguments.get("launcher_id", "")
+        launcher_id = resolve_launcher_id(arguments.get("launcher_id", ""))
         level = arguments.get("level")
         limit = arguments.get("limit", 50)
         res = backend_manager.get_backend_logs(launcher_id, level, limit)
@@ -491,7 +505,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = f"❌ 获取失败: {res.get('error', '未知错误')}"
 
     elif name == "set_backend_log_level":
-        launcher_id = arguments.get("launcher_id", "")
+        launcher_id = resolve_launcher_id(arguments.get("launcher_id", ""))
         level = arguments.get("level", "")
         res = backend_manager.set_backend_log_level(launcher_id, level)
         if res.get("success"):
@@ -500,7 +514,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = f"❌ 设置失败: {res.get('error', '未知错误')}"
 
     elif name == "sync_backend_tools":
-        launcher_id = arguments.get("launcher_id", "")
+        launcher_id = resolve_launcher_id(arguments.get("launcher_id", ""))
         log(f"手动同步后端工具目录: {launcher_id}")
         res = await backend_manager.sync_tools_catalog(launcher_id)
         if res.get("success"):

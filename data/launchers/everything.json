@@ -16,10 +16,15 @@
     "connection": {
       "type": "stdio",
       "command": "cmd.exe",
-      "args": ["/c", "npx", "-y", "everything-mcp"]
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "everything-mcp"
+      ]
     },
     "toolsCatalog": {
-      "lastSynced": "2026-10-15T15:30:00Z",
+      "lastSynced": "now",
       "source": "auto",
       "tools": [
         {
@@ -28,11 +33,26 @@
           "inputSchema": {
             "type": "object",
             "properties": {
-              "query": {"type": "string", "description": "Everything query (supports wildcards and regex)"},
-              "max_results": {"type": "number", "default": 200, "description": "Maximum number of results"},
-              "sort": {"type": "string", "default": "", "description": "Sort key (name, size, date, path, etc.)"}
+              "query": {
+                "type": "string",
+                "description": "Everything query (supports wildcards and regex)"
+              },
+              "max_results": {
+                "type": "number",
+                "default": 200,
+                "description": "Maximum number of results"
+              },
+              "sort": {
+                "type": "string",
+                "default": "",
+                "description": "Sort key (name, size, date, path, etc.)"
+              }
             },
-            "required": ["query"]
+            "required": [
+              "query"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
           }
         },
         {
@@ -41,9 +61,16 @@
           "inputSchema": {
             "type": "object",
             "properties": {
-              "path": {"type": "string", "description": "Absolute path of file or folder to open"}
+              "path": {
+                "type": "string",
+                "description": "Absolute path of file or folder to open"
+              }
             },
-            "required": ["path"]
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
           }
         },
         {
@@ -52,11 +79,54 @@
           "inputSchema": {
             "type": "object",
             "properties": {
-              "folder": {"type": "string", "description": "Absolute path of folder to search"},
-              "pattern": {"type": "string", "default": "*", "description": "Wildcard pattern"},
-              "max_results": {"type": "number", "default": 200, "description": "Maximum number of results"}
+              "folder": {
+                "type": "string",
+                "description": "Absolute path of folder to search"
+              },
+              "pattern": {
+                "type": "string",
+                "default": "*",
+                "description": "Wildcard pattern"
+              },
+              "max_results": {
+                "type": "number",
+                "default": 200,
+                "description": "Maximum number of results"
+              }
             },
-            "required": ["folder"]
+            "required": [
+              "folder"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          }
+        },
+        {
+          "name": "quick_index_prompt",
+          "description": "Find related documents by topic keyword and pattern, generate summary prompt",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "topic": {
+                "type": "string",
+                "description": "Topic keyword to search"
+              },
+              "pattern": {
+                "type": "string",
+                "default": "*.pdf",
+                "description": "File pattern"
+              },
+              "max_results": {
+                "type": "number",
+                "default": 50,
+                "description": "Maximum number of results"
+              }
+            },
+            "required": [
+              "topic"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
           }
         }
       ]
