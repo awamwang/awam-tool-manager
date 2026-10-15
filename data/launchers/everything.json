@@ -15,7 +15,7 @@
     "packageName": "everything-mcp",
     "connection": {
       "type": "stdio",
-      "command": "npx",
+      "command": "C:\\Program Files\\nodejs\\npx.cmd",
       "args": ["-y", "everything-mcp"]
     },
     "capabilities": [
