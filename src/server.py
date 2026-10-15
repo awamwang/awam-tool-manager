@@ -302,92 +302,40 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         tool_id = arguments.get("tool_id", "")
         tool = registry.get_tool(tool_id)
 
-        # 解析工具 ID：source:tool_name
-        source = tool_id.split(":", 1)[0] if ":" in tool_id else tool_id
-        tool_name_in_backend = tool_id.split(":", 1)[1] if ":" in tool_id else ""
-
-        # 先从本地工具条目找
-        if tool:
+        if not tool:
+            result = f"未找到工具: {tool_id}\n"
+            result += f"可用 list_tools 查看所有工具"
+        else:
             kind = tool.get("kind", "unknown")
             result = f"工具详情：\n"
             result += f"- ID: {tool['id']}\n"
             result += f"- 名称: {tool.get('displayName', tool['name'])}\n"
             result += f"- 类型: {kind}\n"
-            result += f"- 支持操作: {', '.join(tool.get('actions', []))}\n"
+            result += f"- 状态: {tool.get('status', 'unknown')}\n"
             result += f"- 描述: {tool.get('description', '')}\n"
 
-            if kind == "launcher":
-                # launcher 类型：显示启动器详细信息
-                config = store.load_launcher(tool_id)
-                if config:
-                    result += f"- 已安装: {config.get('installed', False)}\n"
-                    result += f"- 类型: {config.get('type')}\n"
-                    if config.get("installPath"):
-                        result += f"- 安装路径: {config.get('installPath')}\n"
-                    mcp = config.get("mcp", {})
-                    if mcp:
-                        result += f"- MCP Server: {mcp.get('serverName', '')}\n"
-                        result += f"- 安装命令: {mcp.get('installCommand', '')}\n"
-                        tools_count = len(mcp.get("toolsCatalog", {}).get("tools", []))
-                        result += f"- 可用工具数: {tools_count}\n"
+            if kind == "app":
+                result += f"- 版本: {tool.get('version', '未知')}\n"
+                result += f"- 标签: {', '.join(tool.get('tags', []))}\n"
+                if tool.get("launch"):
+                    result += f"- 启动命令: {tool['launch'].get('command', '')}\n"
+
+            elif kind == "mcp":
                 # 后端运行状态
                 backend_res = backend_manager.get_backend_status(tool_id)
                 if backend_res.get("success"):
                     status = backend_res.get("status", {})
                     status_text = {"running": "运行中", "starting": "启动中", "stopped": "已停止", "error": "错误"}.get(status.get("status"), "未知")
-                    result += f"- 后端 MCP 状态: {status_text}\n"
+                    result += f"- 后端状态: {status_text}\n"
+                    result += f"- 运行时长: {status.get('uptime_seconds', 0)} 秒\n"
+                    result += f"- 工具数: {status.get('tools_count', 0)}\n"
 
-            elif kind == "app":
-                result += f"- 版本: {tool.get('version', '未知')}\n"
-                result += f"- 标签: {', '.join(tool.get('tags', []))}\n"
-                if tool.get("launch"):
-                    result += f"- 启动命令: {tool['launch'].get('command', '')}\n"
-                # app 类型，检查后端状态
-                backend_res = backend_manager.get_backend_status(source)
-                if backend_res.get("success"):
-                    status = backend_res.get("status", {})
-                    status_text = {"running": "运行中", "starting": "启动中", "stopped": "已停止", "error": "错误"}.get(status.get("status"), "未知")
-                    result += f"- 后端 MCP 状态: {status_text}\n"
-
-        # 再从后端 MCP 工具目录找（mcp_tool 类型）
-        elif source:
-            launcher_config = store.load_launcher(source)
-            if launcher_config:
-                tools_catalog = launcher_config.get("mcp", {}).get("toolsCatalog", {}).get("tools", [])
-                backend_tool = next((t for t in tools_catalog if t.get("name") == tool_name_in_backend), None)
-                if backend_tool:
-                    result = f"后端 MCP 工具详情：\n"
-                    result += f"- 工具 ID: {tool_id}\n"
-                    result += f"- 名称: {backend_tool.get('name')}\n"
-                    result += f"- 类型: mcp_tool\n"
-                    result += f"- 描述: {backend_tool.get('description', '')}\n"
-                    result += f"- 所属启动器: {source}\n"
-
-                    # 参数 schema
-                    schema = backend_tool.get("inputSchema", {})
-                    props = schema.get("properties", {})
-                    required = schema.get("required", [])
-                    if props:
-                        result += f"- 参数:\n"
-                        for pname, pinfo in props.items():
-                            req_mark = "*" if pname in required else " "
-                            ptype = pinfo.get("type", "any")
-                            pdesc = pinfo.get("description", "")[:60]
-                            result += f"  {req_mark} {pname} ({ptype}): {pdesc}\n"
-
-                    # 后端运行状态
-                    backend_res = backend_manager.get_backend_status(source)
-                    if backend_res.get("success"):
-                        status = backend_res.get("status", {})
-                        status_text = {"running": "运行中", "starting": "启动中", "stopped": "已停止", "error": "错误"}.get(status.get("status"), "未知")
-                        result += f"- 后端 MCP 状态: {status_text}\n"
-                else:
-                    result = f"未找到工具: {tool_id}\n"
-                    result += f"提示：{source} 启动器下的后端工具有 {len(tools_catalog)} 个，可用 list_backend_tools 查看"
-            else:
-                result = f"未找到工具: {tool_id}"
-        else:
-            result = f"未找到工具: {tool_id}"
+                # 子工具列表
+                backend_tools = registry.list_backend_tools(tool_id)
+                if backend_tools:
+                    result += f"- 子工具列表: {len(backend_tools)} 个\n"
+                    for t in backend_tools:
+                        result += f"  • {t['name']}: {t.get('description', '')[:50]}\n"
 
     elif name == "launch_tool":
         tool_id = arguments.get("tool_id", "")
