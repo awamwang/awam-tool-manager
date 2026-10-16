@@ -42,7 +42,7 @@ from schema import schema_backend_available
 # P1-04：业务错误三件套搬到 errors.py（tool_specs 的 handlers 要用，留在
 # server.py 会形成 server → tool_specs → server 循环 import），这里继续
 # re-export，`from server import ToolError` 等外部引用拿到的仍是同一个类对象。
-from errors import ToolError, fail, ensure_success
+from errors import ErrorType, ToolError, fail, ensure_success
 # P1-04：对外工具声明式注册表——list_tools 的定义源与 dispatch 的查表目标。
 # SHARED_OUTPUT_SCHEMA 已随常量搬到 tool_specs（连注释一起），
 # _needs_destructive_confirm 已随 handler 搬到 tool_specs；两者在这里
@@ -134,7 +134,7 @@ async def call_tool(name: str, arguments: dict) -> CallToolResult:
         raise
     except Exception as e:
         log(f"工具 {name} 执行异常: {type(e).__name__}: {e}")
-        fail(f"内部错误: {type(e).__name__}: {e}", error_type="internal_error")
+        fail(f"内部错误: {type(e).__name__}: {e}", error_type=ErrorType.INTERNAL_ERROR)
 
     structured = _result_to_structured(result)
     if structured is None:
@@ -158,7 +158,7 @@ async def dispatch_tool(name: str, arguments: dict) -> str:
     # 「15 个都有」——可达输入上的 no-op，方向是更不容易失败）。
     spec = get_spec(name)
     if spec is None:
-        fail(f"未知工具: {name}", error_type="unknown_tool", toolName=name)
+        fail(f"未知工具: {name}", error_type=ErrorType.UNKNOWN_TOOL, toolName=name)
     payload = await spec.handler(arguments, _TOOL_CONTEXT)
     return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 
@@ -217,7 +217,7 @@ async def read_resource(uri: str):
         payload = backend_manager.get_backend_status()
 
     else:
-        fail(f"未知资源: {uri}", error_type="unknown_resource", uri=str(uri))
+        fail(f"未知资源: {uri}", error_type=ErrorType.UNKNOWN_RESOURCE, uri=str(uri))
 
     text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 
@@ -331,7 +331,7 @@ awam-tool-manager 是一个统一的工具管理器，聚合各种 MCP 工具和
 """
 
     else:
-        fail(f"未知提示模板: {name}", error_type="unknown_prompt", promptName=name)
+        fail(f"未知提示模板: {name}", error_type=ErrorType.UNKNOWN_PROMPT, promptName=name)
 
     messages = [PromptMessage(role="user", content=TextContent(type="text", text=text))]
     if GetPromptResult is None:  # 老版本 SDK 接受裸列表

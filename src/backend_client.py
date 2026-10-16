@@ -24,6 +24,7 @@ import anyio
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from errors import ErrorType
 from runtime_paths import get_runtime_dir
 from store import JsonStore
 
@@ -777,9 +778,9 @@ class BackendClient:
                     # 干什么（开授权 / 换命令），而不是对着 FileNotFoundError 猜。
                     self.status = self.STATUS_STOPPED
                     error_type = (
-                        "install_not_allowed"
+                        ErrorType.INSTALL_NOT_ALLOWED
                         if blocked == "not_allowed"
-                        else "install_required"
+                        else ErrorType.INSTALL_REQUIRED
                     )
                     message = (
                         install_result.get("note")
@@ -861,7 +862,11 @@ class BackendClient:
                 self._log("error", f"❌ 启动失败: {self.last_error}")
                 # 清理资源（连接任务已终结时这里是空转，幂等）
                 await self._cleanup()
-                return {"success": False, "error": self.last_error}
+                return {
+                    "success": False,
+                    "errorType": ErrorType.RUNTIME_ERROR,
+                    "error": self.last_error,
+                }
             except BaseException as e:
                 # start() 会被外部取消：toolport 网关对每次 tools/call 有 30s
                 # 预算、超时即取消请求；daemon 周期回收、调用方断开同理。
@@ -1096,7 +1101,11 @@ class BackendClient:
         """设置日志级别"""
         valid_levels = self.VALID_LOG_LEVELS
         if level not in valid_levels:
-            return {"success": False, "error": f"无效的日志级别，可选: {valid_levels}"}
+            return {
+                "success": False,
+                "errorType": ErrorType.INVALID_PARAMS,
+                "error": f"无效的日志级别，可选: {valid_levels}",
+            }
         self.log_level = level
         self._log("info", f"日志级别设置为: {level}")
         return {"success": True, "log_level": level}
@@ -1277,7 +1286,11 @@ class BackendManager:
         """启动指定后端，成功后自动同步工具目录，并记录启动意图（A10）"""
         client = self.get_client(tool_id)
         if not client:
-            return {"success": False, "error": f"工具 '{tool_id}' 未配置 MCP 后端连接"}
+            return {
+                "success": False,
+                "errorType": ErrorType.CONFIG_ERROR,
+                "error": f"工具 '{tool_id}' 未配置 MCP 后端连接",
+            }
 
         result = await client.start()
         if result.get("success"):
@@ -1295,10 +1308,18 @@ class BackendManager:
         """同步后端工具目录到 backend-tools/"""
         client = self.get_client(tool_id)
         if not client:
-            return {"success": False, "error": f"MCP 工具 '{tool_id}' 未配置"}
+            return {
+                "success": False,
+                "errorType": ErrorType.CONFIG_ERROR,
+                "error": f"MCP 工具 '{tool_id}' 未配置",
+            }
 
         if client.status != BackendClient.STATUS_RUNNING:
-            return {"success": False, "error": "后端未运行，请先启动"}
+            return {
+                "success": False,
+                "errorType": ErrorType.CONNECTION_ERROR,
+                "error": "后端未运行，请先启动",
+            }
 
         try:
             tools = await client.list_tools(force_refresh=True)
@@ -1316,13 +1337,21 @@ class BackendManager:
 
             return {"success": True, "count": len(tools)}
         except Exception as e:
-            return {"success": False, "error": f"同步失败: {type(e).__name__}: {e}"}
+            return {
+                "success": False,
+                "errorType": ErrorType.RUNTIME_ERROR,
+                "error": f"同步失败: {type(e).__name__}: {e}",
+            }
 
     async def stop_backend(self, tool_id: str) -> dict:
         """停止指定后端，并清除启动意图（A10：用户明确说不要了）"""
         client = self.get_client(tool_id)
         if not client:
-            return {"success": False, "error": f"工具 '{tool_id}' 未配置 MCP 后端连接"}
+            return {
+                "success": False,
+                "errorType": ErrorType.CONFIG_ERROR,
+                "error": f"工具 '{tool_id}' 未配置 MCP 后端连接",
+            }
         result = await client.stop()
         if result.get("success"):
             self._set_desired(tool_id, False)
@@ -1333,7 +1362,11 @@ class BackendManager:
         if tool_id:
             client = self.get_client(tool_id)
             if not client:
-                return {"success": False, "error": f"MCP 工具 '{tool_id}' 未配置"}
+                return {
+                    "success": False,
+                    "errorType": ErrorType.CONFIG_ERROR,
+                    "error": f"MCP 工具 '{tool_id}' 未配置",
+                }
             return {"success": True, "status": client.get_status()}
 
         # 返回所有后端状态
@@ -1348,14 +1381,22 @@ class BackendManager:
         """获取后端 MCP Server 的运行日志"""
         client = self.get_client(tool_id)
         if not client:
-            return {"success": False, "error": f"MCP 工具 '{tool_id}' 未配置"}
+            return {
+                "success": False,
+                "errorType": ErrorType.CONFIG_ERROR,
+                "error": f"MCP 工具 '{tool_id}' 未配置",
+            }
         return {"success": True, "logs": client.get_logs(level, limit)}
 
     def set_backend_log_level(self, tool_id: str, level: str) -> dict:
         """设置后端 MCP Server 的日志级别"""
         client = self.get_client(tool_id)
         if not client:
-            return {"success": False, "error": f"MCP 工具 '{tool_id}' 未配置"}
+            return {
+                "success": False,
+                "errorType": ErrorType.CONFIG_ERROR,
+                "error": f"MCP 工具 '{tool_id}' 未配置",
+            }
         return client.set_log_level(level)
 
     async def call_backend_tool(self, tool_id: str, tool_name: str, arguments: dict) -> dict:
@@ -1364,7 +1405,7 @@ class BackendManager:
         if not client:
             return {
                 "success": False,
-                "errorType": "config_error",
+                "errorType": ErrorType.CONFIG_ERROR,
                 "error": f"工具 '{tool_id}' 未配置 MCP 后端连接"
             }
 
@@ -1375,25 +1416,25 @@ class BackendManager:
             # A3 方案 2：后端正忙，直接透传 busy 类型化错误，调用方可重试
             return {
                 "success": False,
-                "errorType": "backend_busy",
+                "errorType": ErrorType.BACKEND_BUSY,
                 "error": str(e)
             }
         except ConnectionError as e:
             return {
                 "success": False,
-                "errorType": "connection_error",
+                "errorType": ErrorType.CONNECTION_ERROR,
                 "error": f"无法连接后端 MCP: {e}"
             }
         except RuntimeError as e:
             return {
                 "success": False,
-                "errorType": "runtime_error",
+                "errorType": ErrorType.RUNTIME_ERROR,
                 "error": str(e)
             }
         except Exception as e:
             return {
                 "success": False,
-                "errorType": "unknown_error",
+                "errorType": ErrorType.UNKNOWN_ERROR,
                 "error": f"未知错误 ({type(e).__name__}): {e}"
             }
 
@@ -1401,13 +1442,21 @@ class BackendManager:
         """列出后端 MCP 提供的工具（带完整参数 schema）"""
         client = self.get_client(tool_id)
         if not client:
-            return {"success": False, "error": f"工具 {tool_id} 未配置 MCP 后端连接"}
+            return {
+                "success": False,
+                "errorType": ErrorType.CONFIG_ERROR,
+                "error": f"工具 {tool_id} 未配置 MCP 后端连接",
+            }
 
         try:
             tools = await client.list_tools(force_refresh=force_refresh)
             return {"success": True, "tools": tools}
         except Exception as e:
-            return {"success": False, "error": f"获取后端工具列表失败: {str(e)}"}
+            return {
+                "success": False,
+                "errorType": ErrorType.RUNTIME_ERROR,
+                "error": f"获取后端工具列表失败: {str(e)}",
+            }
 
     async def close_all(self):
         """关闭所有连接"""

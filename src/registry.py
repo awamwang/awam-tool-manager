@@ -3,6 +3,7 @@
 import sys
 from typing import Any
 
+from errors import ErrorType
 from store import JsonStore
 
 try:  # 可选依赖，缺失时 schema.py 会自动降级为基础校验
@@ -119,7 +120,7 @@ class ToolRegistry:
         if not tool:
             return {
                 "success": False,
-                "errorType": "not_found",
+                "errorType": ErrorType.NOT_FOUND,
                 "error": f"未找到工具: {tool_id}",
             }
 
@@ -127,7 +128,7 @@ class ToolRegistry:
         if not launch:
             return {
                 "success": False,
-                "errorType": "config_error",
+                "errorType": ErrorType.CONFIG_ERROR,
                 "error": f"工具 '{tool_id}' 未配置 launch（本工具只返回命令，不实际执行启动）",
             }
 

@@ -25,7 +25,7 @@ try:  # Tool annotations 同样是 mcp>=1.9 才引入的能力
 except ImportError:  # pragma: no cover
     ToolAnnotations = None
 
-from errors import ToolError, fail, ensure_success  # noqa: F401（handler 侧经本模块转手）
+from errors import ErrorType, ToolError, fail, ensure_success  # noqa: F401（handler 侧经本模块转手）
 from launcher_client import LauncherError
 
 if TYPE_CHECKING:  # 运行期零耦合：handler 只从 ctx 取 manager，不 import 它们
@@ -165,7 +165,7 @@ async def _handle_get_tool_info(arguments: dict, ctx: ToolContext) -> dict:
     tool = ctx.registry.get_tool(tool_id)
 
     if not tool:
-        fail(f"未找到工具: {tool_id}", error_type="not_found", toolId=tool_id)
+        fail(f"未找到工具: {tool_id}", error_type=ErrorType.NOT_FOUND, toolId=tool_id)
 
     kind = tool.get("kind", "unknown")
     result_data = {
@@ -226,7 +226,7 @@ async def _handle_call_backend_tool(arguments: dict, ctx: ToolContext) -> dict:
             fail(
                 f"目标工具 '{tool_id}' 的子工具 '{tool_name}' 被判定为 destructive，"
                 f"需显式传 allowDestructive=true 才会转发调用",
-                error_type="destructive_blocked",
+                error_type=ErrorType.DESTRUCTIVE_BLOCKED,
                 toolId=tool_id,
                 toolName=tool_name,
             )
@@ -307,7 +307,7 @@ async def _handle_list_launcher_actions(arguments: dict, ctx: ToolContext) -> di
             tool_id, keyword=keyword, limit=limit, refresh=refresh
         )
     except LauncherError as exc:
-        fail(str(exc), error_type="launcher_error", toolId=tool_id)
+        fail(str(exc), error_type=ErrorType.LAUNCHER_ERROR, toolId=tool_id)
     # 带上 lastSynced / source：调用方要能判断这份清单有多旧、是否完整，
     # 否则「自动刷新」只是把不透明变得更不透明。
     catalog = ctx.store.load_launcher_catalog(tool_id) or {}
@@ -331,7 +331,7 @@ async def _handle_run_launcher_action(arguments: dict, ctx: ToolContext) -> dict
             fail(
                 f"启动器 '{tool_id}' 被标记为 destructive，"
                 f"需显式传 allowDestructive=true 才会执行动作",
-                error_type="destructive_blocked",
+                error_type=ErrorType.DESTRUCTIVE_BLOCKED,
                 toolId=tool_id,
             )
         ctx.log(f"⚠️ 已确认执行 destructive 启动器动作: {tool_id}")
