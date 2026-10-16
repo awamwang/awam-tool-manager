@@ -48,6 +48,10 @@ from schema import schema_backend_available
 # server.py 会形成 server → tool_specs → server 循环 import），这里继续
 # re-export，`from server import ToolError` 等外部引用拿到的仍是同一个类对象。
 from errors import ToolError, fail, ensure_success
+# P1-04：对外工具声明式注册表——list_tools 的定义源与 dispatch 的查表目标。
+# SHARED_OUTPUT_SCHEMA 已随常量搬到 tool_specs（连注释一起），这里 re-export
+# 保护外部引用。
+from tool_specs import SHARED_OUTPUT_SCHEMA, ToolContext, build_mcp_tools  # noqa: F401
 
 # 数据目录：DATA_DIR 放人写的声明（进版本库），RUNTIME_DIR 放程序生成的
 # 运行时数据（本机应用数据目录）。两者此前混在 data/ 下，导致活实例改写
@@ -68,6 +72,18 @@ app = Server("awam-tool-manager")
 def log(msg: str):
     """日志输出到 stderr，不污染 stdout 协议通道"""
     print(f"[awam-tool-manager] {msg}", file=sys.stderr, flush=True)
+
+
+# P1-04：handler 依赖注入容器。tool_specs 的 handlers 不 import 任何 manager，
+# 只从 ctx 取；测试 monkeypatch 的是 manager 对象属性，ctx 持有同一引用，
+# patch 照样生效。
+_TOOL_CONTEXT = ToolContext(
+    registry=registry,
+    backend_manager=backend_manager,
+    launcher_manager=launcher_manager,
+    store=store,
+    log=log,
+)
 
 
 # MCP Tool annotations：把数据里的 `readOnly` / `destructive`（见 docs/format.md）
@@ -92,20 +108,6 @@ TOOL_ANNOTATION_HINTS: dict[str, dict[str, bool]] = {
     "set_backend_log_level": {},
     # 转发到后端 MCP，属于"与外部世界交互"但静态无法判定副作用
     "call_backend_tool": {"openWorldHint": True},
-}
-
-# 所有工具的成功输出都带顶层 `success`（bool），其余字段随工具而异（如 list 类
-# 工具的 `tools` 数组、backend 类工具的 `result` 自由结构）。用一张宽松但准确的
-# outputSchema 声明这一不变式：既让客户端能可靠按 `success` 分支，又不会因
-# 工具自有的自由字段触发 mcp 1.30 的 outputSchema 校验失败（additionalProperties=true）。
-# 注意：只要在 list_tools 里给工具挂了 outputSchema，mcp 就要求每次调用都返回
-# structuredContent，否则会返回 "Output validation error"，因此 call_tool 必须为
-# 每个成功结果附带 structuredContent（见下方 _to_structured）。
-SHARED_OUTPUT_SCHEMA: dict = {
-    "type": "object",
-    "properties": {"success": {"type": "boolean"}},
-    "required": ["success"],
-    "additionalProperties": True,
 }
 
 
@@ -134,289 +136,9 @@ def _needs_destructive_confirm(tool: dict | None, sub_tool: str) -> bool:
 async def list_tools() -> list[Tool]:
     """列出所有可用工具"""
     log("收到 list_tools 请求")
-    tools = [
-        Tool(
-            name="search_tools",
-            description="搜索已注册的工具，按关键词匹配名称、描述、标签",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "keyword": {
-                        "type": "string",
-                        "description": "搜索关键词"
-                    },
-                    "kind": {
-                        "type": "string",
-                        "description": "可选，按工具类型筛选（如 app、mcp、driver）"
-                    }
-                },
-                "required": ["keyword"]
-            }
-        ),
-        Tool(
-            name="list_tools",
-            description="列出所有已注册的工具，可按类型筛选",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "kind": {
-                        "type": "string",
-                        "description": "可选，按工具类型筛选（如 app、mcp、driver）"
-                    }
-                }
-            }
-        ),
-        Tool(
-            name="get_tool_info",
-            description="查看工具的详细信息",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "tool_id": {
-                        "type": "string",
-                        "description": "工具 ID，如 everything、everything-search-mcp"
-                    }
-                },
-                "required": ["tool_id"]
-            }
-        ),
-        Tool(
-            name="launch_tool",
-            description="取指定工具的启动命令（只返回命令，不实际执行启动）",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "tool_id": {
-                        "type": "string",
-                        "description": "工具 ID"
-                    }
-                },
-                "required": ["tool_id"]
-            }
-        ),
-        Tool(
-            name="call_backend_tool",
-            description="路由调用：转发请求到指定 MCP 工具的后端 Server 执行具体操作",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "tool_id": {
-                        "type": "string",
-                        "description": "MCP 工具 ID（如 everything-search-mcp）"
-                    },
-                    "tool_name": {
-                        "type": "string",
-                        "description": "要调用的后端工具名"
-                    },
-                    "arguments": {
-                        "type": "object",
-                        "description": "调用参数"
-                    },
-                    "allowDestructive": {
-                        "type": "boolean",
-                        "description": "目标工具被标记为 destructive 时，需显式传 true 才会转发"
-                    }
-                },
-                "required": ["tool_id", "tool_name"]
-            }
-        ),
-        Tool(
-            name="list_backend_tools",
-            description="列出指定 MCP 工具的后端提供的所有子工具（含完整参数 schema）",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "tool_id": {
-                        "type": "string",
-                        "description": "MCP 工具 ID"
-                    },
-                    "force_refresh": {
-                        "type": "boolean",
-                        "description": "是否强制刷新缓存"
-                    }
-                },
-                "required": ["tool_id"]
-            }
-        ),
-        Tool(
-            name="start_backend",
-            description="启动指定的后端 MCP Server 并建立连接",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "tool_id": {
-                        "type": "string",
-                        "description": "MCP 工具 ID"
-                    }
-                },
-                "required": ["tool_id"]
-            }
-        ),
-        Tool(
-            name="stop_backend",
-            description="停止指定的后端 MCP Server",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "tool_id": {
-                        "type": "string",
-                        "description": "MCP 工具 ID"
-                    }
-                },
-                "required": ["tool_id"]
-            }
-        ),
-        Tool(
-            name="get_backend_status",
-            description="获取后端 MCP Server 的运行状态",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "tool_id": {
-                        "type": "string",
-                        "description": "MCP 工具 ID，不填则返回所有后端状态"
-                    }
-                }
-            }
-        ),
-        Tool(
-            name="get_backend_logs",
-            description="获取后端 MCP Server 的运行日志",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "tool_id": {
-                        "type": "string",
-                        "description": "MCP 工具 ID"
-                    },
-                    "level": {
-                        "type": "string",
-                        "description": "日志级别过滤（debug/info/warning/error）"
-                    },
-                    "limit": {
-                        "type": "number",
-                        "description": "返回条数上限，默认 50"
-                    }
-                },
-                "required": ["tool_id"]
-            }
-        ),
-        Tool(
-            name="set_backend_log_level",
-            description="设置后端 MCP Server 的日志级别",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "tool_id": {
-                        "type": "string",
-                        "description": "MCP 工具 ID"
-                    },
-                    "level": {
-                        "type": "string",
-                        "description": "日志级别（debug/info/warning/error）"
-                    }
-                },
-                "required": ["tool_id", "level"]
-            }
-        ),
-        Tool(
-            name="sync_backend_tools",
-            description="手动同步后端 MCP 的工具目录（自动获取所有工具的参数 schema 并保存）",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "tool_id": {
-                        "type": "string",
-                        "description": "MCP 工具 ID"
-                    }
-                },
-                "required": ["tool_id"]
-            }
-        ),
-        Tool(
-            name="sync_launcher_actions",
-            description="手动同步启动器的动作清单（从启动器本地数据扫描，Quicker 的动作名依赖其缓存，可能只拿到 ID）",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "tool_id": {
-                        "type": "string",
-                        "description": "启动器工具 ID"
-                    }
-                },
-                "required": ["tool_id"]
-            }
-        ),
-        Tool(
-            name="list_launcher_actions",
-            description="列出/搜索启动器（如 Quicker）的动作：按名称、描述、所属程序或 ID 关键词过滤",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "tool_id": {
-                        "type": "string",
-                        "description": "启动器工具 ID"
-                    },
-                    "keyword": {
-                        "type": "string",
-                        "description": "可选，按名称/描述/所属程序/ID 过滤"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "可选，最多返回多少条"
-                    },
-                    "refresh": {
-                        "type": "boolean",
-                        "description": "可选，强制重新扫描启动器本地数据（默认读缓存，缓存超过 5 分钟会自动重扫）"
-                    }
-                },
-                "required": ["tool_id"]
-            }
-        ),
-        Tool(
-            name="run_launcher_action",
-            description="调用启动器的动作（如执行一个 Quicker 动作），可传参并等待返回结果",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "tool_id": {
-                        "type": "string",
-                        "description": "启动器工具 ID"
-                    },
-                    "action_id": {
-                        "type": "string",
-                        "description": "动作 ID（推荐：稳定不变；二选一，与 action_name 至少给一个）"
-                    },
-                    "action_name": {
-                        "type": "string",
-                        "description": "动作名称（Quicker 要求名称不重复且不含空格）"
-                    },
-                    "param": {
-                        "type": "string",
-                        "description": "可选，传给动作的参数（Quicker 用 ? 分隔符，不支持换行）"
-                    },
-                    "wait": {
-                        "type": "number",
-                        "description": "可选，最长等待秒数（默认取 launcher.timeout，缺省 20）"
-                    },
-                    "allowDestructive": {
-                        "type": "boolean",
-                        "description": "启动器被标记为 destructive 时，需显式传 true 才会执行"
-                    }
-                },
-                "required": ["tool_id"]
-            }
-        ),
-    ]
-    if ToolAnnotations is not None:
-        for tool in tools:
-            hints = TOOL_ANNOTATION_HINTS.get(tool.name)
-            if hints:
-                tool.annotations = ToolAnnotations(**hints)
-    # 每个工具都声明统一的 outputSchema（见 SHARED_OUTPUT_SCHEMA 说明）：
-    # 启用 mcp 1.30 的 outputSchema 能力，客户端据此知道输出结构。
-    for tool in tools:
-        tool.outputSchema = SHARED_OUTPUT_SCHEMA
+    # P1-04：定义由 tool_specs 声明表统一产出（annotations / outputSchema 在
+    # build_mcp_tools() 内挂载），此处只保留两行日志。
+    tools = build_mcp_tools()
 
     log(f"返回 {len(tools)} 个工具定义")
     return tools

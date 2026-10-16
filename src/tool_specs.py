@@ -1,0 +1,450 @@
+"""对外 MCP 工具的声明式注册表（P1-04，SSOT）。
+
+搬迁前，同一个工具名在 server.py 里有四个平行维护点：`TOOL_ANNOTATION_HINTS`
+注解表、`list_tools()` 里的 `Tool(...)` 字面量、`dispatch_tool` 的 if/elif
+分支、分支内的 `json.dumps`，四者无任何机制保证一致。本模块把前三者收敛为
+**一条 `ServerToolSpec` 记录**（annotations 与工具同条记录，与工具名同生共死），
+序列化收敛到 server.dispatch_tool 的一处。
+
+标准动作：新增一个对外工具 = 在本文件加「1 条 ServerToolSpec + 1 个
+async def _handle_xxx」，`build_mcp_tools()` / `dispatch_tool` /
+`conftest.EXPECTED_TOOL_NAMES` 的守卫测试全部自动跟随。
+
+与 `schema.py` 的分工：schema.py 管辖**数据条目**（`data/tools/*.json`），
+本模块管辖**对外 MCP 工具**（协议层暴露的 15 个 `tools/call` 入口）。
+两者字段名有重叠但语义不同，互不 import、互不引用。
+"""
+
+from dataclasses import dataclass
+from typing import Any, Callable, TYPE_CHECKING
+
+from mcp.types import Tool
+
+try:  # Tool annotations 同样是 mcp>=1.9 才引入的能力
+    from mcp.types import ToolAnnotations
+except ImportError:  # pragma: no cover
+    ToolAnnotations = None
+
+from errors import ToolError, fail, ensure_success  # noqa: F401（handler 侧经本模块转手）
+
+if TYPE_CHECKING:  # 运行期零耦合：handler 只从 ctx 取 manager，不 import 它们
+    from backend_client import BackendManager
+    from launcher_client import LauncherManager
+    from registry import ToolRegistry
+    from store import JsonStore
+
+
+@dataclass(frozen=True)
+class ToolContext:
+    """handler 的依赖注入容器。
+
+    handlers **不 import** 任何 manager，只从 `ctx` 取——这是让「handler 可搬走」
+    且「不产生循环 import」的关键。`frozen=True`：容器在 server import 期构造
+    一次，运行期不可变；测试 monkeypatch 的是 manager 对象的属性，ctx 持有的
+    是同一引用，patch 照样生效。
+    """
+
+    registry: "ToolRegistry"
+    backend_manager: "BackendManager"
+    launcher_manager: "LauncherManager"
+    store: "JsonStore"
+    log: Callable[[str], None]
+
+
+@dataclass(frozen=True)
+class ServerToolSpec:
+    """一条对外工具声明。
+
+    字段语义：
+    - `annotations`：`dict | None`。**`{}` 与 `None` 都表示不挂注解**——逐一
+      复现搬迁前现状：`set_backend_log_level` 的注解就是 `{}`，而原
+      `list_tools()` 的 `if hints:` 对空 dict 取假从而不挂。
+    - `output_schema`：`dict | None`，`None` → 回落 `SHARED_OUTPUT_SCHEMA`。
+      为将来某个工具需要差异化输出声明时预留。
+    - `handler`：`async (arguments: dict, ctx: ToolContext) -> Any`，返回**载荷
+      对象**（dict），不返回 JSON 文本——序列化统一由 `server.dispatch_tool`
+      负责。迁移期（M03 分批搬迁）未搬迁的条目为 `None`，由 dispatch 的脚手架
+      回落到旧 if/elif；`validate_specs()` 在最终态强制非空。
+    """
+
+    name: str
+    description: str
+    input_schema: dict
+    annotations: dict | None = None
+    output_schema: dict | None = None
+    handler: Callable[..., Any] | None = None
+
+
+# 所有工具的成功输出都带顶层 `success`（bool），其余字段随工具而异（如 list 类
+# 工具的 `tools` 数组、backend 类工具的 `result` 自由结构）。用一张宽松但准确的
+# outputSchema 声明这一不变式：既让客户端能可靠按 `success` 分支，又不会因
+# 工具自有的自由字段触发 mcp 1.30 的 outputSchema 校验失败（additionalProperties=true）。
+# 注意：只要在 list_tools 里给工具挂了 outputSchema，mcp 就要求每次调用都返回
+# structuredContent，否则会返回 "Output validation error"，因此 call_tool 必须为
+# 每个成功结果附带 structuredContent（见 server.py 的 _result_to_structured）。
+SHARED_OUTPUT_SCHEMA: dict = {
+    "type": "object",
+    "properties": {"success": {"type": "boolean"}},
+    "required": ["success"],
+    "additionalProperties": True,
+}
+
+# 顺序即 tools/list 对外可见顺序（golden 按列表逐位锁定，保序即保行为）。
+SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
+    ServerToolSpec(
+        name="search_tools",
+        description="搜索已注册的工具，按关键词匹配名称、描述、标签",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "keyword": {
+                    "type": "string",
+                    "description": "搜索关键词"
+                },
+                "kind": {
+                    "type": "string",
+                    "description": "可选，按工具类型筛选（如 app、mcp、driver）"
+                }
+            },
+            "required": ["keyword"]
+        },
+        annotations={"readOnlyHint": True, "destructiveHint": False},
+    ),
+    ServerToolSpec(
+        name="list_tools",
+        description="列出所有已注册的工具，可按类型筛选",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "description": "可选，按工具类型筛选（如 app、mcp、driver）"
+                }
+            }
+        },
+        annotations={"readOnlyHint": True, "destructiveHint": False},
+    ),
+    ServerToolSpec(
+        name="get_tool_info",
+        description="查看工具的详细信息",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tool_id": {
+                    "type": "string",
+                    "description": "工具 ID，如 everything、everything-search-mcp"
+                }
+            },
+            "required": ["tool_id"]
+        },
+        annotations={"readOnlyHint": True, "destructiveHint": False},
+    ),
+    ServerToolSpec(
+        name="launch_tool",
+        description="取指定工具的启动命令（只返回命令，不实际执行启动）",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tool_id": {
+                    "type": "string",
+                    "description": "工具 ID"
+                }
+            },
+            "required": ["tool_id"]
+        },
+        annotations={"readOnlyHint": True, "destructiveHint": False},
+    ),
+    ServerToolSpec(
+        name="call_backend_tool",
+        description="路由调用：转发请求到指定 MCP 工具的后端 Server 执行具体操作",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tool_id": {
+                    "type": "string",
+                    "description": "MCP 工具 ID（如 everything-search-mcp）"
+                },
+                "tool_name": {
+                    "type": "string",
+                    "description": "要调用的后端工具名"
+                },
+                "arguments": {
+                    "type": "object",
+                    "description": "调用参数"
+                },
+                "allowDestructive": {
+                    "type": "boolean",
+                    "description": "目标工具被标记为 destructive 时，需显式传 true 才会转发"
+                }
+            },
+            "required": ["tool_id", "tool_name"]
+        },
+        # 转发到后端 MCP，属于"与外部世界交互"但静态无法判定副作用
+        annotations={"openWorldHint": True},
+    ),
+    ServerToolSpec(
+        name="list_backend_tools",
+        description="列出指定 MCP 工具的后端提供的所有子工具（含完整参数 schema）",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tool_id": {
+                    "type": "string",
+                    "description": "MCP 工具 ID"
+                },
+                "force_refresh": {
+                    "type": "boolean",
+                    "description": "是否强制刷新缓存"
+                }
+            },
+            "required": ["tool_id"]
+        },
+        annotations={"readOnlyHint": True, "destructiveHint": False},
+    ),
+    ServerToolSpec(
+        name="start_backend",
+        description="启动指定的后端 MCP Server 并建立连接",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tool_id": {
+                    "type": "string",
+                    "description": "MCP 工具 ID"
+                }
+            },
+            "required": ["tool_id"]
+        },
+        annotations={"idempotentHint": True},
+    ),
+    ServerToolSpec(
+        name="stop_backend",
+        description="停止指定的后端 MCP Server",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tool_id": {
+                    "type": "string",
+                    "description": "MCP 工具 ID"
+                }
+            },
+            "required": ["tool_id"]
+        },
+        annotations={"idempotentHint": True},
+    ),
+    ServerToolSpec(
+        name="get_backend_status",
+        description="获取后端 MCP Server 的运行状态",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tool_id": {
+                    "type": "string",
+                    "description": "MCP 工具 ID，不填则返回所有后端状态"
+                }
+            }
+        },
+        annotations={"readOnlyHint": True, "destructiveHint": False},
+    ),
+    ServerToolSpec(
+        name="get_backend_logs",
+        description="获取后端 MCP Server 的运行日志",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tool_id": {
+                    "type": "string",
+                    "description": "MCP 工具 ID"
+                },
+                "level": {
+                    "type": "string",
+                    "description": "日志级别过滤（debug/info/warning/error）"
+                },
+                "limit": {
+                    "type": "number",
+                    "description": "返回条数上限，默认 50"
+                }
+            },
+            "required": ["tool_id"]
+        },
+        annotations={"readOnlyHint": True, "destructiveHint": False},
+    ),
+    ServerToolSpec(
+        name="set_backend_log_level",
+        description="设置后端 MCP Server 的日志级别",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tool_id": {
+                    "type": "string",
+                    "description": "MCP 工具 ID"
+                },
+                "level": {
+                    "type": "string",
+                    "description": "日志级别（debug/info/warning/error）"
+                }
+            },
+            "required": ["tool_id", "level"]
+        },
+        # 搬迁前即不挂注解（TOOL_ANNOTATION_HINTS 里是 {}），保留原样
+        annotations={},
+    ),
+    ServerToolSpec(
+        name="sync_backend_tools",
+        description="手动同步后端 MCP 的工具目录（自动获取所有工具的参数 schema 并保存）",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tool_id": {
+                    "type": "string",
+                    "description": "MCP 工具 ID"
+                }
+            },
+            "required": ["tool_id"]
+        },
+        annotations={"idempotentHint": True},
+    ),
+    ServerToolSpec(
+        name="sync_launcher_actions",
+        description="手动同步启动器的动作清单（从启动器本地数据扫描，Quicker 的动作名依赖其缓存，可能只拿到 ID）",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tool_id": {
+                    "type": "string",
+                    "description": "启动器工具 ID"
+                }
+            },
+            "required": ["tool_id"]
+        },
+        annotations={"idempotentHint": True},
+    ),
+    ServerToolSpec(
+        name="list_launcher_actions",
+        description="列出/搜索启动器（如 Quicker）的动作：按名称、描述、所属程序或 ID 关键词过滤",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tool_id": {
+                    "type": "string",
+                    "description": "启动器工具 ID"
+                },
+                "keyword": {
+                    "type": "string",
+                    "description": "可选，按名称/描述/所属程序/ID 过滤"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "可选，最多返回多少条"
+                },
+                "refresh": {
+                    "type": "boolean",
+                    "description": "可选，强制重新扫描启动器本地数据（默认读缓存，缓存超过 5 分钟会自动重扫）"
+                }
+            },
+            "required": ["tool_id"]
+        },
+        annotations={"readOnlyHint": True, "destructiveHint": False},
+    ),
+    ServerToolSpec(
+        name="run_launcher_action",
+        description="调用启动器的动作（如执行一个 Quicker 动作），可传参并等待返回结果",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tool_id": {
+                    "type": "string",
+                    "description": "启动器工具 ID"
+                },
+                "action_id": {
+                    "type": "string",
+                    "description": "动作 ID（推荐：稳定不变；二选一，与 action_name 至少给一个）"
+                },
+                "action_name": {
+                    "type": "string",
+                    "description": "动作名称（Quicker 要求名称不重复且不含空格）"
+                },
+                "param": {
+                    "type": "string",
+                    "description": "可选，传给动作的参数（Quicker 用 ? 分隔符，不支持换行）"
+                },
+                "wait": {
+                    "type": "number",
+                    "description": "可选，最长等待秒数（默认取 launcher.timeout，缺省 20）"
+                },
+                "allowDestructive": {
+                    "type": "boolean",
+                    "description": "启动器被标记为 destructive 时，需显式传 true 才会执行"
+                }
+            },
+            "required": ["tool_id"]
+        },
+        # 执行动作会真的跑起来，只标 openWorld
+        annotations={"openWorldHint": True},
+    ),
+)
+
+# ToolAnnotations 的合法键（MCP 协议 hints 全集）。validate_specs 用它拦
+# 「注解键拼错 → 运行期才炸」。
+_ANNOTATION_KEYS = frozenset(
+    {"readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"}
+)
+
+
+def build_mcp_tools() -> list[Tool]:
+    """由声明表统一构造 `Tool` 列表（annotations / outputSchema 在此挂载）。
+
+    与搬迁前 `list_tools()` 的挂载逻辑逐行等价：
+    - `if ToolAnnotations is not None and spec.annotations:` —— 可选导入的
+      真值判断都原样保留（`{}` 取假，不挂注解）；
+    - `tool.outputSchema = spec.output_schema or SHARED_OUTPUT_SCHEMA` ——
+      本期 15 条全部回落共享 schema。
+    """
+    tools: list[Tool] = []
+    for spec in SERVER_TOOL_SPECS:
+        tool = Tool(
+            name=spec.name,
+            description=spec.description,
+            inputSchema=spec.input_schema,
+        )
+        if ToolAnnotations is not None and spec.annotations:
+            tool.annotations = ToolAnnotations(**spec.annotations)
+        tool.outputSchema = spec.output_schema or SHARED_OUTPUT_SCHEMA
+        tools.append(tool)
+    return tools
+
+
+def get_spec(name: str) -> ServerToolSpec | None:
+    """按工具名查声明；未命中返回 None（分发层转 `unknown_tool`）。"""
+    return _SPECS_BY_NAME.get(name)
+
+
+def validate_specs() -> None:
+    """import 期自检：spec 表自身损坏时快速失败，而不是带病运行。
+
+    检查三类问题：
+    - 重名：名字索引会静默丢掉一条，tools/list 少一个工具且无人察觉；
+    - 空 handler：新增工具忘了写 handler，要到运行期才暴露；
+    - annotations 键非法：`ToolAnnotations(**{...})` 拼错键运行期才炸。
+
+    对合法输入零差异——这是本设计「把一致性从约定变成强制」的核心机制。
+    """
+    seen: set[str] = set()
+    for spec in SERVER_TOOL_SPECS:
+        if spec.name in seen:
+            raise RuntimeError(f"tool_specs: 工具名重复: {spec.name}")
+        seen.add(spec.name)
+        if spec.handler is None:
+            raise RuntimeError(f"tool_specs: {spec.name} 缺少 handler")
+        if spec.annotations:
+            unknown = set(spec.annotations) - _ANNOTATION_KEYS
+            if unknown:
+                raise RuntimeError(
+                    f"tool_specs: {spec.name} 的 annotations 含非法键: "
+                    f"{sorted(unknown)}"
+                )
+
+
+# 名字 → spec 索引（validate_specs 保证无重名，建索引才有意义）
+_SPECS_BY_NAME: dict[str, ServerToolSpec] = {
+    spec.name: spec for spec in SERVER_TOOL_SPECS
+}
