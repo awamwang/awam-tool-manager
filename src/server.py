@@ -40,7 +40,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from store import JsonStore
 from registry import ToolRegistry
-from backend_client import BackendManager
+from backend_client import BackendManager, ensure_npm_bin_on_path
 from schema import schema_backend_available
 
 # 数据目录
@@ -729,16 +729,21 @@ awam-tool-manager 是一个统一的工具管理器，聚合各种 MCP 工具和
 
 
 async def _prewarm_backends():
-    """启动预热：后台为各后端装好缺失的依赖，不阻塞协议服务就绪
+    """启动预热：补 PATH + 后台为各后端装好缺失的依赖，不阻塞协议服务就绪
 
     依赖自装（BackendClient.ensure_installed）已保证「start_backend 时缺
     什么装什么」，但安装是重操作（npm i -g 可达数十秒），第一次调用就要
     现场等。这里在服务启动时后台预热一遍，把安装成本提前到启动阶段。
 
+    预热前先做 PATH 自愈（ensure_npm_bin_on_path）：上游网关可能用裁剪过
+    的环境启动本服务（实测 toolport 传入的 PATH 不含 npm 全局 bin），不补
+    的话 which 会把已装好的包误判成缺失，白跑一次数十秒的安装。
+
     只装不启、异常全吞：预热失败不能拖垮服务本体——最坏情况退化为
     「首次 start_backend 时现场装」，与没有预热时完全一致。
     """
     try:
+        await ensure_npm_bin_on_path()
         result = await backend_manager.ensure_all_installed()
         if result.get("installed"):
             log(

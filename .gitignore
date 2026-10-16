@@ -15,3 +15,6 @@ build/
 
 # WorkBuddy 的工作数据（记忆、会话等），不进版本库
 .workbuddy/
+
+# 运行时鉴权会话存储（server 自动生成，内容因运行而异）
+authorized_tokens.json

@@ -1,20 +1,120 @@
 """后端 MCP 客户端：管理到各个后端 MCP Server 的连接和调用转发
 
 支持：启动/停止/状态/日志/心跳检测/工具列表缓存
+
+连接生命周期采用「独占任务」模式（_connection_loop）：stdio_client 与
+ClientSession 的 __aenter__/__aexit__ 都在同一个任务内完成。原因是
+anyio 的 CancelScope 绑定进入它的任务——跨任务进入/退出会直接崩溃，
+详见 _connection_loop 文档。
 """
 
 import asyncio
 import contextlib
+import os
 import shutil
 import sys
 import time
 from collections import deque
 from pathlib import Path
 
+import anyio
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from store import JsonStore
+
+
+# npm 全局 bin 目录的进程级解析缓存：
+#   None  = 尚未解析；
+#   ""    = 解析失败（npm 不可用或超时，不再重试，避免每次调用都干等）；
+#   路径  = 已解析到的 npm 全局 bin 目录。
+_npm_bin_dir: str | None = None
+
+
+def _patch_path(directory: str) -> bool:
+    """把 directory 追加进 os.environ["PATH"]；为空或已在 PATH 中则不动"""
+    if not directory:
+        return False
+    parts = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]
+    if directory in parts:
+        return False
+    parts.append(directory)
+    os.environ["PATH"] = os.pathsep.join(parts)
+    return True
+
+
+async def ensure_npm_bin_on_path() -> str | None:
+    """把 npm 全局 bin 目录补进 PATH（幂等、限时、失败静默）
+
+    背景：本服务可能被上游以裁剪过的环境启动（网关白名单继承、CI、
+    systemd 等场景都可能发生）。若 PATH 缺 npm 全局 bin（如
+    C:\\Users\\...\\.local\\npm-global），shutil.which 找不到早已全局
+    安装的 CLI，ensure_installed 会误判「未安装」并触发一次数十秒的
+    npm i -g：包明明装着，这既慢又多余，还会把调用方的 tools/call
+    预算（toolport 网关为 30s）整个耗光。
+
+    做法：问一次 npm 全局目录在哪（npm prefix -g，约 1-2s，进程级缓存），
+    把结果补进 os.environ["PATH"]：
+    - which() 立刻命中，安装不再被误触发；
+    - spawn 的后端通过 mcp 的 get_default_environment() 读 os.environ，
+      继承到同一条 PATH，cmd /c <cli> 之类的启动形式也能解析到。
+
+    任何失败都静默返回 None：PATH 自愈只是优化，不能因为它把启动或调用
+    搞挂。npm prefix -g 本身限时 15s，超时杀子进程防孤儿。
+    """
+    global _npm_bin_dir
+
+    if _npm_bin_dir is not None:
+        # 已解析过（含失败）：命中缓存的目录时兜底补进 PATH 再返回
+        if _npm_bin_dir:
+            _patch_path(_npm_bin_dir)
+            return _npm_bin_dir
+        return None
+
+    proc = None
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            "npm prefix -g",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            # stdin 必须显式 DEVNULL：本服务的 stdin 是上游网关的
+            # JSON-RPC 管道。不传的话子进程会继承它——cmd→node→npm-cli
+            # 链在读 stdin 时阻塞在网关管道上，communicate() 永不返回，
+            # ensure_installed 卡死 → 网关 30s 超时取消 → anyio 取消
+            # 作用域被撕裂 → 整个 Server 进程崩溃（2026-10-16 实测根因，
+            # toolport 网关 4/4 超时即此故障）。
+            stdin=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            with anyio.fail_after(15):
+                stdout, _ = await proc.communicate()
+        except TimeoutError:
+            await BackendClient._kill_and_reap(proc)
+            _npm_bin_dir = ""
+            return None
+        if proc.returncode != 0:
+            _npm_bin_dir = ""
+            return None
+        prefix = (stdout or b"").decode("utf-8", "replace").strip().strip('"')
+        if not prefix:
+            _npm_bin_dir = ""
+            return None
+        # Windows 上 prefix 本身就是 bin 目录（npm 全局 bin 没有 bin 子目录）；
+        # POSIX 上 bin 在 prefix/bin。按平台优先，另一个作兜底。
+        if os.name == "nt":
+            candidates = [prefix, str(Path(prefix) / "bin")]
+        else:
+            candidates = [str(Path(prefix) / "bin"), prefix]
+        for candidate in candidates:
+            if Path(candidate).is_dir():
+                _npm_bin_dir = candidate
+                _patch_path(candidate)
+                return candidate
+        _npm_bin_dir = ""
+        return None
+    except Exception:
+        _npm_bin_dir = ""
+        return None
 
 
 class BackendBusyError(Exception):
@@ -40,6 +140,10 @@ class BackendClient:
     # 依赖自装：install.command 的执行上限（秒）。npm i -g 小包通常几十秒，
     # 300s 给慢网络留余量；超时会杀掉子进程，不让安装命令在后台变成孤儿。
     INSTALL_TIMEOUT = 300.0
+    # 安装锁等待上限（秒）。别人（典型是启动预热）正持锁安装时，本请求不
+    # 干等：npm i -g 动辄数十秒，会把调用方的 tools/call 预算（toolport
+    # 网关为 30s）耗光。等不到就返回 installing 状态，让调用方轮询。
+    INSTALL_LOCK_TIMEOUT = 5.0
     # 工具列表缓存有效期（秒）
     TOOLS_CACHE_TTL = 300
 
@@ -51,6 +155,11 @@ class BackendClient:
     VALID_LOG_LEVELS = ["debug", "info", "warning", "error"]
     # 级别优先级：低于当前 log_level 的消息不入队
     LOG_LEVEL_PRIORITY = {"debug": 10, "info": 20, "warning": 30, "error": 40}
+
+    # 连接任务收尸的有界等待（秒）。stdio_client 的 MCP 规范拆除流程
+    # （关 stdin → 等退出 → 杀进程树）通常 ~2s 内完成；10s 是宽松上限，
+    # 超时再补一次 cancel，绝不在清理路径上无限等待。
+    CONN_REAP_TIMEOUT = 10.0
 
     # 常见的「壳包裹」启动形式：connection.command 是壳程序，真正需要在
     # PATH 上找到的是壳后面的目标程序。不剥掉这层壳的话，
@@ -102,8 +211,20 @@ class BackendClient:
         # 串行）分离，二者职责不同，不能共用同一把锁，否则会互相阻塞。
         self._call_lock = asyncio.Lock()
         # cleanup 独立的锁：心跳失败、stop()、start() 的失败回滚都可能触发清理，
-        # 用一把专用锁保证清理串行执行且幂等，避免两个协程同时 __aexit__ 同一个 context
+        # 用一把专用锁保证清理串行执行且幂等，避免两个协程同时收尸同一个连接任务
         self._cleanup_lock = asyncio.Lock()
+
+        # 连接生命周期（独占任务模式，详见 _connection_loop 文档）：
+        #   _conn_task    持有整个 stdio_client + ClientSession 生命周期的任务
+        #   _ready        连接就绪（或失败）信号，start() 等它
+        #   _shutdown     停止信号，_cleanup() 置它、连接任务收到后自行拆除
+        #   _conn_error   连接任务自行失败时记录原因，供 start() 转抛
+        #   _stdio_context / _client_context 仅作内省引用，由连接任务创建和清理，
+        #   任何其他代码不得对它们调用 __aexit__（跨任务退出 anyio 作用域会崩）
+        self._conn_task: asyncio.Task | None = None
+        self._ready: asyncio.Event | None = None
+        self._shutdown: asyncio.Event | None = None
+        self._conn_error: BaseException | None = None
         self._stdio_context = None
         self._client_context = None
 
@@ -184,7 +305,7 @@ class BackendClient:
                 await proc.wait()
 
     async def ensure_installed(self) -> dict:
-        """确保后端的可执行依赖已安装（按需、幂等、只装一次）
+        """确保后端的可执行依赖已安装（按需、幂等、有界等待）
 
         背景：tools/*.json 的 `install` 字段此前是死元数据——schema 声明了
         它，却没有任何代码读取。后果：包没有全局安装时 start() 必然失败，
@@ -193,18 +314,24 @@ class BackendClient:
         策略：
         1. 解析不出启动目标（例如没配 command）→ 不装也不阻塞，如实报告
            available=False，由 spawn 产出原生错误；
-        2. 启动命令的真实目标已在 PATH 上 → 直接返回，什么都不做；
-        3. 没有 install.command → 返回 available=False 但**不阻塞**：由
+        2. 先做 PATH 自愈（ensure_npm_bin_on_path）：上游可能用裁剪过的
+           环境启动本服务，不补齐就会把已装好的包误判成缺失，误触发
+           数十秒的无效安装；
+        3. 启动命令的真实目标已在 PATH 上 → 直接返回，什么都不做；
+        4. 没有 install.command → 返回 available=False 但**不阻塞**：由
            spawn 产出原生错误，行为与接入前完全一致，不把「本来能起」的
            配置误判死（例如 bash -c 跟一串脚本参数，which 无从判定）；
-        4. 有 install.command → 加锁执行一次安装（限时 INSTALL_TIMEOUT），
-           装完复检。已尝试过（无论成败）不重复装；确需重试时重启服务或
-           改配置触发客户端重建即可。
+        5. 有 install.command → 加锁执行一次安装（限时 INSTALL_TIMEOUT），
+           装完复检。**锁等待有上限**（INSTALL_LOCK_TIMEOUT）：别人正在
+           装（典型是启动预热持锁跑 npm i -g）时返回 installing 让调用方
+           轮询，不把调用方的 tools/call 预算耗在干等上。安装真正跑完
+           （无论成败）才记 attempted；被取消（调用方断开/网关超时取消）
+           时不标记，重试还能再装。
 
-        返回 {"success", "available", "installed", "error"?}：
-        success=False 仅表示「装了但还没好」或「安装执行失败」，调用方
-        （start / 启动预热）只记录不阻断——自装只会让启动更容易成功，
-        不会让任何原本能启动的配置变得更糟。
+        返回 {"success", "available", "installed", "installing"?}：
+        success=False 仅表示「装了但还没好」「正在装」或「安装执行失败」，
+        调用方（start / 启动预热）只记录不阻断——自装只会让启动更容易
+        成功，不会让任何原本能启动的配置变得更糟。
         """
         target = self._resolved_command(self.connection_config)
         if target is None:
@@ -217,6 +344,9 @@ class BackendClient:
                 "installed": False,
                 "note": "无法解析启动命令",
             }
+        # PATH 自愈：补齐 npm 全局 bin 后再判断「是否已安装」，
+        # 避免把已装好的包误判为缺失、触发数十秒的无效安装。
+        await ensure_npm_bin_on_path()
         if self._target_available(target):
             return {"success": True, "available": True, "installed": False}
 
@@ -234,7 +364,24 @@ class BackendClient:
                 "note": "未配置安装命令",
             }
 
-        async with self._install_lock:
+        # 加锁执行一次安装。锁等待有上限（INSTALL_LOCK_TIMEOUT）：预热
+        # 可能正持锁跑 npm i -g（数十秒），干等会把调用方的 tools/call
+        # 预算耗光——等不到就返回 installing，让调用方轮询。
+        # 限时用 anyio 原生的 fail_after（原因见 start() 中注释）。
+        try:
+            with anyio.fail_after(self.INSTALL_LOCK_TIMEOUT):
+                await self._install_lock.acquire()
+        except TimeoutError:
+            self._log("info", "另一任务正在安装依赖，本次不等待，返回 installing")
+            return {
+                "success": False,
+                "available": False,
+                "installed": False,
+                "installing": True,
+                "note": "依赖正在安装中，请稍后重试",
+            }
+
+        try:
             # 双检：等锁期间可能已被其他协程（如启动预热）装好
             if self._target_available(target):
                 return {"success": True, "available": True, "installed": False}
@@ -246,7 +393,6 @@ class BackendClient:
                     "error": "安装已尝试过，跳过重复执行",
                 }
 
-            self._install_attempted = True
             self._log("info", f"检测到依赖缺失，执行安装: {install_command}")
             proc = None
             try:
@@ -254,11 +400,14 @@ class BackendClient:
                     install_command,
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.PIPE,
+                    # stdin 同 npm prefix -g：必须 DEVNULL，否则 npm 子
+                    # 进程继承网关管道后阻塞在 stdin 上（见
+                    # ensure_npm_bin_on_path 中的根因说明）。
+                    stdin=asyncio.subprocess.DEVNULL,
                 )
-                _, stderr = await asyncio.wait_for(
-                    proc.communicate(), timeout=self.INSTALL_TIMEOUT
-                )
-            except asyncio.TimeoutError:
+                with anyio.fail_after(self.INSTALL_TIMEOUT):
+                    _, stderr = await proc.communicate()
+            except TimeoutError:
                 await self._kill_and_reap(proc)
                 error = f"安装超时（>{self.INSTALL_TIMEOUT:.0f}s）: {install_command}"
                 self._log("error", error)
@@ -269,7 +418,8 @@ class BackendClient:
                     "error": error,
                 }
             except asyncio.CancelledError:
-                # 预热任务被取消（服务退出）：不能让安装命令变成孤儿进程
+                # 调用方断开/网关超时取消：杀子进程防孤儿，且**不**标记
+                # attempted——安装并未跑完，重试时应该还能再装。
                 await self._kill_and_reap(proc, reap=False)
                 raise
             except Exception as e:
@@ -281,6 +431,10 @@ class BackendClient:
                     "installed": False,
                     "error": error,
                 }
+
+            # 安装真正跑完（拿到退出码）才记 attempted：被取消时不标记，
+            # 否则一次取消就会让后续重试永远跳过安装。
+            self._install_attempted = True
 
             if proc.returncode != 0:
                 tail = (stderr or b"").decode("utf-8", "replace").strip()
@@ -307,6 +461,115 @@ class BackendClient:
                 "installed": True,
                 "error": error,
             }
+        finally:
+            self._install_lock.release()
+
+    async def _connection_loop(self, params: StdioServerParameters) -> None:
+        """连接独占任务：stdio_client + ClientSession 的一生都在本任务内
+
+        为什么需要独占任务（2026-10-16 实证；toolport 网关 4/4 启动即崩
+        与 4/4 调用超时是同一族故障）：
+        anyio 的 CancelScope 绑定「进入它的任务」。stdio_client 与
+        ClientSession 的 __aenter__ 都会进入各自内部 TaskGroup 的取消
+        作用域。若在请求任务里进入、事后再退出，会发生两件事：
+        1. 请求任务的作用域栈上留下一个永不闭合的内层作用域。mcp SDK 的
+           RequestResponder 在我们的工具响应发出**之后**才退出，一退出就
+           踩空：RuntimeError: Attempted to exit a cancel scope that
+           isn't the current tasks's current cancel scope → TaskGroup
+           收集 → 整个 Server 进程 exit 1。客户端其实已收到成功响应，
+           「莫名其妙」的崩溃发生在响应之后；
+        2. 清理任务调用 __aexit__ 时报 Attempted to exit cancel scope
+           in a different task than it was entered in（被 _cleanup 兜住
+           只记警告，但作用域永不闭合，anyio 内部状态泄漏）。
+
+        正确姿势（anyio 结构化并发）：上下文的进入与退出在**同一任务**内
+        完成。本任务即连接的所有者——spawn、握手、持有、拆除都在这里；
+        其他任务（请求 / 心跳 / 清理）只使用 self.session（memory
+        stream + future，跨任务安全）或通过 _ready/_shutdown 事件协作。
+
+        退出路径：
+        - 正常停止：_cleanup 置 _shutdown，本任务退出 async with，
+          stdio_client 按 MCP 规范拆除（关 stdin → 等退出 → 杀进程树）；
+        - start 超时 / 调用方取消：_reap_conn_task(cancel=True) 取消本
+          任务，CancelledError 在 async with 的退出逻辑中传播，拆除照常；
+        - 自行失败（spawn 失败 / 握手失败 / 后端死亡）：异常记入
+          _conn_error 并置 _ready 唤醒 start()，由 start() 转抛。
+        """
+        try:
+            self._stdio_context = stdio_client(params)
+            async with self._stdio_context as (read_stream, write_stream):
+                self._client_context = ClientSession(read_stream, write_stream)
+                # 注意：必须用 async with 而不是手动 __aenter__/__aexit__——
+                # 手动调用漏掉 __aexit__ 会让 ClientSession 内部的 TaskGroup
+                # 取消作用域永不闭合（anyio 状态泄漏）；async with 保证
+                # 正常退出 / 异常 / 取消三条路径都在本任务内闭合。
+                async with self._client_context as session:
+                    self.session = session
+                    # 握手限时用 anyio 原生 fail_after：asyncio.wait_for 会
+                    # 从外部取消协程，撕裂 anyio 的取消作用域栈，把整个 MCP
+                    # Server 进程带崩（实测报 Attempted to exit a cancel
+                    # scope...）。fail_after 在同一任务内取消，作用域栈保持
+                    # 完整，超时干净地抛 TimeoutError。
+                    with anyio.fail_after(self.timeout):
+                        await session.initialize()
+                    self.status = self.STATUS_RUNNING
+                    self.started_at = time.time()
+                    self._last_heartbeat = time.time()
+                    # 就绪（或失败）信号放在最后：start() 醒来时状态必已一致
+                    self._ready.set()
+                    # 持有连接直到收到停止信号；后端死亡由心跳检测后走清理
+                    await self._shutdown.wait()
+        except asyncio.CancelledError:
+            self._conn_error = asyncio.CancelledError("连接任务被取消")
+            raise
+        except BaseException as e:  # noqa: BLE001 —— 失败原因要带回给 start()
+            self._conn_error = e
+        finally:
+            # 本任务终结即连接已断：清掉所有对外引用，避免别人用到死会话；
+            # _ready 必须再置一次，覆盖「失败发生在就绪之前」的情况。
+            self.session = None
+            self._stdio_context = None
+            self._client_context = None
+            if self._ready is not None:
+                self._ready.set()
+
+    async def _reap_conn_task(self, cancel: bool = False) -> None:
+        """结束连接任务并等它收尸（_cleanup / start 失败路径共用）
+
+        两种退出方式都保证 anyio 作用域在连接任务内闭合：
+        - cancel=False：置 _shutdown，任务自行退出 async with（stdio_client
+          按 MCP 规范关 stdin → 等退出 → 杀进程树，后端有机会优雅退出）；
+        - cancel=True ：直接取消任务（start 超时 / 调用方被取消时用，
+          等不及优雅退出）。
+
+        有界等待（CONN_REAP_TIMEOUT）：绝不无限期占用清理方——清理可能
+        跑在 stop_backend 请求任务里，调用方还有 tools/call 预算。超时
+        补一次 cancel 再短等；join 本身被打断（调用方持续取消）也不留
+        孤儿：任务已收到取消信号，会自行完成拆除。
+        """
+        task, self._conn_task = self._conn_task, None
+        shutdown, self._shutdown = self._shutdown, None
+        self._conn_error = None
+        if task is None:
+            return
+        if not task.done():
+            if shutdown is not None:
+                shutdown.set()
+            if cancel:
+                task.cancel()
+            _, pending = await asyncio.wait({task}, timeout=self.CONN_REAP_TIMEOUT)
+            if pending:
+                self._log("warning", "连接任务未能在时限内自行退出，强制取消")
+                task.cancel()
+                await asyncio.wait({task}, timeout=5)
+        # 任务已终结：取出异常避免 "exception was never retrieved" 警告
+        if not task.cancelled():
+            with contextlib.suppress(Exception):
+                exc = task.exception()
+                if exc is not None:
+                    self._log(
+                        "warning", f"连接任务异常退出: {type(exc).__name__}: {exc}"
+                    )
 
     async def start(self) -> dict:
         """启动后端 MCP Server 并建立连接"""
@@ -317,9 +580,9 @@ class BackendClient:
             if self.status == self.STATUS_RUNNING:
                 return {"success": True, "message": "已在运行中"}
 
-            # 上一次连接可能残留（例如心跳失败后置为 error 但没清理），
-            # 必须先清理干净，否则旧的子进程会变成孤儿进程
-            if self._stdio_context or self._client_context or self.session:
+            # 上一次连接可能残留（例如心跳失败后置为 error 但没清理完），
+            # 必须先收尸干净，否则旧的子进程会变成孤儿进程
+            if self._conn_task or self.session:
                 self._log("warning", "检测到上次连接的残留资源，先清理")
                 await self._cleanup()
 
@@ -336,6 +599,19 @@ class BackendClient:
                 # 安装再 spawn。安装失败不阻断——照旧 spawn，让原生错误说话，
                 # 行为与接入前完全一致（策略详见 ensure_installed）。
                 install_result = await self.ensure_installed()
+                if install_result.get("installing"):
+                    # 别人正在装（典型是启动预热持锁跑 npm i -g）：此时命令
+                    # 还不在 PATH 上，spawn 只会拿到原生「命令不存在」错误。
+                    # 直接返回 installing 让调用方轮询——调用方（toolport
+                    # 网关）的 tools/call 预算只有 30s，不能耗在干等安装上。
+                    self.status = self.STATUS_STOPPED
+                    message = "依赖正在安装中，请稍后重试 start_backend"
+                    self._log("info", message)
+                    return {
+                        "success": False,
+                        "status": "installing",
+                        "message": message,
+                    }
                 if install_result.get("installed"):
                     self._log("info", "依赖已自动安装，继续启动")
 
@@ -348,20 +624,46 @@ class BackendClient:
 
                 params = StdioServerParameters(command=command, args=args, env=env)
 
-                # 启动子进程并连接（整体限时，避免子进程卡住拖死整个服务）
-                self._stdio_context = stdio_client(params)
-                read_stream, write_stream = await asyncio.wait_for(
-                    self._stdio_context.__aenter__(), timeout=self.timeout
+                # 连接的整个生命周期收拢进独占任务（原因见 _connection_loop：
+                # anyio CancelScope 任务绑定，跨任务进入/退出会崩）。本任务
+                # 只负责创建它并等待就绪信号；持有与拆除都在连接任务内完成。
+                self._shutdown = asyncio.Event()
+                self._ready = asyncio.Event()
+                self._conn_error = None
+                self._conn_task = asyncio.create_task(
+                    self._connection_loop(params),
+                    name=f"awam-conn:{self.tool_id}",
                 )
+                try:
+                    # 限时用 anyio 原生 fail_after：asyncio.wait_for 会从
+                    # **外部任务**取消协程，撕裂 anyio 的取消作用域栈（实测
+                    # 报 RuntimeError: Attempted to exit a cancel scope
+                    # that isn't the current tasks's current cancel
+                    # scope），把整个 MCP Server 进程带崩。fail_after 在
+                    # 同一任务内取消，作用域栈保持完整，超时干净地抛
+                    # TimeoutError。
+                    with anyio.fail_after(self.timeout):
+                        await self._ready.wait()
+                except TimeoutError:
+                    self._log("error", f"连接后端超时（{self.timeout}s）")
+                    await self._reap_conn_task(cancel=True)
+                    raise TimeoutError(f"连接后端 MCP 超时（{self.timeout}s）")
+                except BaseException:
+                    # 被取消（调用方断开 / 网关超时取消）或任何异常：都不能
+                    # 把连接任务留成孤儿——子进程会活过整个服务
+                    await self._reap_conn_task(cancel=True)
+                    raise
 
-                self._client_context = ClientSession(read_stream, write_stream)
-                await self._client_context.__aenter__()
-                self.session = self._client_context
+                if self._conn_error is not None:
+                    # 连接任务自行失败（spawn 失败 / 握手失败）：它已在
+                    # 任务内自行退出全部上下文，这里只负责转抛
+                    err = self._conn_error
+                    self._conn_error = None
+                    if isinstance(err, asyncio.CancelledError):
+                        err = RuntimeError("连接任务被取消")
+                    await self._reap_conn_task()
+                    raise err
 
-                await asyncio.wait_for(self.session.initialize(), timeout=self.timeout)
-                self.status = self.STATUS_RUNNING
-                self.started_at = time.time()
-                self._last_heartbeat = time.time()
                 self._log("info", "✅ 连接成功")
 
                 # 启动心跳检测
@@ -376,7 +678,7 @@ class BackendClient:
                 self.status = self.STATUS_ERROR
                 self.last_error = f"{type(e).__name__}: {e}"
                 self._log("error", f"❌ 启动失败: {self.last_error}")
-                # 清理资源
+                # 清理资源（连接任务已终结时这里是空转，幂等）
                 await self._cleanup()
                 return {"success": False, "error": self.last_error}
 
@@ -413,39 +715,27 @@ class BackendClient:
     async def _cleanup(self):
         """清理连接资源（串行且幂等）
 
-        - client 与 stdio 两个 context 必须各自独立 try：
-          共用 try 时，若第一个 __aexit__ 抛异常，第二个就不会执行，
-          而 stdio context 持有子进程，不 exit 会留下孤儿进程。
-        - 并发调用时被 _cleanup_lock 串行化，重复调用直接返回。
+        新语义（独占任务模式）：不再直接对 context 调 __aexit__——那会把
+        在别的任务里进入的 anyio 取消作用域拉到本任务退出，触发
+        "Attempted to exit cancel scope in a different task than it was
+        entered in"，且作用域永不闭合。改为：置 _shutdown 通知连接任务
+        自行退出 async with，并有界 join 等它把子进程收尸；任务迟迟不
+        结束才补刀取消。细节见 _reap_conn_task。
         """
         async with self._cleanup_lock:
-            if not (self._client_context or self._stdio_context or self.session):
+            if self._conn_task is None and self.session is None:
                 return
-
-            try:
-                if self._client_context:
-                    await self._client_context.__aexit__(None, None, None)
-            except Exception as e:
-                self._log("warning", f"清理会话时出错: {e}")
-            finally:
-                self._client_context = None
-
-            try:
-                if self._stdio_context:
-                    await self._stdio_context.__aexit__(None, None, None)
-            except Exception as e:
-                self._log("warning", f"清理 stdio 连接时出错: {e}")
-            finally:
-                self._stdio_context = None
-
+            # 先摘会话引用：并发的 call_tool 会立刻看到「后端未运行」，
+            # 而不是对着一个正在死去的会话干等
             self.session = None
+            await self._reap_conn_task(cancel=False)
 
     def _mark_broken(self, reason: str):
         """连接已不可用时调用：置为 error 并在后台清理，避免继续复用坏连接"""
         self.status = self.STATUS_ERROR
         self.last_error = reason
         self._log("error", f"连接不可用: {reason}")
-        if self._stdio_context or self._client_context:
+        if self._conn_task is not None:
             asyncio.create_task(self._safe_cleanup())
 
     async def _safe_cleanup(self):
@@ -461,9 +751,10 @@ class BackendClient:
             try:
                 await asyncio.sleep(self.HEARTBEAT_INTERVAL)
                 if self.session:
-                    await asyncio.wait_for(
-                        self.session.ping(), timeout=self.HEARTBEAT_TIMEOUT
-                    )
+                    # anyio 原生限时：wait_for 会从外部任务取消协程，撕裂
+                    # anyio 取消作用域栈并带崩整个 Server 进程（详见 start()）
+                    with anyio.fail_after(self.HEARTBEAT_TIMEOUT):
+                        await self.session.ping()
                     self._last_heartbeat = time.time()
                     self._log("debug", "心跳正常")
             except asyncio.CancelledError:
@@ -482,9 +773,9 @@ class BackendClient:
         if not self.session:
             return
         try:
-            tools = await asyncio.wait_for(
-                self.session.list_tools(), timeout=self.timeout
-            )
+            # anyio 原生限时（不用 asyncio.wait_for，原因见 start() 注释）
+            with anyio.fail_after(self.timeout):
+                tools = await self.session.list_tools()
             self._cached_tools = [
                 {
                     "name": t.name,
@@ -495,7 +786,7 @@ class BackendClient:
             ]
             self._tools_cache_time = time.time()
             self._log("info", f"工具列表已刷新，共 {len(self._cached_tools)} 个工具")
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._mark_broken(f"刷新工具列表超时（{self.timeout}s）")
         except Exception as e:
             self._log("warning", f"刷新工具列表失败: {e}")
@@ -534,10 +825,10 @@ class BackendClient:
 
         async with self._call_lock:
             try:
-                result = await asyncio.wait_for(
-                    self.session.call_tool(tool_name, arguments), timeout=self.timeout
-                )
-            except asyncio.TimeoutError:
+                # anyio 原生限时（不用 asyncio.wait_for，原因见 start() 注释）
+                with anyio.fail_after(self.timeout):
+                    result = await self.session.call_tool(tool_name, arguments)
+            except TimeoutError:
                 # 超时通常意味着连接已经废了，标记后让后续请求快速失败而不是继续卡
                 reason = f"调用工具 '{tool_name}' 超时（{self.timeout}s）"
                 self._mark_broken(reason)
@@ -771,17 +1062,17 @@ class BackendManager:
         return {"success": True, "backends": all_status}
 
     def get_backend_logs(self, tool_id: str, level: str | None = None, limit: int = 50) -> dict:
-        """获取后端日志"""
+        """获取后端 MCP Server 的运行日志"""
         client = self.get_client(tool_id)
         if not client:
-            return {"success": False, "error": f"工具 '{tool_id}' 未配置"}
+            return {"success": False, "error": f"MCP 工具 '{tool_id}' 未配置"}
         return {"success": True, "logs": client.get_logs(level, limit)}
 
     def set_backend_log_level(self, tool_id: str, level: str) -> dict:
-        """设置后端日志级别"""
+        """设置后端 MCP Server 的日志级别"""
         client = self.get_client(tool_id)
         if not client:
-            return {"success": False, "error": f"工具 '{tool_id}' 未配置"}
+            return {"success": False, "error": f"MCP 工具 '{tool_id}' 未配置"}
         return client.set_log_level(level)
 
     async def call_backend_tool(self, tool_id: str, tool_name: str, arguments: dict) -> dict:

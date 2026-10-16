@@ -765,6 +765,29 @@ GetPromptResult"）→ **prompts/get 全部失败**。
     服务启动时 `ensure_all_installed()` 后台预热（只装不启），合计 **106 passed**
     （见 §0 第九次更新）；已用临时探针工具实测「预热自装 → 复检可用 → start 越过自装」全链路。
 
+**第十批（已完成 ✅）**
+
+25. ~~**A7** —— `wait_for` 取消损坏 anyio 作用域 + server 启动 PATH 自愈 +
+    安装锁有界等待~~ → 5 处 `asyncio.wait_for` 改 `anyio.fail_after`（同一任务内
+    取消，作用域栈完整）；`ensure_npm_bin_on_path()` 在 npm 全局 bin 不在 PATH
+    时自动解析 `npm prefix -g` 并注入（子进程 `stdin=DEVNULL`，见 A8 背景）；
+    安装锁等待加超时（`start_backend` 不再被别人的 `npm i -g` 无限期堵住）；
+    安装命令 spawn 同样补 `stdin=DEVNULL`。合计 **113 passed**
+
+26. ~~**A8** —— 后端连接生命周期收拢进独占任务~~ → `_connection_loop`：
+    `stdio_client` / `ClientSession` 的 `async with` 进出都在同一任务内闭合
+    （anyio `CancelScope` 绑定进入它的任务，跨任务进出必崩）；start/cleanup
+    只经 `_ready` / `_shutdown` 事件与有界 join 协作。合计 **117 passed**
+
+> A7/A8 背景（2026-10-16 实证，toolport 网关 4/4 事故同款）：
+> ① 网关 env dump 证明传入的是**完整环境**（200 个变量，PATH 含 npm-global），
+> 「PATH 被裁剪」的原诊断是错的；② 真根因是 npm 子进程**继承了 server 的
+> stdin（网关管道）**，阻塞在读 stdin 上 → `communicate()` 永不返回 →
+> 30s 超时 → anyio 作用域损坏 → 进程 exit 1；③ `wait_for` 从外部任务取消
+> 协程会撕裂作用域栈（客户端其实已收到成功响应，崩在响应之后）；
+> ④ 修复后裸 JSON-RPC 回归（与 Go 网关同构）：start_backend 3.6s 成功、
+> 两场景退出码均为 0、stderr 零错误。
+
 > 原先 §8 里有一个重复编号的「第三批（迭代，一致性）」小节，已合并到上面的批次。
 
 ---
@@ -778,9 +801,9 @@ pip install "mcp>=1.30.0,<2.0.0" pytest
 # 2) 静态检查
 python -m py_compile src/*.py tests/*.py scripts/*.py
 
-# 3) 单元测试（106 项：store/registry + backend_client 稳定性与依赖自装 + store 容错/原子写
+# 3) 单元测试（117 项：store/registry + backend_client 稳定性与依赖自装 + store 容错/原子写
 #    + server 分发与启动预热 + 搜索语义/schema 校验/annotations/destructive 门禁 + 协议层回环
-#    + 文档与 schema 的一致性）
+#    + 文档与 schema 的一致性 + 连接独占任务/anyio 作用域同一任务闭合 + PATH 自愈）
 python -m pytest tests/ -q
 
 # 3.1) 只查文档漂移（CI 友好，漂移时退出码 1）
@@ -880,7 +903,10 @@ A4 由 `tests/test_docs_sync.py` 覆盖，A5（structuredContent / outputSchema�
 `tests/test_protocol_roundtrip.py` + `tests/test_server_dispatch.py` 覆盖，
 A6（依赖自装 + 启动预热）由 `tests/test_backend_client.py`（剥壳解包 / 安装各分支 /
 超时杀进程 / start 前置调用 / 预热遍历）与 `tests/test_server_dispatch.py`
-（预热日志与异常吞掉）覆盖，并用上述探针脚本做过真实安装链路复现
-（合计 `106 passed`），
+（预热日志与异常吞掉）覆盖，并用上述探针脚本做过真实安装链路复现，
 并已用真实后端子进程做过完整启停 + 调用回归：启动成功 → 自动同步 3 个工具 →
 `lastSynced` 写入真实时间戳 → 调用 `search_files` 返回结果 → 停止后状态回到 `stopped`。
+A7（fail_after 化 / PATH 自愈 / stdin 隔离 / 安装锁有界等待）与 A8（连接独占任务）
+由 `tests/test_backend_client.py` 新增用例覆盖（同一任务进出 context、start 超时
+不留孤儿连接任务、stop 后子进程回收），并用裸 JSON-RPC 管道脚本在网关等效环境下
+端到端复测：start_backend 3.6s 成功、退出码 0、stderr 零错误（合计 `117 passed`）。

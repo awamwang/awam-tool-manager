@@ -79,7 +79,7 @@ awam-tool-manager/
 │   ├── store.py              # JSON 存储层（139 行，读容错 + 原子写）
 │   ├── registry.py           # 工具注册中心（140 行，含条目校验过滤）
 │   ├── schema.py             # 两层数据的 JSON Schema 与校验（240 行，**文档生成源**）
-│   └── backend_client.py     # 后端 MCP 客户端与连接池（842 行）
+│   └── backend_client.py     # 后端 MCP 客户端与连接池（1133 行）
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表（148 行）
 └── tests/                    # 7 个文件，106 个用例（含真实 MCP 会话与文档漂移检测）
@@ -192,8 +192,8 @@ awam-tool-manager/
 | `store.py` | 139 | JSON 文件的读写与目录遍历，读有容错、写走原子替换，无缓存 | 标准库 |
 | `schema.py` | 240 | 两层数据的 JSON Schema 与校验（`jsonschema` 可选，缺失时降级）；**同时是 `docs/format.md` 字段表的唯一生成源** | `jsonschema`(可选) |
 | `registry.py` | 140 | 工具查询语义（列表 / 搜索含 `id` / 详情 / 启动信息），加载时过滤不合规条目 | `store`、`schema` |
-| `backend_client.py` | 842 | 后端 MCP 子进程的连接管理、调用转发、缓存、心跳、日志、依赖自装 | `mcp`、`store` |
-| `server.py` | 796 | MCP 协议入口，定义并分发全部对外能力（含 annotations 与 destructive 门禁），启动时后台预热后端依赖 | `mcp`、`store`、`registry`、`backend_client`、`schema` |
+| `backend_client.py` | 1133 | 后端 MCP 子进程的连接管理、调用转发、缓存、心跳、日志、依赖自装 | `mcp`、`store` |
+| `server.py` | 801 | MCP 协议入口，定义并分发全部对外能力（含 annotations 与 destructive 门禁），启动时后台预热后端依赖 | `mcp`、`store`、`registry`、`backend_client`、`schema` |
 | `scripts/generate_format_doc.py` | 148 | 读 `schema.py` 渲染字段表并就地替换 `docs/format.md` 的生成区块；`--check` 做漂移检查 | 标准库、`schema` |
 
 ### 5.3 后端路由调用链
@@ -232,6 +232,25 @@ call_backend_tool(tool_id, tool_name, arguments)
 - `start()` 与 `stop()` 共用 `_lock`，避免状态与真实连接不一致；
 - `start()` 开头会清理上次残留的 context（例如心跳失败后遗留的）；
 - 所有清理统一走 `_cleanup()`，用独立的 `_cleanup_lock` 保证**串行且幂等**。
+
+**连接独占任务（anyio 作用域硬约束）**：
+
+`mcp` SDK 的 `stdio_client` 与 `ClientSession` 的 `__aenter__` 都会进入各自内部
+TaskGroup 的取消作用域，而 anyio 的 `CancelScope` **绑定进入它的任务**——进入与
+退出不在同一任务内就会 `RuntimeError: Attempted to exit a cancel scope...`。
+因此整条连接（spawn → 握手 → 持有 → 拆除）由 `_connection_loop` 这一个独占任务
+持有，两个 context 都用 `async with` 在同一任务内闭合；请求 / 心跳 / 清理任务只
+通过 `self.session`（memory stream + future，跨任务安全）与 `_ready` / `_shutdown`
+事件协作。取消路径（start 超时 / 调用方被取消）走 `task.cancel()`，
+`CancelledError` 在 `async with` 的退出逻辑中传播，拆除照常。
+
+> 2026-10-16 实证：toolport 网关「启动即崩 / 调用超时」是同族故障——
+> `asyncio.wait_for` 从外部任务取消协程会撕裂作用域栈；修复前客户端其实已收到
+> 成功响应，崩溃发生在响应之后（进程 exit 1）。
+
+**子进程 stdin 隔离**：`ensure_npm_bin_on_path()` 与安装命令的 spawn 一律传
+`stdin=DEVNULL`。server 自身经 stdio 管道与网关通信，子进程若继承这条 stdin，
+npm/cli 链会阻塞在读 stdin 上永不返回（表现为启动挂死 → 网关 30s 超时）。
 
 ---
 

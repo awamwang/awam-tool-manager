@@ -4,6 +4,8 @@
 只验证状态机、清理顺序、超时与缓存保护四件事。
 """
 import asyncio
+import contextlib
+import os
 import shutil
 import sys
 import time
@@ -13,6 +15,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import backend_client  # noqa: E402  —— monkeypatch 需要模块对象本身
 from backend_client import BackendClient, BackendManager, BackendBusyError  # noqa: E402
+
+# conftest 的 autouse 夹具默认把 ensure_npm_bin_on_path 打成 noop；
+# 需要验证 PATH 自愈本身的用例从这里拿原始实现，再 monkeypatch 覆盖回去。
+REAL_ENSURE_NPM_BIN = backend_client.ensure_npm_bin_on_path
 
 
 class FakeContext:
@@ -44,11 +50,35 @@ class FakeBackendClient(BackendClient):
         self._tools_stub = [{"name": "a"}, {"name": "b"}]
 
     def attach(self, fail_client_exit=False):
-        self._client_context = FakeContext(
+        """模拟一条已建立的连接：连接任务持有两个假 context 等待停止信号
+
+        与真实 _connection_loop 同构：stdio_client / ClientSession 的
+        进入与退出都在同一个任务内完成——这正是 anyio 作用域的正确用法，
+        也是被测行为的一部分。
+        """
+        client_ctx = FakeContext(
             "client", self.tracker, fail_exit=fail_client_exit
         )
-        self._stdio_context = FakeContext("stdio", self.tracker)
+        stdio_ctx = FakeContext("stdio", self.tracker)
+        self._client_context = client_ctx
+        self._stdio_context = stdio_ctx
         self.session = object()  # 占位，表示已有会话
+        self._ready = asyncio.Event()
+        self._ready.set()
+        self._shutdown = asyncio.Event()
+
+        async def loop():
+            try:
+                async with stdio_ctx:
+                    async with client_ctx:
+                        await self._shutdown.wait()
+            finally:
+                # 与真实 _connection_loop 一致：任务终结即清对外引用
+                self.session = None
+                self._stdio_context = None
+                self._client_context = None
+
+        self._conn_task = asyncio.create_task(loop())
 
 
 def test_timeout_read_from_config():
@@ -113,20 +143,38 @@ def test_stop_is_serialized_with_start():
 
 
 def test_start_cleans_stale_connection():
-    """D7：error 状态下重新 start，先清掉上次残留，避免孤儿进程"""
+    """D7：error 状态下重新 start，先收尸上次残留的连接任务，避免孤儿进程"""
 
     async def run():
         client = FakeBackendClient()
         client.status = BackendClient.STATUS_ERROR
+        # 上一轮连接的残留：conn_task 还持有旧 stdio context 没退出去
         old_stdio = FakeContext("old_stdio", client.tracker)
         client._stdio_context = old_stdio
+        client._ready = asyncio.Event()
+        client._ready.set()
+        client._shutdown = asyncio.Event()
+
+        async def stale_loop():
+            try:
+                async with old_stdio:
+                    await client._shutdown.wait()
+            finally:
+                # 与真实 _connection_loop 一致：任务终结即清对外引用
+                client.session = None
+                client._stdio_context = None
+                client._client_context = None
+
+        client._conn_task = asyncio.create_task(stale_loop())
+        await asyncio.sleep(0)  # 让 stale_loop 先进入 async with
         # start() 会在清理后尝试真正拉起子进程；这里用魔数让它停在连接类型校验前
         client.connection_config["type"] = "unsupported"
         await client.start()
         return client
 
     client = asyncio.run(run())
-    assert "exit:old_stdio" in client.tracker
+    assert "exit:old_stdio" in client.tracker  # 残留连接被优雅收尸
+    assert client._conn_task is None
     assert client._stdio_context is None
 
 
@@ -853,3 +901,434 @@ def test_ensure_all_installed_warms_every_mcp_tool(monkeypatch):
 
     by_id = {d["tool_id"]: d for d in result["details"]}
     assert by_id["mcp2"]["available"] is False  # 没配 install：不阻塞，如实报告
+
+
+# ---------------------------------------------------------------------------
+# A7：调用方超时预算内的有界返回 + PATH 自愈 + anyio 作用域安全
+#
+# 背景（2026-10-16 实测）：经 toolport 网关调用 start_backend，4/4 在整整
+# 30000ms 超时。网关的 tools/call 预算 30s，超时后取消请求——而
+# asyncio.wait_for 从外部任务取消 anyio 协程会撕裂取消作用域栈，把整个
+# MCP Server 进程带崩（RuntimeError: Attempted to exit a cancel scope...）。
+# 三个修复：限时改用 anyio.fail_after；安装锁等待有界；PATH 自愈避免
+# 误触发数十秒的 npm 安装。
+# ---------------------------------------------------------------------------
+
+
+class _HangingInstallProcess:
+    """模拟卡住不返回的安装进程（npm i -g 在跑）"""
+
+    def __init__(self):
+        self.returncode = None
+        self.killed = False
+
+    async def communicate(self):
+        await asyncio.Event().wait()  # 永远挂住，直到被取消
+
+    def kill(self):
+        self.killed = True
+
+    async def wait(self):
+        return self.returncode
+
+
+class _FakeNpmPrefixProcess:
+    """模拟 npm prefix -g 的假进程"""
+
+    def __init__(self, prefix: str, returncode: int = 0):
+        self._prefix = prefix
+        self.returncode = returncode
+        self.killed = False
+
+    async def communicate(self):
+        if self.returncode != 0:
+            return (b"", b"npm not found")
+        return (f"{self._prefix}\n".encode("utf-8"), b"")
+
+    def kill(self):
+        self.killed = True
+
+    async def wait(self):
+        return self.returncode
+
+
+def _fake_shell_dispatch(prefix: str, returncode: int = 0, log: list | None = None):
+    """create_subprocess_shell 的假实现：npm prefix 走假 prefix 进程，
+    其余命令记入 log 并返回立即成功的假安装进程"""
+
+    async def factory(command, **kwargs):
+        if log is not None:
+            log.append(command)
+        if command.strip().startswith("npm prefix"):
+            return _FakeNpmPrefixProcess(prefix, returncode)
+        return FakeInstallProcess()
+
+    return factory
+
+
+def test_ensure_installed_returns_installing_when_lock_held(monkeypatch):
+    """A7：别人正持锁安装时，本请求不干等，快速返回 installing"""
+    monkeypatch.setattr(BackendClient, "INSTALL_LOCK_TIMEOUT", 0.2)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+
+    async def hanging_shell(command, **kwargs):
+        return _HangingInstallProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", hanging_shell)
+
+    async def scenario():
+        client = BackendClient(
+            "x",
+            {"command": "cmd.exe", "args": ["/c", "foo"]},
+            {"command": "npm i -g foo"},
+        )
+        installer = asyncio.create_task(client.ensure_installed())
+        await asyncio.sleep(0.05)  # 让 installer 拿到锁并进入安装
+
+        t0 = time.monotonic()
+        result = await client.ensure_installed()
+        elapsed = time.monotonic() - t0
+
+        assert result.get("installing") is True
+        assert result.get("success") is False
+        assert elapsed < 1.0, "不应干等整个安装（调用方的 tools/call 预算有限）"
+
+        installer.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await installer
+
+    asyncio.run(scenario())
+
+
+def test_cancelled_install_does_not_poison_retry(monkeypatch):
+    """A7：安装被取消（调用方断开/网关超时）时不标记 attempted，重试还能再装"""
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+
+    class _CancelOnFirst:
+        """第一次 communicate 被取消；第二次正常成功"""
+
+        def __init__(self):
+            self.round = 0
+            self.returncode = 0
+            self.killed = False
+
+        async def communicate(self):
+            self.round += 1
+            if self.round == 1:
+                await asyncio.Event().wait()  # 挂住等取消
+            return (b"", b"")
+
+        def kill(self):
+            self.killed = True
+
+        async def wait(self):
+            return self.returncode
+
+    # 进程实例只建一次：第一次 communicate 挂住等取消，重试时同一实例
+    # round=2 走到成功分支（若每次新建，round 归零会再次挂起 → 测试死锁）
+    proc = _CancelOnFirst()
+
+    async def shell(command, **kwargs):
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", shell)
+
+    client = BackendClient(
+        "x",
+        {"command": "cmd.exe", "args": ["/c", "foo"]},
+        {"command": "npm i -g foo"},
+    )
+
+    async def scenario():
+        task = asyncio.create_task(client.ensure_installed())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        assert client._install_attempted is False, "被取消不算「装过」"
+
+        # 重试：安装重新执行并成功
+        result = await client.ensure_installed()
+        assert result.get("installed") is True
+        assert client._install_attempted is True
+
+    asyncio.run(scenario())
+
+
+def test_start_returns_installing_without_spawn(monkeypatch):
+    """A7：ensure_installed 报告 installing 时，start 直接返回、不 spawn"""
+
+    async def fake_ensure_installed(self):
+        return {
+            "success": False,
+            "available": False,
+            "installed": False,
+            "installing": True,
+            "note": "依赖正在安装中，请稍后重试",
+        }
+
+    monkeypatch.setattr(BackendClient, "ensure_installed", fake_ensure_installed)
+
+    def boom(*args, **kwargs):
+        raise AssertionError("installing 时不应创建 stdio 连接")
+
+    monkeypatch.setattr(backend_client, "stdio_client", boom)
+
+    client = BackendClient("x", {"command": "cmd.exe", "args": ["/c", "foo"]})
+    result = asyncio.run(client.start())
+
+    assert result["success"] is False
+    assert result["status"] == "installing"
+    assert "稍后重试" in result["message"]
+    assert client.status == BackendClient.STATUS_STOPPED
+
+
+def test_ensure_npm_bin_on_path_patches_path_and_caches(monkeypatch, tmp_path):
+    """A7：PATH 自愈成功时补入目录，且结果进程级缓存（不反复跑 npm）"""
+    bin_dir = tmp_path / "npm-global"
+    bin_dir.mkdir()
+    monkeypatch.setattr(backend_client, "_npm_bin_dir", None)
+    monkeypatch.setenv("PATH", str(tmp_path))  # 模拟被裁剪的环境：不含 bin_dir
+
+    log = []
+    monkeypatch.setattr(
+        asyncio, "create_subprocess_shell", _fake_shell_dispatch(str(bin_dir), log=log)
+    )
+    result = asyncio.run(REAL_ENSURE_NPM_BIN())
+    assert result == str(bin_dir)
+    assert str(bin_dir) in os.environ["PATH"].split(os.pathsep)
+    assert log == ["npm prefix -g"]
+
+    # 第二次命中缓存：不再起子进程
+    log.clear()
+
+    def boom(*args, **kwargs):
+        raise AssertionError("缓存命中时不应再跑 npm prefix")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", boom)
+    assert asyncio.run(REAL_ENSURE_NPM_BIN()) == str(bin_dir)
+    assert log == []
+
+
+def test_ensure_npm_bin_on_path_failure_is_silent_and_cached(monkeypatch):
+    """A7：npm 不可用时静默返回 None，不动 PATH，失败也进缓存不重试"""
+    monkeypatch.setattr(backend_client, "_npm_bin_dir", None)
+    log = []
+    monkeypatch.setattr(
+        asyncio,
+        "create_subprocess_shell",
+        _fake_shell_dispatch("", returncode=1, log=log),
+    )
+    before = os.environ.get("PATH", "")
+
+    assert asyncio.run(REAL_ENSURE_NPM_BIN()) is None
+    assert os.environ.get("PATH", "") == before
+    assert log == ["npm prefix -g"]
+
+    # 失败同样缓存：不再跑第二次
+    log.clear()
+    assert asyncio.run(REAL_ENSURE_NPM_BIN()) is None
+    assert log == []
+
+
+def test_ensure_installed_resolves_target_from_npm_bin_without_installing(
+    monkeypatch, tmp_path
+):
+    """A7：PATH 自愈后目标可解析——不触发安装（网关裁剪 PATH 的场景）"""
+    bin_dir = tmp_path / "npm-global"
+    bin_dir.mkdir()
+    target = "awam-probe-cli"
+    exe = bin_dir / (target + (".cmd" if os.name == "nt" else ""))
+    exe.write_text("stub", encoding="utf-8")
+    if os.name != "nt":  # pragma: no cover - 本仓库主要在 Windows 上跑
+        exe.chmod(0o755)
+
+    log = []
+    monkeypatch.setattr(backend_client, "_npm_bin_dir", None)
+    monkeypatch.setattr(
+        asyncio, "create_subprocess_shell", _fake_shell_dispatch(str(bin_dir), log=log)
+    )
+    monkeypatch.setenv("PATH", str(tmp_path))  # 裁剪环境：没有 bin_dir
+    # ensure_installed 内部要走真实的 PATH 自愈（conftest 默认打成 noop）
+    monkeypatch.setattr(backend_client, "ensure_npm_bin_on_path", REAL_ENSURE_NPM_BIN)
+
+    client = BackendClient(
+        "x",
+        {"command": "cmd.exe", "args": ["/c", target]},
+        {"command": f"npm i -g {target}"},
+    )
+    result = asyncio.run(client.ensure_installed())
+
+    assert result == {"success": True, "available": True, "installed": False}
+    assert log == ["npm prefix -g"], "PATH 自愈解决后不应触发安装"
+
+
+# ---------------------------------------------------------------------------
+# A8：连接生命周期独占任务化——anyio 取消作用域的任务绑定
+#
+# 背景（2026-10-16 实证）：stdio_client 与 ClientSession 的 __aenter__ 都会
+# 进入各自内部 TaskGroup 的 anyio CancelScope，而 CancelScope 绑定「进入它
+# 的任务」。旧实现在 start 的调用任务里 __aenter__、事后再在清理任务里
+# __aexit__，后果：
+#   1. 请求任务作用域栈上留下永不闭合的内层作用域，mcp SDK 的
+#      RequestResponder 在工具响应发出之后退出时踩空：
+#      RuntimeError: Attempted to exit a cancel scope that isn't the
+#      current tasks's current cancel scope → TaskGroup → Server 进程
+#      exit 1（toolport 网关审计 4/4，响应已到达客户端之后才崩）；
+#   2. 清理任务 __aexit__ 报 Attempted to exit cancel scope in a
+#      different task than it was entered in（被兜住，但作用域泄漏）。
+# 修复：连接的一生（spawn/握手/持有/拆除）收拢进 _connection_loop 独占
+# 任务，其他任务只用 self.session 或经 _ready/_shutdown 事件协作。
+# ---------------------------------------------------------------------------
+
+
+class _RecordingStdio:
+    """记录 __aenter__/__aexit__ 发生在哪个任务的假 stdio_client"""
+
+    def __init__(self, events: list):
+        self.events = events
+
+    async def __aenter__(self):
+        self.events.append(("enter", "stdio", asyncio.current_task()))
+        return (object(), object())
+
+    async def __aexit__(self, *args):
+        self.events.append(("exit", "stdio", asyncio.current_task()))
+
+
+class _RecordingSession:
+    """记录 __aenter__/__aexit__ 任务的假 ClientSession（initialize 等均成功）"""
+
+    def __init__(self, events: list):
+        self.events = events
+
+    async def __aenter__(self):
+        self.events.append(("enter", "session", asyncio.current_task()))
+        return self
+
+    async def __aexit__(self, *args):
+        self.events.append(("exit", "session", asyncio.current_task()))
+
+    async def initialize(self):
+        pass
+
+    async def list_tools(self):
+        class _Result:
+            tools = []
+
+        return _Result()
+
+
+def test_connection_contexts_enter_and_exit_in_same_task(monkeypatch):
+    """A8：stdio_client / ClientSession 必须在同一任务内进入并退出
+
+    这是 anyio CancelScope 的硬约束。旧实现跨任务进出，直接把整个
+    MCP Server 进程带崩（见本节背景）。start 与 stop 特意跑在不同任务里
+    （≈ 真实 server：start 在 tools/call 请求任务，close_all 在主任务），
+    旧实现在此必然 enter/exit 任务不一致。
+    """
+    events: list = []
+    monkeypatch.setattr(backend_client, "stdio_client", lambda params: _RecordingStdio(events))
+    monkeypatch.setattr(backend_client, "ClientSession", lambda r, w: _RecordingSession(events))
+
+    async def scenario():
+        client = BackendClient(
+            "x", {"command": "cmd.exe", "args": ["/c", "foo"], "timeout": 5}
+        )
+        start_result = await asyncio.create_task(client.start())
+        assert start_result["success"] is True
+        caller = asyncio.current_task()
+        # 清理跑在另一个任务里：≈ 真实 server 的 close_all 所在主任务
+        await asyncio.create_task(client.stop())
+        return caller
+
+    caller = asyncio.run(scenario())
+
+    enters = {name: task for phase, name, task in events if phase == "enter"}
+    exits = {name: task for phase, name, task in events if phase == "exit"}
+    assert set(enters) == {"stdio", "session"}, f"进入事件不全: {events}"
+    assert set(exits) == {"stdio", "session"}, f"退出事件不全: {events}"
+    for name in ("stdio", "session"):
+        assert enters[name] is exits[name], (
+            f"{name} 的进入与退出不在同一任务——anyio 作用域踩空回归"
+        )
+        assert enters[name] is not caller, f"{name} 不应压在调用方任务的作用域栈上"
+
+
+class _HangingStdio:
+    """__aenter__ 永远挂住（模拟 spawn 卡死）"""
+
+    async def __aenter__(self):
+        await asyncio.Event().wait()
+        return (object(), object())  # pragma: no cover
+
+    async def __aexit__(self, *args):
+        pass  # pragma: no cover
+
+
+def test_start_timeout_reaps_connection_task(monkeypatch):
+    """A8：等待就绪超时必须收尸连接任务——否则子进程孤儿、任务泄漏"""
+    monkeypatch.setattr(backend_client, "stdio_client", lambda params: _HangingStdio())
+
+    async def scenario():
+        client = BackendClient(
+            "x", {"command": "cmd.exe", "args": ["/c", "foo"], "timeout": 0.2}
+        )
+        result = await client.start()
+        return client, result
+
+    client, result = asyncio.run(scenario())
+
+    assert result["success"] is False
+    assert "超时" in result["error"]
+    assert client._conn_task is None, "超时后连接任务必须被回收"
+    assert client.status == BackendClient.STATUS_ERROR
+
+
+class _SlowStdio:
+    """__aenter__ 慢到超过调用方耐心（模拟握手窗口内的网关取消）"""
+
+    async def __aenter__(self):
+        await asyncio.sleep(5)
+        return (object(), object())  # pragma: no cover
+
+    async def __aexit__(self, *args):
+        pass  # pragma: no cover
+
+
+def test_start_cancelled_midflight_reaps_connection_task(monkeypatch):
+    """A8：start 在途被取消（调用方断开/网关超时）也必须收尸连接任务"""
+    monkeypatch.setattr(backend_client, "stdio_client", lambda params: _SlowStdio())
+
+    async def scenario():
+        client = BackendClient(
+            "x", {"command": "cmd.exe", "args": ["/c", "foo"], "timeout": 10}
+        )
+        task = asyncio.create_task(client.start())
+        await asyncio.sleep(0.1)  # 让 start 进入等待就绪的窗口
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0.1)  # 双保险：收尸在取消路径里同步执行
+        return client
+
+    client = asyncio.run(scenario())
+
+    assert client._conn_task is None, "取消后连接任务必须被回收，不能留孤儿"
+
+
+def test_stop_joins_connection_task():
+    """A8：stop 返回时连接任务必须已收尸——子进程不会活过 stop"""
+
+    async def run():
+        client = FakeBackendClient()
+        client.status = BackendClient.STATUS_RUNNING
+        client.attach()
+        task = client._conn_task
+        await client.stop()
+        return client, task
+
+    client, task = asyncio.run(run())
+
+    assert task.done(), "stop 应等待连接任务自行拆除后再返回"
+    assert "exit:stdio" in client.tracker

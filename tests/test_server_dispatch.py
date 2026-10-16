@@ -322,9 +322,13 @@ def test_call_tool_returns_structured_result():
 def test_prewarm_logs_install_summary(monkeypatch, capsys):
     """预热装了什么要在启动日志里说清楚"""
 
+    async def fake_ensure_npm_bin():
+        return None
+
     async def fake_ensure_all_installed():
         return {"success": True, "total": 3, "available": 2, "installed": 1, "details": []}
 
+    monkeypatch.setattr(server, "ensure_npm_bin_on_path", fake_ensure_npm_bin)
     monkeypatch.setattr(
         server.backend_manager, "ensure_all_installed", fake_ensure_all_installed
     )
@@ -338,9 +342,13 @@ def test_prewarm_logs_install_summary(monkeypatch, capsys):
 def test_prewarm_logs_when_everything_ready(monkeypatch, capsys):
     """全部就绪时也留一行日志，避免「静默成功」无法确认预热跑过"""
 
+    async def fake_ensure_npm_bin():
+        return None
+
     async def fake_ensure_all_installed():
         return {"success": True, "total": 2, "available": 2, "installed": 0, "details": []}
 
+    monkeypatch.setattr(server, "ensure_npm_bin_on_path", fake_ensure_npm_bin)
     monkeypatch.setattr(
         server.backend_manager, "ensure_all_installed", fake_ensure_all_installed
     )
@@ -352,12 +360,38 @@ def test_prewarm_logs_when_everything_ready(monkeypatch, capsys):
 def test_prewarm_swallows_failures(monkeypatch, capsys):
     """预热异常必须被吞掉：服务照常就绪，退化为首次调用时按需安装"""
 
+    async def fake_ensure_npm_bin():
+        return None
+
     async def boom():
         raise RuntimeError("模拟预热炸了")
 
+    monkeypatch.setattr(server, "ensure_npm_bin_on_path", fake_ensure_npm_bin)
     monkeypatch.setattr(server.backend_manager, "ensure_all_installed", boom)
     run(server._prewarm_backends())  # 不抛异常即通过
 
     err = capsys.readouterr().err
     assert "启动预热失败" in err
     assert "不影响服务" in err
+
+
+def test_prewarm_patches_path_before_installing(monkeypatch):
+    """A7：预热必须先补 PATH 再判断依赖——网关裁剪 PATH 时不补就会
+    把已装好的包误判成缺失，白跑一次数十秒的安装"""
+    order = []
+
+    async def fake_ensure_npm_bin():
+        order.append("path")
+        return None
+
+    async def fake_ensure_all_installed():
+        order.append("install")
+        return {"success": True, "total": 1, "available": 1, "installed": 0, "details": []}
+
+    monkeypatch.setattr(server, "ensure_npm_bin_on_path", fake_ensure_npm_bin)
+    monkeypatch.setattr(
+        server.backend_manager, "ensure_all_installed", fake_ensure_all_installed
+    )
+    run(server._prewarm_backends())
+
+    assert order == ["path", "install"]
