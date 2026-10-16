@@ -220,13 +220,14 @@ SDK 已自带 `except Exception`，所以单个工具抛异常不会让 Server �
 
 ### 3.1 协议未约束的部分 ✅
 
-MCP **不规定** Server 内部如何持久化数据，因此 `data/tools/` + `data/backend-tools/`
+MCP **不规定** Server 内部如何持久化数据，因此 `data/tools/`（仓库内，人工维护）
++ 运行时目录 `backend-tools/`（`%LOCALAPPDATA%\.awam-tool-manager/`，自动生成）
 的两层 JSON 设计完全自由，不构成一致性问题。
 
 ### 3.2 `inputSchema` 合法性 ✅
 
 协议要求每个 Tool 的 `inputSchema` 是合法 JSON Schema（Draft 2020-12 子集）。
-本项目 12 个工具全部为：
+本项目 15 个工具全部为：
 
 ```json
 { "type": "object", "properties": { ... }, "required": [...] }
@@ -237,8 +238,8 @@ MCP **不规定** Server 内部如何持久化数据，因此 `data/tools/` + `d
 
 ### 3.3 后端子工具 schema 透传 ⚠️
 
-`data/backend-tools/*.json` 里的 `tools[]` 是从后端透传的，只保留了
-`name` / `description` / `inputSchema`。
+`data/backend-tools/*.json`（A14 起为运行时目录下的 `backend-tools/*.json`）里的
+`tools[]` 是从后端透传的，只保留了 `name` / `description` / `inputSchema`。
 
 MCP Tool 还可携带 `title` / `annotations` / `outputSchema`，这些在同步时丢失了。
 建议在 `_refresh_tools_cache` 里一并保存，供未来结构化输出与安全提示使用。
@@ -247,7 +248,7 @@ MCP Tool 还可携带 `title` / `annotations` / `outputSchema`，这些在同步
 
 writer 曾硬编码 `"lastSynced": "now"`（历史数据里存的就是这个值），无法判断缓存新鲜度。
 现已写入 `datetime.now(timezone.utc)` 的 `%Y-%m-%dT%H:%M:%SZ`，与 `docs/format.md` 的示例
-格式一致；真实后端回归后 `data/backend-tools/everything-search-mcp.json` 已更新为
+格式一致；真实后端回归后运行时目录的 `backend-tools/everything-search-mcp.json` 已更新为
 `"2026-10-15T12:04:56Z"`。
 
 ---

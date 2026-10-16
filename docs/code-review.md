@@ -905,6 +905,28 @@ GetPromptResult"）→ **prompts/get 全部失败**。
 > 经验：**外部程序集成时，退出码不可信是常态**；解析别人的数据时，
 > 「扫文本」和「解析后取值」是两条不同的路，选错就会静默拿到空结果。
 
+**第十六批（已完成 ✅）**
+
+34. ~~**A14：运行时数据混在仓库里，迁到 OS 惯例位置**~~ → `backend-tools/`、
+    `launcher-actions/`、`backend_desired_state.json` 这些是**运行时生成的数据**
+    （后端同步缓存、启动器动作缓存、期望状态），却一直躺在仓库 `data/` 下：
+    受 git 跟踪，多实例同时跑会被反复改写 `lastSynced`；用户想备份/清理网关
+    状态得连源码目录一起动。修复：新增 `src/runtime_paths.py`——
+    `get_runtime_dir()` 默认 `%LOCALAPPDATA%\.awam-tool-manager`（Windows 惯例），
+    可用环境变量 `AWAM_RUNTIME_DIR` 覆盖（测试即借此隔离到 tmp 目录）；
+    `migrate_legacy_runtime()` 在 server 启动时把旧路径数据一次性迁过去
+    （本机实测 4 个文件平移，不重复、不丢日志历史）。`JsonStore` 拆成
+    `tools_dir`（留 `data/tools/`，工具条目是**人工维护的真相源**）与
+    `backend_tools_dir`/`launcher_actions_dir`（走 runtime dir）。
+    `BackendClient` 的 `DESIRED_STATE_FILE` 从模块常量改为按 runtime dir 解析。
+    `.gitignore` 删掉两条已迁出的条目。合计 **168 passed**。
+
+> 测试同步处理：`tests/test_docs_sync.py` 原先对 `data/backend-tools/`
+> `glob("*.json")` 做参数化，目录迁空后用例会**静默消失**（等于丢失真实数据
+> 校验）——改为合成数据调 `validate_backend_catalog`；`test_registry.py` 的
+> 后端工具断言原先依赖已同步的真实缓存，改为 tmp store 自包含。
+> 又一次「把数据集当断言」的教训，与 A12 后两处同源。
+
 > 原先 §8 里有一个重复编号的「第三批（迭代，一致性）」小节，已合并到上面的批次。
 
 ---
@@ -919,10 +941,11 @@ pip install "mcp>=1.29.0,<2.0.0" pytest
 # 2) 静态检查
 python -m py_compile src/*.py tests/*.py scripts/*.py
 
-# 3) 单元测试（158 项：store/registry + backend_client 稳定性与依赖自装 + store 容错/原子写
+# 3) 单元测试（168 项：store/registry + backend_client 稳定性与依赖自装 + store 容错/原子写
 #    + server 分发与启动预热 + 搜索语义/schema 校验/annotations/destructive 门禁 + 协议层回环
 #    + 文档与 schema 的一致性 + 连接独占任务/anyio 作用域同一任务闭合 + PATH 自愈
-#    + 心跳探测 API 契约（send_ping 必须真实存在于 mcp.ClientSession））
+#    + 心跳探测 API 契约（send_ping 必须真实存在于 mcp.ClientSession）
+#    + 启动器动作清单解析/调用构造/GBK/自动刷新 + 运行时目录解析与旧路径迁移）
 python -m pytest tests/ -q
 
 # 3.1) 只查文档漂移（CI 友好，漂移时退出码 1）
@@ -1048,6 +1071,11 @@ A13（动作清单自动刷新）由 7 例覆盖：新鲜读缓存 / 陈旧自�
 对外工具暴露 `lastSynced` 与 `source`。陈旧一律用**改写 `lastSynced`** 制造而非
 等待 TTL 到期——依赖时钟刻度会让用例变 flaky（Windows 的 `time.time()` 约 15ms
 一跳，2026-10-16 已因此挂过一次）。同样做了红绿双向验证（合计 `158 passed`）。
+A14（运行时目录迁移）由 `tests/test_runtime_paths.py`（10 例）覆盖：
+默认路径取 `%LOCALAPPDATA%\.awam-tool-manager` / `AWAM_RUNTIME_DIR` 覆盖 /
+旧数据一次性迁移（含已存在时不重复搬）/ 迁移失败不影响启动；conftest 的 autouse
+fixture 把每个用例隔离到独立 tmp 目录，`JsonStore` 双目录拆分由 store 现有用例
+连带回归（合计 `168 passed`）。
 
 > 同批修掉两处**测试脆性**（都是把「数据集内容」当成断言）：`test_dispatch_kind_filter`
 > 写死 `ids == ["everything-search-mcp"]`、`test_generated_table_covers_every_field`

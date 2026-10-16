@@ -7,10 +7,20 @@ os.environ["PATH"]——对单测来说是杂质：慢（秒级）、依赖 npm 
 （monkeypatch 是可堆叠的，用例内的 patch 会盖住这里的默认 patch）。
 """
 
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
+
+# 运行时目录必须在 import 任何 src 模块**之前**定死：
+# `backend_client.DESIRED_STATE_FILE` 是 import 期求值的模块常量，晚一步设置
+# 就会指向真实的 %LOCALAPPDATA%\.awam-tool-manager——那会让测试读写用户真实
+# 运行时数据，而且因为不在仓库里，git status 根本看不出来。
+# conftest 由 pytest 最先加载，这里设置对后续所有 import 生效。
+_RUNTIME_ISOLATION_DIR = tempfile.mkdtemp(prefix="awam-runtime-")
+os.environ.setdefault("AWAM_RUNTIME_DIR", _RUNTIME_ISOLATION_DIR)
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 

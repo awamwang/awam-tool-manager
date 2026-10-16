@@ -18,11 +18,19 @@ def _warn(message: str) -> None:
 class JsonStore:
     """简单的 JSON 文件存储"""
 
-    def __init__(self, base_dir: str | Path):
+    def __init__(self, base_dir: str | Path, runtime_dir: str | Path | None = None):
+        """`base_dir` 放人写的声明（tools/），`runtime_dir` 放程序生成的数据。
+
+        `runtime_dir` 缺省时落在 `base_dir` 下——这是**向后兼容**的默认值：
+        测试一路都是 `JsonStore(tmp_path / "data")` 并假设子目录就在旁边，
+        改成强制分离会让它们全线崩。生产由 `server.py` 显式传入
+        `%LOCALAPPDATA%\\.awam-tool-manager`。
+        """
         self.base_dir = Path(base_dir)
+        self.runtime_dir = Path(runtime_dir) if runtime_dir else self.base_dir
         self.tools_dir = self.base_dir / "tools"
-        self.backend_tools_dir = self.base_dir / "backend-tools"
-        self.launcher_actions_dir = self.base_dir / "launcher-actions"
+        self.backend_tools_dir = self.runtime_dir / "backend-tools"
+        self.launcher_actions_dir = self.runtime_dir / "launcher-actions"
 
     def load_json(self, path: Path) -> dict[str, Any] | None:
         """读取 JSON 文件

@@ -29,18 +29,29 @@ awam-tool-manager/
 │   ├── architecture.md       # 架构说明
 │   ├── mcp-conformance.md    # MCP 协议一致性对比
 │   └── code-review.md        # 代码审核报告
-├── data/
-│   ├── tools/                # 工具条目（每个工具一个 JSON）
-│   └── backend-tools/        # 后端 MCP 子工具缓存（自动生成）
+├── data/                     # 仓库内只有人工维护的真相源（A14 起）
+│   └── tools/                # 工具条目（每个工具一个 JSON）
 ├── src/
 │   ├── server.py             # MCP Server 入口 + 对外工具定义 + 分发
-│   ├── store.py              # JSON 存储层
+│   ├── store.py              # JSON 存储层（tools 走仓库，缓存走运行时目录）
 │   ├── registry.py           # 工具注册中心（查询语义）
 │   ├── backend_client.py     # 后端 MCP 客户端与连接池
+│   ├── launcher_client.py    # 启动器适配器（非 MCP：Quicker）
+│   ├── runtime_paths.py      # 运行时目录解析 + 旧路径迁移
 │   └── schema.py             # 两层数据的 JSON Schema 校验 + 文档生成源
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 106 个用例（含真实 MCP 会话与文档漂移检测）
+└── tests/                    # 168 个用例（含真实 MCP 会话与文档漂移检测）
+```
+
+运行时数据（**不在仓库**，A14 起）：`%LOCALAPPDATA%\.awam-tool-manager/`
+（可用环境变量 `AWAM_RUNTIME_DIR` 覆盖；server 启动时自动从旧路径迁移）
+
+```
+%LOCALAPPDATA%/.awam-tool-manager/
+├── backend-tools/        # 后端 MCP 子工具缓存（自动生成）
+├── launcher-actions/     # 启动器动作清单缓存（自动生成）
+└── backend_desired_state.json  # 后端启动意图（A10 跨世代自愈用）
 ```
 
 > 早期版本曾有 `data/launchers/`（启动器配置）与 `src/adapters/`（启动器适配器），
@@ -70,7 +81,7 @@ awam-tool-manager/
 
 > `kind=launcher`（启动器，如 Quicker）不是 MCP：没有长连接，调用是一次性外部命令
 > （`QuickerStarter.exe -c<秒> "runaction:<ID或名称>?参数"`）。动作清单缓存在
-> `data/launcher-actions/{tool_id}.json`，`source=partial` 表示部分动作只拿到 ID
+> 运行时目录的 `launcher-actions/{tool_id}.json`，`source=partial` 表示部分动作只拿到 ID
 > （Quicker 的 `quicker.db` 是加密的，名称只能从 state 缓存 + 运行日志尽力解析）。
 >
 > **这份清单是活的**：缓存超过 5 分钟（`ACTIONS_CACHE_TTL`）时，`list`/`run` 会
@@ -118,8 +129,8 @@ CallToolResult 透传；生产环境 pyenv 3.12 即 1.29.0）。
 > 无需重启 MCP Server；运行中则不受影响（避免留下孤儿进程），需先 `stop_backend` 再 `start_backend`。
 > 坏掉的 JSON 会被跳过并打印 stderr 告警，不会导致整个服务不可用。
 
-> **后端状态跨进程自愈（A10）**：`start_backend` 成功会把启动意图落盘（`backend_desired_state.json`）。
-> 上游网关（toolport）会周期性整池回收它拉起的 MCP server 进程，回收后新进程内存状态清零——
+> **后端状态跨进程自愈（A10）**：`start_backend` 成功会把启动意图落盘（运行时目录的
+> `backend_desired_state.json`）。上游网关（toolport）会周期性整池回收它拉起的 MCP server 进程，回收后新进程内存状态清零——
 > 有了意图落盘，每个新进程启动时会**自动恢复**上次启动过的后端，用户任何时刻查状态都是 running；
 > `stop_backend` 会清除意图。若后端业务依赖本机应用（如 everything-search-mcp 依赖 Everything
 > 桌面程序的 IPC），业务成败取决于该应用是否运行，与连接管理无关。

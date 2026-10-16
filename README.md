@@ -39,23 +39,29 @@ python server.py
 |---|---|---|
 | `everything` | app | Everything 文件搜索（返回启动命令） |
 | `everything-search-mcp` | mcp | Everything 的 MCP 接口，可路由调用 `search_files` 等 |
+| `winget-mcp` | mcp | WinGet 官方 MCP：查询/安装升级包（安装受破坏性门禁） |
+| `quicker` | launcher | Quicker 启动器：列出/搜索/执行动作 |
 
-后续可接入：Steam、WinGet、npm、Scoop、uTools、WeGame、Quicker、PowerToys 等，
+后续可接入：Steam、npm、Scoop、uTools、WeGame、PowerToys 等，
 按 [新增工具步骤](SKILL.md#新增工具步骤) 添加 JSON 即可。
 
 ## 目录结构
 
 ```
-data/
-├── tools/           # 工具条目，每个工具一个 JSON
-└── backend-tools/   # 后端 MCP 子工具缓存（由 sync_backend_tools 自动生成）
+data/                  # 仓库内只有人工维护的真相源（A14 起）
+└── tools/             # 工具条目，每个工具一个 JSON
 src/
-├── server.py        # MCP Server 入口
-├── store.py         # JSON 存储层
-├── registry.py      # 工具注册中心
-└── backend_client.py# 后端 MCP 客户端与连接池
+├── server.py          # MCP Server 入口
+├── store.py           # JSON 存储层（tools 走仓库，缓存走运行时目录）
+├── registry.py        # 工具注册中心
+├── backend_client.py  # 后端 MCP 客户端与连接池
+├── launcher_client.py # 启动器适配器（Quicker）
+└── runtime_paths.py   # 运行时目录解析 + 旧路径迁移
 ```
 
+> 运行时数据（后端子工具缓存、启动器动作清单、后端启动意图）不在仓库，
+> 位于 `%LOCALAPPDATA%\.awam-tool-manager/`（`AWAM_RUNTIME_DIR` 可覆盖）。
+>
 > `data/launchers/` 与 `src/adapters/` 属于早期版本遗留，已在重构中移除，代码中不存在。
 
 ## 文档

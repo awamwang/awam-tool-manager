@@ -16,8 +16,12 @@ build/
 # WorkBuddy 的工作数据（记忆、会话等），不进版本库
 .workbuddy/
 
-# 运行时鉴权会话存储（server 自动生成，内容因运行而异）
-authorized_tokens.json
-
-# 后端期望状态（start_backend 意图落盘，运行时生成；见 backend_client A10）
-backend_desired_state.json
+# ---- 运行时数据：程序生成、因运行而异，统一在本机应用数据目录 ----
+# 默认 `%LOCALAPPDATA%\.awam-tool-manager`（可用 AWAM_RUNTIME_DIR 覆盖），
+# 见 src/runtime_paths.py。data/ 只留人写的声明（tools/）。
+#
+# 下面两条是**旧位置**：旧版本把它们写在仓库里。新版本启动时会迁移走
+# （server.main），但仍在跑的旧实例会继续往旧位置写，所以这里继续忽略，
+# 免得工作区又变脏。等所有实例都升级后可以删掉这两行。
+/data/backend-tools/
+/data/launcher-actions/

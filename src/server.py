@@ -39,16 +39,20 @@ except ImportError:  # pragma: no cover
 sys.path.insert(0, str(Path(__file__).parent))
 
 from store import JsonStore
+from runtime_paths import get_runtime_dir, migrate_legacy_runtime
 from registry import ToolRegistry
 from backend_client import BackendManager, ensure_npm_bin_on_path
 from launcher_client import LauncherError, LauncherManager
 from schema import schema_backend_available
 
-# 数据目录
+# 数据目录：DATA_DIR 放人写的声明（进版本库），RUNTIME_DIR 放程序生成的
+# 运行时数据（本机应用数据目录）。两者此前混在 data/ 下，导致活实例改写
+# lastSynced 时工作区永远脏。见 runtime_paths.py。
 DATA_DIR = Path(__file__).parent.parent / "data"
+RUNTIME_DIR = get_runtime_dir()
 
 # 初始化
-store = JsonStore(DATA_DIR)
+store = JsonStore(DATA_DIR, runtime_dir=RUNTIME_DIR)
 registry = ToolRegistry(store)
 backend_manager = BackendManager(store)
 launcher_manager = LauncherManager(registry, store)
@@ -950,6 +954,15 @@ async def main():
     log("=" * 50)
     log("awam-tool-manager MCP Server 启动中...")
     log(f"数据目录: {DATA_DIR}")
+    log(f"运行时目录: {RUNTIME_DIR}")
+
+    # 旧版本把运行时数据写在仓库里（data/backend-tools、data/launcher-actions、
+    # 根目录的 backend_desired_state.json），这里搬到运行时目录。只搬目标不存在的，
+    # 失败不阻断启动。
+    moved = migrate_legacy_runtime(DATA_DIR, RUNTIME_DIR, log=log)
+    if moved:
+        log(f"已迁移旧运行时数据到 {RUNTIME_DIR}: {', '.join(moved)}")
+
     all_tools = registry.list_all_tools()
     mcp_tools = [t for t in all_tools if t.get("kind") == "mcp"]
     log(f"已加载 {len(all_tools)} 个工具: {', '.join([t['id'] for t in all_tools])}")

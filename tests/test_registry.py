@@ -61,10 +61,21 @@ def test_registry_get_tool():
     assert tool["status"] == "installed"
 
 
-def test_registry_backend_tools():
-    """测试后端 MCP 子工具"""
-    data_dir = Path(__file__).parent.parent / "data"
-    store = JsonStore(data_dir)
+def test_registry_backend_tools(tmp_path):
+    """registry 能读到后端 MCP 的子工具清单
+
+    自己造数据而不是读仓库里的 `data/backend-tools/`：后者是**运行时缓存**
+    （2026-10-16 已迁到本机应用数据目录，见 runtime_paths.py），依赖它就等于
+    让单测依赖「本机同步过后端」这个前提——换个机器、清一次缓存就红。
+    """
+    store = JsonStore(tmp_path / "data")
+    store.save_backend_tools(
+        "everything-search-mcp",
+        [
+            {"name": "search_files", "description": "搜索文件"},
+            {"name": "get_file_info", "description": "文件信息"},
+        ],
+    )
     registry = ToolRegistry(store)
 
     backend_tools = registry.list_backend_tools("everything-search-mcp")

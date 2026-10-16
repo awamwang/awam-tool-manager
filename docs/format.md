@@ -9,7 +9,8 @@
 
 ## 数据层 1：工具条目（Tool Entry）
 
-> **只有这两个"层"是数据层**：`data/tools/`（人工维护）与 `data/backend-tools/`（自动生成）。
+> **只有这两个"层"是数据层**：`data/tools/`（人工维护，在仓库内）与后端子工具缓存
+> `backend-tools/`（自动生成，在运行时目录 `%LOCALAPPDATA%\.awam-tool-manager/`，A14 起迁出仓库）。
 > 下面第 3 节列出的「对外 MCP 工具」是**对外契约**，不是存储在磁盘上的数据层，
 > 早期文档把它算作第 3 层容易造成"三层架构"的误解。
 
@@ -134,7 +135,8 @@
 
 ## 数据层 2：后端子工具缓存（Backend Tool Catalog）
 
-由 `sync_backend_tools` 自动生成并写入 `data/backend-tools/{tool_id}.json`，**不建议手工编辑**。
+由 `sync_backend_tools` 自动生成并写入**运行时目录**的 `backend-tools/{tool_id}.json`
+（`%LOCALAPPDATA%\.awam-tool-manager/`，A14 前在 `data/backend-tools/`），**不建议手工编辑**。
 结构同样由 `src/schema.py` 的 `BACKEND_CATALOG_SCHEMA` 定义并生成本表。
 
 <!-- BEGIN:generated:backend-catalog -->
@@ -169,6 +171,27 @@
   ]
 }
 ```
+
+---
+
+## 数据层 2.5：启动器动作清单（Launcher Action Catalog）
+
+由 `sync_launcher_actions` 自动生成并写入**运行时目录**的
+`launcher-actions/{tool_id}.json`（与数据层 2 同构），**不建议手工编辑**。
+结构由 `src/schema.py` 的 `LAUNCHER_ACTIONS_SCHEMA` 定义（本表为手写，
+未纳入生成器，改结构时请同步更新此处与 schema）。
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `parent` | `string` | ✅ | 父启动器工具的 ID（`kind=launcher`） |
+| `lastSynced` | `string` | - | 上次同步时间，ISO 8601；缓存超过 `ACTIONS_CACHE_TTL`（300s）后 list/run 会自动重扫 |
+| `source` | `string` | - | 来源（取值：`auto` / `partial`，`partial` 表示部分动作只解析出 ID） |
+| `actions` | `array<object>` | ✅ | 启动器动作列表 |
+| `actions[].id` | `string` | ✅ | 动作 ID（Quicker 的 UUID），`run_launcher_action` 的 `action_id` 参数 |
+| `actions[].name` | `string` | - | 动作名称（尽力而为：来自 state 缓存与运行日志，可能缺失） |
+| `actions[].type` | `string` | - | 动作类型（来自 state 缓存） |
+| `actions[].app` | `string` | - | 动作面向的应用（来自 state 缓存） |
+| `actions[].description` | `string` | - | 动作描述（来自 state 缓存） |
 
 ---
 

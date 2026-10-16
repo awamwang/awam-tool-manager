@@ -60,29 +60,45 @@
 
 ```
 awam-tool-manager/
-├── SKILL.md                  # 技能声明（对外契约，已过期）
-├── README.md                 # 项目说明（已过期）
+├── SKILL.md                  # 技能声明（对外契约）
+├── README.md                 # 项目说明
 ├── TASKS.md                  # 任务清单
 ├── requirements.txt          # mcp>=1.29.0,<2.0.0, pytest>=7.0.0
 ├── docs/
-│   ├── format.md             # 数据格式规范（部分过期）
+│   ├── format.md             # 数据格式规范
 │   ├── architecture.md       # 本文档
+│   ├── mcp-conformance.md    # MCP 协议一致性对比
 │   └── code-review.md        # 审核报告
-├── data/
-│   ├── tools/                # 工具条目：一个工具一个 JSON 文件
-│   │   ├── everything.json            (kind=app)
-│   │   └── everything-search-mcp.json (kind=mcp)
-│   └── backend-tools/        # 后端 MCP 子工具缓存（自动同步写入）
-│       └── everything-search-mcp.json
+├── data/                     # 仓库内只有人工维护的真相源（A14 起）
+│   └── tools/                # 工具条目：一个工具一个 JSON 文件
+│       ├── everything.json            (kind=app)
+│       ├── everything-search-mcp.json (kind=mcp)
+│       ├── winget-mcp.json            (kind=mcp)
+│       └── quicker.json               (kind=launcher)
 ├── src/
 │   ├── server.py             # MCP Server 入口 + 全部对外工具定义 + 分发
-│   ├── store.py              # JSON 存储层（139 行，读容错 + 原子写）
-│   ├── registry.py           # 工具注册中心（140 行，含条目校验过滤）
-│   ├── schema.py             # 两层数据的 JSON Schema 与校验（240 行，**文档生成源**）
-│   └── backend_client.py     # 后端 MCP 客户端与连接池（1246 行）
+│   ├── store.py              # JSON 存储层（tools 走仓库，缓存走运行时目录）
+│   ├── registry.py           # 工具注册中心（含条目校验过滤）
+│   ├── schema.py             # 两层数据的 JSON Schema 与校验（**文档生成源**）
+│   ├── backend_client.py     # 后端 MCP 客户端与连接池
+│   ├── launcher_client.py    # 启动器适配器（非 MCP：Quicker）
+│   └── runtime_paths.py      # 运行时目录解析 + 旧路径迁移
 ├── scripts/
-│   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表（148 行）
-└── tests/                    # 7 个文件，106 个用例（含真实 MCP 会话与文档漂移检测）
+│   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
+└── tests/                    # 9 个文件，168 个用例（含真实 MCP 会话与文档漂移检测）
+```
+
+运行时数据（**不在仓库**，A14 起）：`%LOCALAPPDATA%\.awam-tool-manager/`
+（环境变量 `AWAM_RUNTIME_DIR` 可覆盖；server 启动时自动从旧路径迁移）
+
+```
+%LOCALAPPDATA%/.awam-tool-manager/
+├── backend-tools/                  # 后端 MCP 子工具缓存（启动时自动同步写入）
+│   ├── everything-search-mcp.json
+│   └── winget-mcp.json
+├── launcher-actions/               # 启动器动作清单缓存
+│   └── quicker.json
+└── backend_desired_state.json      # 后端启动意图（A10 跨世代自愈用）
 ```
 
 > 根目录下的 `test_*.py`、`test_output.txt` 是调试期临时脚本，已被 `.gitignore` 排除。
@@ -133,9 +149,10 @@ awam-tool-manager/
 - `kind == "app"` → `get_tool_info` 返回 `version` / `tags` / `launch`；`launch_tool` 可返回启动命令。
 - `kind == "mcp"` → `get_tool_info` 额外返回 `backend`（运行状态）与 `backendTools`（子工具目录）；`BackendManager` 才会为其创建连接。
 
-### 4.2 后端子工具缓存 `data/backend-tools/{parent_id}.json`
+### 4.2 后端子工具缓存 `<runtime_dir>/backend-tools/{parent_id}.json`
 
-由 `sync_tools_catalog` 自动写入，文件名 = 父 MCP 工具 ID。
+由 `sync_tools_catalog` 自动写入运行时目录（A14 前在 `data/backend-tools/`），
+文件名 = 父 MCP 工具 ID。
 
 ```json
 {
@@ -161,9 +178,10 @@ awam-tool-manager/
                         │  MCP / stdio (JSON-RPC)
 ┌───────────────────────▼──────────────────────────────────┐
 │  接口层  src/server.py                                   │
-│   · 12 个 Tool 定义 + 分发                                │
+│   · 15 个 Tool 定义 + 分发                                │
 │   · 3 个 Resource、3 个 Prompt                           │
 │   · 全部返回值统一 JSON 序列化                            │
+│   · 启动时 migrate_legacy_runtime（旧路径数据迁入运行时目录）│
 └───────┬───────────────────────────────┬──────────────────┘
         │ 查询类                         │ 路由/管理类
 ┌───────▼───────────────┐   ┌───────────▼──────────────────┐
@@ -172,16 +190,20 @@ awam-tool-manager/
 │  · search_tools        │   │  · BackendClient（单连接）    │
 │  · get_tool            │   │    启动/停止/状态/日志/心跳    │
 │  · launch_tool         │   │    工具列表缓存（5 分钟）     │
+│                         │   │  launcher_client.py          │
+│                         │   │  · LauncherManager（Quicker） │
 └───────┬───────────────┘   └───────────┬──────────────────┘
         │                               │
 ┌───────▼───────────────────────────────▼──────────────────┐
 │ 存储层  store.py（JsonStore）                           │
-│  · data/tools/          读取工具条目                     │
-│  · data/backend-tools/  读写后端子工具缓存                │
+│  · data/tools/          读取工具条目（仓库内，人工维护）  │
+│  · runtime_dir/backend-tools/     读写后端子工具缓存      │
+│  · runtime_dir/launcher-actions/  读写启动器动作清单      │
 └───────────────────────┬──────────────────────────────────┘
                         │
 ┌───────────────────────▼──────────────────────────────────┐
 │  后端 MCP Server（子进程，如 everything-search-mcp）      │
+│  启动器外部命令（一次性进程，如 QuickerStarter.exe）       │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -270,8 +292,8 @@ toolport 网关会**周期性整池回收**它拉起的 server 进程（2026-10-
 状态清零——stdio MCP server 的生命周期归网关管，进程内状态注定随进程消亡，
 用户视角就是「启动后保不住，每次都得重新初始化」。对策：
 
-- `start_backend` 成功 → 把启动意图写入 `backend_desired_state.json`
-  （原子写；文件损坏按空处理，绝不阻断启动）；
+- `start_backend` 成功 → 把启动意图写入运行时目录的
+  `backend_desired_state.json`（原子写；文件损坏按空处理，绝不阻断启动）；
 - 每个新 server 世代启动时，`_restore_backends()` 后台任务据意图自动拉起
   desired=running 的后端——用户跨网关回收也能随时查到 running；
 - `stop_backend` 成功 → 清除意图（用户明确说不要了，下代不再拉起）；
@@ -284,7 +306,7 @@ toolport 网关会**周期性整池回收**它拉起的 server 进程（2026-10-
 
 ## 6. 对外 MCP 契约（实际实现）
 
-### 6.1 Tools（12 个）
+### 6.1 Tools（15 个）
 
 后端相关工具统一使用 **`tool_id`** 指定目标工具（`mcp_tool_id` / `launcher_id` 已废弃）。
 
@@ -294,7 +316,7 @@ toolport 网关会**周期性整池回收**它拉起的 server 进程（2026-10-
 | `list_tools` | `kind` | 列出工具 |
 | `get_tool_info` | `tool_id`(必填) | 工具详情（按 kind 返回不同字段） |
 | `launch_tool` | `tool_id`(必填) | 返回启动命令（不执行） |
-| `call_backend_tool` | `tool_id`、`tool_name`(必填)、`arguments` | 路由调用 |
+| `call_backend_tool` | `tool_id`、`tool_name`(必填)、`arguments`、`allowDestructive` | 路由调用（A12：命中 `destructiveTools` 子工具时需确认） |
 | `list_backend_tools` | `tool_id`(必填)、`force_refresh` | 后端子工具（含 schema） |
 | `start_backend` | `tool_id`(必填) | 启动后端 + 自动同步 |
 | `stop_backend` | `tool_id`(必填) | 停止后端 |
@@ -302,6 +324,9 @@ toolport 网关会**周期性整池回收**它拉起的 server 进程（2026-10-
 | `get_backend_logs` | `tool_id`(必填)、`level`、`limit` | 日志查询 |
 | `set_backend_log_level` | `tool_id`、`level`(必填) | 设置日志级别 |
 | `sync_backend_tools` | `tool_id`(必填) | 手动同步子工具目录 |
+| `list_launcher_actions` | `tool_id`(必填)、`keyword`、`limit`、`refresh` | 列出/搜索启动器动作（返回带 `lastSynced`/`source`，缓存超 5 分钟自动重扫） |
+| `run_launcher_action` | `tool_id`(必填)、`action_id`、`action_name`、`param`、`wait`、`allowDestructive` | 执行启动器动作 |
+| `sync_launcher_actions` | `tool_id`(必填) | 手动同步启动器动作清单 |
 
 **失败语义**：一律抛出 `ToolError`，由 MCP SDK 转成 `CallToolResult(isError=True)`，
 正文是可解析的 JSON（`success` / `errorType` / `error`）。
@@ -328,7 +353,9 @@ toolport 网关会**周期性整池回收**它拉起的 server 进程（2026-10-
 
 ```
 python src/server.py
-  → 计算 DATA_DIR = <项目根>/data
+  → 计算 DATA_DIR = <项目根>/data（仅工具条目）
+  → 计算 RUNTIME_DIR = %LOCALAPPDATA%\.awam-tool-manager（AWAM_RUNTIME_DIR 可覆盖）
+  → migrate_legacy_runtime()：旧路径的缓存/意图文件迁入运行时目录（一次性）
   → 构造 JsonStore / ToolRegistry / BackendManager（同步，无 IO 校验）
   → 注册 MCP handlers
   → 打印已加载工具数量到 stderr
@@ -432,7 +459,7 @@ python src/server.py
 | 工具变更通知 | `notifications/tools/list_changed` 未发送（顶层工具集静态，影响小） |
 | 标准 logging capability | 目前用自定义 Tool 查日志 |
 | 并发限流（A3 ✅ 已收口） | 单后端串行（`_call_lock`），并发调用报 `backend_busy`；要升级信号量 + 排队只需调 `MAX_CONCURRENT_CALLS` |
-| 启动器（`kind=launcher`） | ✅ 已接入 Quicker：非 MCP，调用是一次性外部命令；动作清单走第二层数据 `data/launcher-actions/`，对外 `sync/list/run_launcher_action`。**边界**：动作正文在加密 db，名称只能从 state 缓存尽力解析（可能 `source=partial`，只剩 ID） |
+| 启动器（`kind=launcher`） | ✅ 已接入 Quicker：非 MCP，调用是一次性外部命令；动作清单走第二层数据（运行时目录 `launcher-actions/`），对外 `sync/list/run_launcher_action`。**边界**：动作正文在加密 db，名称只能从 state 缓存尽力解析（可能 `source=partial`，只剩 ID） |
 
 > 完整清单见 [`code-review.md`](code-review.md) 与 [`mcp-conformance.md`](mcp-conformance.md)。
 

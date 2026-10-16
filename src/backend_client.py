@@ -24,6 +24,7 @@ import anyio
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from runtime_paths import get_runtime_dir
 from store import JsonStore
 
 
@@ -36,9 +37,13 @@ from store import JsonStore
 # stdio MCP server 的生命周期归客户端（网关）管，进程内状态注定随进程消亡；
 # 把「启动意图」落盘后，每个新世代启动时自动恢复，用户任何时刻查状态都是
 # running。stop_backend 会清除意图——那是用户明确说「不要了」。
-DESIRED_STATE_FILE = (
-    Path(__file__).resolve().parent.parent / "backend_desired_state.json"
-)
+# 位置在运行时目录（`%LOCALAPPDATA%\.awam-tool-manager`）而不是仓库根目录：
+# 这是**运行时状态**（谁被明确 start 过），不是源码，放仓库里只能靠
+# .gitignore 兜着，还是散落在根目录。见 runtime_paths.py 的分工说明。
+#
+# 仍是模块级常量：测试靠 monkeypatch.setattr 换掉它来隔离，改成函数会让
+# 7 处用例都要改；而它只在 import 期求值一次，生产环境够用。
+DESIRED_STATE_FILE = get_runtime_dir() / "backend_desired_state.json"
 
 
 def _warn(msg: str) -> None:

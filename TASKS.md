@@ -152,12 +152,22 @@
       再取字符串」的回归）、关键词搜索、调用命令构造（`-cN` / `runaction:` / `?参数` /
       stdin 隔离）、GBK 解码与「退出码为 0 但输出说失败」的判定、执行确认门禁、
       A13 自动刷新 7 例（陈旧一律改写 `lastSynced` 制造，不依赖时钟刻度）
-- [x] 合计 **158 passed**（8 个文件）；真实后端子进程启停 + 调用回归通过
+- [x] `tests/test_runtime_paths.py`（10 用例）- 运行时目录解析：默认
+      `%LOCALAPPDATA%\.awam-tool-manager`、`AWAM_RUNTIME_DIR` 覆盖、旧路径数据
+      一次性迁移（含目标已存在时不重复搬）、迁移失败不炸启动
+- [x] **A14 运行时数据迁出仓库** - `backend-tools/`、`launcher-actions/`、
+      `backend_desired_state.json` 是运行时生成数据却受 git 跟踪，多实例并跑被
+      反复改写。修复：`src/runtime_paths.py`（runtime dir 解析 + 旧路径迁移），
+      `JsonStore` 拆双目录（`tools/` 留仓库，缓存走 runtime dir），server 启动时
+      自动迁移（本机实测 4 文件平移）；conftest autouse fixture 把用例隔离到
+      tmp 目录，`test_docs_sync`/`test_registry` 两处「把数据集当断言」改为
+      合成数据/自包含
+- [x] 合计 **168 passed**（9 个文件）；真实后端子进程启停 + 调用回归通过
 
 ### 启动器接入（`kind=launcher`，2026-10-16）
 - [x] **新增 `kind=launcher` 工具类型** - 启动器不是 MCP，但有可列/可搜/可调用的动作：
       `launcher` 配置（适配器类型 / 命令 / 数据目录 / 超时）+ 第二层数据
-      `data/launcher-actions/{tool_id}.json`（与 backend-tools 同构）
+      `<runtime_dir>/launcher-actions/{tool_id}.json`（与 backend-tools 同构，A14 起同迁运行时目录）
 - [x] **新增 3 个对外工具**（12 → 15）：`sync_launcher_actions` / `list_launcher_actions`
       / `run_launcher_action`；执行受 `destructive` 门禁（需 `allowDestructive`），列/搜不受限
 - [x] **Quicker 适配器**（`src/launcher_client.py`）- 调用走
@@ -169,7 +179,9 @@
 - [x] Everything（`kind=app`，返回启动命令）
 - [x] Everything Search MCP（`kind=mcp`，已实测连接、调用、启停跑通）
 - [x] **WinGet（`kind=mcp`，官方内置）** - 实测：握手（winget-mcp 1.29.380 / 协议 2025-06-18）、
-      2 个子工具带完整 schema、查询与安装双路径路由验证
+      2 个子工具带完整 schema、查询与安装双路径路由验证；2026-10-16 深夜按网关真实链路
+      复跑端到端（start → tools/list → `find-winget-packages` 返回真实包数据 → stop），
+      查询免确认放行、安装仍被子工具级门禁拦截
 - [x] **Toolport 集成** - 已注册为 Toolport 的后端（registry `source: manual`，default profile），
       daemon 真实链路实测：启停、状态、子工具列表、路由调用全通
 - [x] **WorkBuddy 直连 MCP** - `~/.workbuddy/mcp.json` 新增 `awam-tool-manager` 条目
@@ -184,9 +196,9 @@
 - 真正的「后端永不重启」需要外部 supervisor（后端生命周期移出网关控制的进程），
   当前只能做到「跨网关回收自愈」（A10），列为架构演进
 - 硬杀 server 会孤儿化后端子进程（下一代自动恢复会另起一个，stdio 无端口冲突可共存）
-- `data/backend-tools/*.json` 是自动生成的缓存却受 git 跟踪，多实例在跑时 `lastSynced`
-  会被反复改写（**待定**：要不要 gitignore 需权衡——`tests/test_docs_sync.py` 对该目录
-  `glob("*.json")` 做参数化，目录为空时用例会静默消失，等于丢失这条真实数据校验）
+- ~~`data/backend-tools/*.json` 是自动生成的缓存却受 git 跟踪，多实例在跑时
+  `lastSynced` 会被反复改写~~ → 已解决（A14）：运行时缓存整体迁到
+  `%LOCALAPPDATA%\.awam-tool-manager`，仓库里只剩人工维护的 `data/tools/`
 - 上游 `everything-search-mcp` 返回体 `path` 为空、`isFile`/`isFolder` 恒 false
   （全路径塞在 `name` 里）——属上游包自身的数据整形，转发层原样透传；消费方以 `fullPath` 为准
 - **Quicker 动作名是尽力而为的**：动作正文在加密的 `quicker.db`（非 SQLite 魔数），
@@ -234,8 +246,9 @@
 
 | 层级 | 文件位置 | 说明 |
 |---|---|---|
-| 工具条目 | `data/tools/{tool_id}.json` | 每个工具一个文件，文件名即 tool_id |
-| 后端子工具缓存 | `data/backend-tools/{tool_id}.json` | 由 `sync_backend_tools` 自动生成 |
+| 工具条目 | `data/tools/{tool_id}.json`（仓库内） | 每个工具一个文件，文件名即 tool_id |
+| 后端子工具缓存 | `<runtime_dir>/backend-tools/{tool_id}.json` | 由 `sync_backend_tools` 自动生成（A14 起在 `%LOCALAPPDATA%\.awam-tool-manager`） |
+| 启动器动作清单 | `<runtime_dir>/launcher-actions/{tool_id}.json` | 由 `sync_launcher_actions` 自动生成 |
 | 对外 MCP 工具 | `src/server.py` | 暴露给 AI 客户端的工具列表 |
 
 > 早期设计中的「启动器配置层」`data/launchers/` 与「适配器层」`src/adapters/` 已废弃移除。
@@ -281,9 +294,10 @@
 - `connection`：仅 `kind=mcp` 有意义，`BackendClient` 据此拉起子进程；目前只支持 `stdio`
 - `install`：仅 `kind=mcp` 有意义，`start_backend` 检测到启动命令缺失时会自动执行一次 `install.command`
 
-### 4.3 后端子工具缓存（`data/backend-tools/{tool_id}.json`）
+### 4.3 后端子工具缓存（`<runtime_dir>/backend-tools/{tool_id}.json`）
 
-由 `sync_backend_tools` 写入，`tools[]` 直接透传后端 MCP 的 `inputSchema`：
+由 `sync_backend_tools` 写入运行时目录（A14 前在 `data/backend-tools/`），
+`tools[]` 直接透传后端 MCP 的 `inputSchema`：
 
 ```json
 {
@@ -308,41 +322,50 @@ awam-tool-manager/
 ├── README.md                   # 项目说明
 ├── SKILL.md                    # 技能说明
 ├── requirements.txt            # 依赖（mcp>=1.29.0,<2.0.0；A9 实测后从 1.30 改回 1.29）
-├── backend_desired_state.json  # 运行时生成：后端启动意图（A10 跨世代自愈用，已 gitignore）
 ├── docs/
 │   ├── format.md               # 数据格式规范
 │   ├── architecture.md         # 架构说明
 │   ├── mcp-conformance.md      # MCP 协议一致性对比
 │   └── code-review.md          # 代码审核报告
-├── data/
+├── data/                       # 仓库内只有人工维护的真相源（A14 起）
 │   ├── tools/                  # 工具条目
 │   │   ├── everything.json
 │   │   ├── everything-search-mcp.json
 │   │   ├── winget-mcp.json
 │   │   └── quicker.json        # kind=launcher
-│   ├── backend-tools/          # 后端 MCP 子工具缓存（自动生成）
-│   │   ├── everything-search-mcp.json
-│   │   └── winget-mcp.json
-│   └── launcher-actions/       # 启动器动作清单缓存（自动生成）
-│       └── quicker.json
 ├── src/
 │   ├── server.py               # MCP Server 入口 + 对外工具定义 + 分发
-│   ├── store.py                # JSON 存储层
+│   ├── store.py                # JSON 存储层（tools 走仓库，缓存走 runtime dir）
 │   ├── registry.py             # 工具注册中心
 │   ├── backend_client.py       # 后端 MCP 客户端与连接池（stdio）
 │   ├── launcher_client.py      # 启动器适配器（非 MCP：Quicker）
+│   ├── runtime_paths.py        # 运行时目录解析 + 旧路径迁移（A14）
 │   └── schema.py               # 两层数据的 JSON Schema 校验 + **文档生成源**
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
 └── tests/
-    ├── test_store.py
-    ├── test_registry.py
-    ├── test_registry_policy.py
-    ├── test_server_dispatch.py
-    ├── test_backend_client.py
-    ├── test_launcher_client.py
-    ├── test_protocol_roundtrip.py   # 真实 MCP 会话，不 mock SDK
-    └── test_docs_sync.py            # 文档/示例/data 与 schema 的一致性
+   ├── test_store.py
+   ├── test_registry.py
+   ├── test_registry_policy.py
+   ├── test_server_dispatch.py
+   ├── test_backend_client.py
+   ├── test_launcher_client.py
+   ├── test_runtime_paths.py     # 运行时目录解析与迁移（A14）
+   ├── test_protocol_roundtrip.py   # 真实 MCP 会话，不 mock SDK
+   └── test_docs_sync.py            # 文档/示例/data 与 schema 的一致性
+```
+
+运行时数据（**不在仓库**，A14）：`%LOCALAPPDATA%\.awam-tool-manager/`
+（环境变量 `AWAM_RUNTIME_DIR` 可覆盖，测试借此隔离）
+
+```
+%LOCALAPPDATA%/.awam-tool-manager/
+├── backend-tools/          # 后端 MCP 子工具缓存（自动生成，随启动同步）
+│   ├── everything-search-mcp.json
+│   └── winget-mcp.json
+├── launcher-actions/       # 启动器动作清单缓存（自动生成）
+│   └── quicker.json
+└── backend_desired_state.json  # 后端启动意图（A10 跨世代自愈用）
 ```
 
 运行：`python -m pytest -q`（未装 pytest-asyncio，异步用例统一用 `asyncio.run`）

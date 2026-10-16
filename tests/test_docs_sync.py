@@ -21,12 +21,15 @@ sys.path.insert(0, str(ROOT / "src"))
 from schema import (  # noqa: E402
     TOOL_ENTRY_SCHEMA,
     validate_backend_catalog,
+    validate_launcher_catalog,
     validate_tool_entry,
 )
+from store import JsonStore  # noqa: E402
 
 DOC_PATH = ROOT / "docs" / "format.md"
+# 人写的声明在仓库里（必须校验）；程序生成的运行时缓存已迁到本机应用数据目录，
+# 改由写入侧用例覆盖，见 test_generated_*_is_valid。
 DATA_TOOLS_DIR = ROOT / "data" / "tools"
-DATA_BACKEND_DIR = ROOT / "data" / "backend-tools"
 SCRIPT_PATH = ROOT / "scripts" / "generate_format_doc.py"
 
 
@@ -131,11 +134,32 @@ def test_real_tool_entries_are_valid(path: Path):
     assert data["id"] == path.stem, f"{path.name} 的 id 与文件名不一致: {data['id']}"
 
 
-@pytest.mark.parametrize("path", sorted(DATA_BACKEND_DIR.glob("*.json")))
-def test_real_backend_catalogs_are_valid(path: Path):
-    data = json.loads(path.read_text(encoding="utf-8"))
-    error = validate_backend_catalog(data)
-    assert error is None, f"{path.name} 不合规: {error}"
+def test_generated_backend_catalog_is_valid(tmp_path):
+    """写入侧产出的后端缓存必须合规。
+
+    原先这里是 glob `data/backend-tools/*.json` 参数化，但运行时缓存已迁出仓库
+    （2026-10-16，见 runtime_paths.py），目录空了参数化会**静默消失**——不报错，
+    却等于悄悄丢了这条校验。改成校验生成器本身产出什么：与磁盘上有无缓存无关，
+    也比事后扫盘更能防住「写出的缓存不合 schema」。
+    """
+    store = JsonStore(tmp_path / "data")
+    store.save_backend_tools("sample", [{"name": "t", "description": "d"}])
+    written = tmp_path / "data" / "backend-tools" / "sample.json"
+    data = json.loads(written.read_text(encoding="utf-8"))
+    assert validate_backend_catalog(data) is None, (
+        f"save_backend_tools 写出的缓存不合规: {validate_backend_catalog(data)}"
+    )
+
+
+def test_generated_launcher_catalog_is_valid(tmp_path):
+    """同上：动作清单缓存的写入侧也要合规"""
+    store = JsonStore(tmp_path / "data")
+    store.save_launcher_actions("sample", [{"id": "abc"}], "partial")
+    written = tmp_path / "data" / "launcher-actions" / "sample.json"
+    data = json.loads(written.read_text(encoding="utf-8"))
+    assert validate_launcher_catalog(data) is None, (
+        f"save_launcher_actions 写出的缓存不合规: {validate_launcher_catalog(data)}"
+    )
 
 
 # ---- 4. 校验器自身的分档行为 ----
