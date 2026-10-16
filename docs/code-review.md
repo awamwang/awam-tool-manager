@@ -815,6 +815,29 @@ GetPromptResult"）→ **prompts/get 全部失败**。
 > 也能随时查到 running 的办法。真正的「永不重启」需要外部 supervisor
 > （后端生命周期移出网关控制的进程），列为后续架构演进。
 
+**第十三批（已完成 ✅）**
+
+29. ~~**A11** —— `start()` 被取消后 status 永远卡在 `starting`，且无自愈路径~~ →
+    `start()` 的外层异常处理只有 `except Exception`，而 `CancelledError` 在
+    Python 3.8+ 继承 `BaseException`——toolport 网关对每次 tools/call 有 30s
+    预算（超时取消请求）、daemon 周期回收、调用方断开都会向 handler 注入取消，
+    一旦落在 621 行 `status = STARTING` 之后，状态永远无人收回，之后所有
+    get/status/list 只会看到「后端未运行，当前状态：starting」。修复：补
+    `except BaseException` 兜底——状态落地为 stopped、收尸已创建的连接/心跳
+    （防孤儿），取消继续上抛不吞。回归测试
+    `test_start_cancelled_does_not_strand_starting_status` 先在旧代码上复现
+    FAILED、修复后 passed（红绿双向验证）。合计 **126 passed**
+
+> A11 背景（2026-10-16 用户报障：「toolport 调 everything-search-mcp 一直
+> starting 好几分钟」）：审计日志（audit.jsonl）显示失败调用全部来自一个
+> legacy 会话，且命中它的 awam server 世代与当前健康世代（后端自 18:35 起
+> running、started_at 从未变过）不是同一个进程——卡死的世代已被网关回收，
+> 内存日志随之消失，只能从代码层锁定机制。30s 预算 × 冷启动世代（python
+> 导入 + A10 恢复 + 可能的 npm 自装）是现实可触发的取消窗口。
+> 经验：**凡设置中间态（starting）的流程，异常兜底必须覆盖 BaseException**，
+> 否则取消一次就永久卡死；后台意图与前台请求并发时，状态机要按「可随时被
+> 取消」设计。
+
 > A7/A8 背景（2026-10-16 实证，toolport 网关 4/4 事故同款）：
 > ① 网关 env dump 证明传入的是**完整环境**（200 个变量，PATH 含 npm-global），
 > 「PATH 被裁剪」的原诊断是错的；② 真根因是 npm 子进程**继承了 server 的
@@ -951,5 +974,7 @@ A7（fail_after 化 / PATH 自愈 / stdin 隔离 / 安装锁有界等待）与 A
 A9（心跳 `ping()` → `send_ping()` + 依赖下限 1.30 → 1.29）由
 `test_heartbeat_probe_matches_real_sdk`（契约定死 + 行为断言）与
 `test_heartbeat_failure_cleans_up`（fake 改真实 SDK 表面）覆盖，
-并经 toolport daemon 真实链路复现「启动 → 跨心跳周期 → 状态保持 running」
-（合计 `125 passed`）。
+并经 toolport daemon 真实链路复现「启动 → 跨心跳周期 → 状态保持 running」。
+A11（start 被取消后卡 starting）由 `test_start_cancelled_does_not_strand_starting_status`
+覆盖，并在旧代码上先复现 FAILED、修复后 passed（红绿双向验证）
+（合计 `126 passed`）。

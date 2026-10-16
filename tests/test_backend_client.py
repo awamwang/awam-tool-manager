@@ -417,7 +417,13 @@ def test_tools_cache_respects_ttl_and_force_refresh():
         await client.list_tools(force_refresh=True)
         after_force = client.refreshes
 
-        client.TOOLS_CACHE_TTL = 0  # 视为已过期
+        # TTL=0 表示每次都算过期。注意：Windows 上 time.time() 刻度约 15ms，
+        # 相邻两次调用可能返回同一个值，使 cache_age 恰为 0.0 —— `0.0 > 0` 为假
+        # 就会误判「缓存命中」，本用例随即随机性失败（实锤：2026-10-16 跑出
+        # 1 failed / 124 passed，与任何代码改动无关）。显式回拨缓存时间戳，
+        # 让「已过期」这件事不受时钟精度影响，回归才可复现。
+        client.TOOLS_CACHE_TTL = 0
+        client._tools_cache_time -= 1
         await client.list_tools()
         return after_cache, after_force, client.refreshes
 
@@ -440,6 +446,44 @@ def test_list_tools_rejects_when_not_running():
         return None  # pragma: no cover
 
     assert "未运行" in asyncio.run(run())
+
+
+def test_start_cancelled_does_not_strand_starting_status():
+    """start() 被外部取消后，status 不得停留在 starting（否则永不自愈）。
+
+    背景（2026-10-16 实测）：toolport 网关对每次 tools/call 有 30s 预算，
+    超时会取消请求、向 handler 注入 CancelledError；CancelledError 在
+    Python 3.8+ 继承 BaseException，start() 原来的 except Exception 接不住，
+    status 便永远卡在 starting——之后所有 get/status/list 调用只会看到
+    「后端未运行，当前状态: starting」。取消要继续上抛，但状态必须落地。
+    """
+
+    async def run():
+        client = BackendClient("fake", {"type": "stdio"})
+        hang = asyncio.Event()
+
+        async def slow_install():
+            # 模拟慢启动步骤（如冷机上的 npm 自装）撞上网关 30s 预算被取消
+            await hang.wait()
+
+        client.ensure_installed = slow_install  # type: ignore[method-assign]
+
+        task = asyncio.create_task(client.start())
+        await asyncio.sleep(0.05)  # 让 start() 置入 STARTING 并卡在慢步骤上
+        assert client.status == BackendClient.STATUS_STARTING
+
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass  # 取消语义保持：继续向上抛是被允许的
+
+        assert client.status == BackendClient.STATUS_STOPPED, (
+            f"取消后 status 应从 starting 收回为 stopped，实际: {client.status}"
+        )
+        assert "取消" in (client.last_error or "")
+
+    asyncio.run(run())
 
 
 def test_heartbeat_failure_cleans_up():

@@ -713,6 +713,22 @@ class BackendClient:
                 # 清理资源（连接任务已终结时这里是空转，幂等）
                 await self._cleanup()
                 return {"success": False, "error": self.last_error}
+            except BaseException as e:
+                # start() 会被外部取消：toolport 网关对每次 tools/call 有 30s
+                # 预算、超时即取消请求；daemon 周期回收、调用方断开同理。
+                # CancelledError 在 Python 3.8+ 继承 BaseException，上面的
+                # except Exception 接不住——若不兜底，status 自 621 行置入
+                # starting 后永远无人收回，之后所有 get/status/list 调用只会
+                # 看到「后端未运行，当前状态: starting」且无任何自愈路径
+                # （2026-10-16 实测：被取消的 start 让一个会话实例卡在
+                # starting 13+ 分钟，用户侧表现为后端永远起不来）。
+                # 取消必须继续向上抛（吞取消会破坏调用方语义），但先把状态
+                # 落地、把可能已创建的连接/心跳收尸，防止孤儿子进程。
+                self.status = self.STATUS_STOPPED
+                self.last_error = f"{type(e).__name__}: 启动被取消"
+                self._log("warning", f"启动被取消（{type(e).__name__}），状态已从 starting 收回")
+                await self._cleanup()
+                raise
 
     async def stop(self) -> dict:
         """停止后端 MCP Server

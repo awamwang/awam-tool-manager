@@ -248,6 +248,16 @@ TaskGroup 的取消作用域，而 anyio 的 `CancelScope` **绑定进入它的�
 > `asyncio.wait_for` 从外部任务取消协程会撕裂作用域栈；修复前客户端其实已收到
 > 成功响应，崩溃发生在响应之后（进程 exit 1）。
 
+**启动状态机的取消安全（A11）**：`start()` 在持锁后先把 status 置为
+`starting`（621 行），其外层异常兜底必须覆盖 `BaseException`——
+`CancelledError` 在 Python 3.8+ 继承自 `BaseException`，`except Exception`
+接不住。上游有多个现实的取消源：toolport 网关对每次 tools/call 有 30s 预算
+（超时取消请求）、daemon 周期回收、调用方断开。若取消落在 `starting` 之后而
+无人收回，之后所有 get/status/list 永远只能看到
+「后端未运行，当前状态：starting」，没有任何自愈路径（2026-10-16 实测卡死
+13+ 分钟）。修复：`except BaseException` 兜底——status 落地为 stopped、
+收尸已创建的连接/心跳，取消继续上抛不吞。
+
 **子进程 stdin 隔离**：`ensure_npm_bin_on_path()` 与安装命令的 spawn 一律传
 `stdin=DEVNULL`。server 自身经 stdio 管道与网关通信，子进程若继承这条 stdin，
 npm/cli 链会阻塞在读 stdin 上永不返回（表现为启动挂死 → 网关 30s 超时）。
