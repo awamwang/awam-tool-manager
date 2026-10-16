@@ -448,7 +448,7 @@ python src/server.py
 | `server.py` `read_resource` | 返回 `Iterable[ReadResourceContents]` |
 | `server.py` `main` | stdio 事件循环 + 启动后台预热任务 `_prewarm_backends()`，`finally` 取消预热并关闭全部后端 |
 | `store.py` `load_json` / `save_json` | JSON 读写：读有容错（坏文件跳过），写走 `mkstemp` + `os.replace` 原子替换 |
-| `registry.py` `search_tools` | 关键词匹配 name / displayName / description / tags（不含 id） |
+| `registry.py` `search_tools` | 关键词匹配 id / name / displayName / description / tags（含 `id`，避免「搜得到工具却搜不到它的 ID」） |
 | `backend_client.py` `BackendClient.start` | 子进程启动、连接、预热工具列表、起心跳；spawn 前先 `ensure_installed()` 自装缺失依赖 |
 | `backend_client.py` `BackendClient.ensure_installed` | 依赖自装：剥壳解包启动命令 → `shutil.which` 检测 → 限时装一次（`INSTALL_TIMEOUT`）→ 复检；幂等，装不坏不阻断 |
 | `backend_client.py` `BackendManager.ensure_all_installed` | 启动预热：遍历所有 MCP 工具只装不启，单个失败不影响整体 |
