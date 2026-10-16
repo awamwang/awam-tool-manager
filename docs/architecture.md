@@ -85,7 +85,7 @@ awam-tool-manager/
 │   └── runtime_paths.py      # 运行时目录解析 + 旧路径迁移
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 9 个文件，168 个用例（含真实 MCP 会话与文档漂移检测）
+└── tests/                    # 9 个用例文件 + 1 个手工 E2E 脚本，183 个用例（含真实 MCP 会话与文档漂移检测）
 ```
 
 运行时数据（**不在仓库**，A14 起）：`%LOCALAPPDATA%\.awam-tool-manager/`

@@ -41,7 +41,7 @@ awam-tool-manager/
 │   └── schema.py             # 两层数据的 JSON Schema 校验 + 文档生成源
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 168 个用例（含真实 MCP 会话与文档漂移检测）
+└── tests/                    # 183 个用例（含真实 MCP 会话与文档漂移检测）
 ```
 
 运行时数据（**不在仓库**，A14 起）：`%LOCALAPPDATA%\.awam-tool-manager/`

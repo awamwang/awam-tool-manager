@@ -446,7 +446,22 @@ grep -l "^def test_|^async def test_" test_*.py   # NONE have test_ functions
 
 ---
 
-## 附：可复现命令索引
+## 附：基线迁移（评审后续，2026-10-17 复核）
+
+评审期间仓库继续推进，本报告的基线结论需按下列快照更新；**上文 ①–⑧ 的静态分析对象是 `c40d80d`**，除特别说明外结论仍成立。
+
+| 提交 | 内容 | 实测 pytest |
+|---|---|---|
+| `c40d80d` | A14 运行时数据迁移 | 168 passed / 9 文件 |
+| `4dc8b31` | P0：install 自装命令加授权门禁 + 命令白名单 | **183 passed** |
+| `4edead9` | 忽略宿主 torrent-search-mcp 写入的 `authorized_tokens.json` | **183 passed**（2026-10-17 复核，5.58s） |
+
+**HEAD `4edead9` 实测基线（P1-04 回归起点）：**
+- `183 passed / 0 failed / 0 skipped`；`tests/` 下物理上有 **10 个 `test_*.py`**，但只有 **9 个贡献用例**：
+  `backend_client 70 / docs_sync 13 / launcher_client 27 / protocol_roundtrip 9 / registry 5 / registry_policy 16 / runtime_paths 10 / server_dispatch 25 / store 8`（合计 183）。
+- `tests/test_e2e_install_gate.py`（142 行，随 `4dc8b31` 提交）**collect 0 条用例**——文件第 1 行自述「一次性手工脚本，非 pytest 用例」，用真实 `stdio_client` 子进程 + 真实 MCP 会话验 P0 门禁两场景，须手工执行 `python tests/test_e2e_install_gate.py`。它**不进入 183**，因此仍是唯一覆盖真实 stdio 传输的手段，但依旧无 CI 护栏（与上文 ⑤/⑥ 指出的盲区一致）。
+- **文档计数仍未跟上**：`TASKS.md:165` 仍写「168 passed（9 个文件）」，而同文件 `:190` 已写「168 → 183 passed」——**同一文件内自相矛盾**；`architecture.md:88` 仍写「9 个文件，168 个用例」。
+- P1-04（声明式注册表）实施后，回归判据以上表 183 为基线；受影响用例约 42 条集中在 `test_server_dispatch.py` / `test_protocol_roundtrip.py` / `test_registry_policy.py` / `test_launcher_client.py`（这 4 个是仅有的 `import server` 的文件），断言一律不改。
 
 ```bash
 PY="/c/Users/Administrator/.pyenv/pyenv-win/versions/3.12.0/python.exe"
