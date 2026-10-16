@@ -272,3 +272,72 @@ P1-03 的真实工作量比「补 23 处」小得多也比它更结构化：**12
 `unknown_error` **补进两份文档**（`:1396` 真实在发，客户端必须能预见）。
 Q3 的 schema 容忍度硬性前提架构侧已核验完毕（`additionalProperties: True` + 无载荷字段校验 +
 `warning` 生产先例），实施方可直接开工。
+
+---
+
+## 8. S1–S7 实施预研：精确锚点包（架构侧 2026-10-17 完成，任务 #10 直接可用）
+
+> 预研范围：只读代码 + 实测锚点，**不落地任何代码**（team-lead 批准的范围）。
+> 任务 #10 以 QA 放行（#6）为前置；本包让实施方拿到即可开工，无需重新推导。
+
+### S2 锚点：常量枚举落点
+
+- `src/errors.py`（35 行）：`fail()` 在 `:24`、`ensure_success()` 在 `:31`——枚举建议加在
+  `:13` 的 `ToolError` 类之后、`fail()` 之前，与 `fail()` 同模块（U4 裁决落点）。
+- 现有 15 处裸字符串发射点分布：`backend_client.py` 13 处（`:780`/`:782` 的动态
+  `error_type` 是字符串表达式，收敛时注意保持动态性）+ `registry.py` 2 处（`:121`/`:129`）
+  + `tool_specs.py` 4 处（`:168`/`:229`/`:310`/`:334`）+ `server.py` 5 处
+  （`:137`/`:161`/`:220`/`:334`/unknown_resource 同文件另 1 处共 5）。
+  **注意**：`errors.py:22` 的 `fail()` 默认参数值 `"invalid_params"` 是第 16 个字面量——
+  收敛时它自然引用常量，A1 落地后该值首次可达。
+- `backend_installing` 直接入枚举（Q2），合法集 16 个值。
+
+### S3 锚点：12 处机械补齐
+
+逐站点行号与建议值见 §3.2 表（A1–A4、A6–A13）。实施方式：每个 payload 字典加
+`"errorType": ErrorType.XXX` 一行——**纯增量加字段**，既有测试无「不含 errorType」断言
+（§5 已证），预期零回归红。
+
+### S4 锚点：三条裁决的落地位置
+
+| 裁决 | 落地位置 | 精确改动 |
+|---|---|---|
+| Q1 | `backend_client.py:793` | `"status": error_type` → `"status": "error"`（**只改这一处**；不动 `:794` 的 errorType 行；不给异常分支 `:866` 补 status 字段——那会扩大行为变更面）。测试 `tests/test_backend_client.py:1301` 断言同步改 `== "error"`，同用例补 `errorType == "install_required"` 正向断言 |
+| Q2 | `backend_client.py:768-772` 的 installing payload | 加 `"errorType": ErrorType.BACKEND_INSTALLING`。契约卡措辞已备（§2 表）：「可重试：轮询 `get_backend_status` 或稍后重试 `start_backend`；不要并发重试」。新增测试：安装中路径触发用例 |
+| Q3 | `backend_client.py:1310` 的空工具列表 payload | 加 `"errorType": ErrorType.RUNTIME_ERROR` + `"warning": "后端返回空工具列表，已保留原缓存未覆盖"`（文案与现行 `error` 一致）。schema 容忍度已核验（§4-Q3 裁决块），可直接实施。新增测试：空列表路径断言 warning 存在 |
+
+### S5 锚点：两份文档的同步位置
+
+| 文档 | 位置 | 现状 | 目标 |
+|---|---|---|---|
+| `SKILL.md` | `:102-105` 枚举段 | 14 种（缺 `unknown_error`） | 16 种：+`unknown_error` +`backend_installing`；`invalid_params` 标注从「预留」调整为「已启用」（A1 落地后） |
+| `SKILL.md` | `:107-108`（`backend_busy` 说明） | 忙态说明先例 | 仿此体例加 `backend_installing` 说明段（「可重试」措辞见 §2 契约卡） |
+| `SKILL.md` | §错误处理各取值说明 | 逐值说明 | 补「客户端动作」列内容（§2 契约卡已备好每种值的客户端动作） |
+| `docs/format.md` | `:240-242` 枚举段 | 8 种 | 16 种：补 6 种缺项（`unknown_prompt`/`backend_busy`/`launcher_error`/`install_required`/`install_not_allowed`/`unknown_error`）+ `backend_installing` |
+| `docs/format.md` | 生成区块 | `:27-74` tool-entry、`:143-155` backend-catalog | **`:240-242` 是手写区**（生成器无 errorType 逻辑，已实测），手动编辑安全，不触发 `--check` 漂移 |
+
+### S6 锚点：三类新测试
+
+1. **触发用例**：现有 15 种中 9 种有用例；P1-03 后需补覆盖至 16 种（重点是 A1–A13 各站点 +
+   `backend_installing` + `unknown_error`）。测试文件建议：`tests/test_backend_client.py`
+   （A 层站点多数在此文件的 manager 测试面内）。
+2. **「失败必带 errorType」守卫**：仿 `test_docs_sync.py` 的 docs 守卫体例——对 §3.1 A 层
+   14 个站点逐个触发（可用 monkeypatch 造假依赖），断言 payload 含合法 errorType。
+   **合法集 = 常量枚举值集合（含 `backend_installing`）**。
+3. **枚举完整性**：`ErrorType` 常量值集合 == `SKILL.md:102-105` 声明的集合——把文档 vs 代码
+   漂移变成显红。解析方式可仿 `test_docs_sync.py` 的 SKILL.md 表格解析（正则提取反引号值）。
+
+### S7 提交信息模板（对标 P1-04 NE 列表）
+
+```
+fix: P1-03 errorType 契约落地（12 处补齐 + Q1/Q2/Q3 + 文档同步 + 守卫测试）
+
+行为变更面（Q1-Q3，显式申报）：
+- Q1：install 门禁 payload 的 status 由误用的 errorType 值恢复为状态机值 "error"
+  （backend_client.py:793）；测试断言同步更新（test_backend_client.py:1301）
+- Q2：新增 errorType=backend_installing（枚举 15→16）：依赖安装中是分钟级忙态，
+  与 backend_busy（秒级并发冲突）复用会混淆重试语义；加法变更，老客户端按未知值退化
+- Q3：空工具列表 payload 补 warning 字段（已有 destructive 路径 warning 先例，
+  SHARED_OUTPUT_SCHEMA additionalProperties=true 容忍附加字段）
+- 12 处机械补齐为纯增量加字段（既有测试无「不含 errorType」断言，零回归红）
+```
