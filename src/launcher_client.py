@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import re
 import sys
@@ -31,6 +32,11 @@ import anyio
 
 DEFAULT_TIMEOUT = 20.0
 
+# 动作清单缓存多久算过期（秒）。过期后 list/find 会自动重扫一次再回答，
+# 而不是永远读盘——启动器不是 MCP，没有 tools/list 可以问，只能靠本地数据；
+# 但本地数据是活的（Quicker 随时可能增删动作），所以缓存必须有寿命。
+ACTIONS_CACHE_TTL = 300.0
+
 # Quicker 动作清单缓存条目的文本格式（JSON 解析后的样子）：
 #   [url:XAction]文件/全文搜索<_global>("用Everything搜索文件；用AnyTXT搜索全文")|92c14d1b-...
 QUICKER_ACTION_RE = re.compile(
@@ -39,6 +45,16 @@ QUICKER_ACTION_RE = re.compile(
 
 # 动作 ID 也体现在状态文件名上：states/state_<uuid>.json
 QUICKER_STATE_FILE_RE = re.compile(r"^state_([0-9a-fA-F-]{36})\.json$", re.IGNORECASE)
+
+# 动作名称的**第二个来源**：Quicker 每次执行动作都会往日志里写一行
+#   2026-10-16 22:11:06 [action:识别二维码] ... 执行动作：识别二维码 id=9f530d6e-...
+# 只覆盖「运行过的动作」，但日志是累积的（含轮转的 .1~.5），且文本干净。
+# 实测本机补全 16 个 state 缓存拿不到的名称（144 → 160 / 212），所以值得扫。
+# 注意：只用来补空，绝不覆盖 state 缓存里的名称——那边还带 type/app/description。
+QUICKER_LOG_RUN_RE = re.compile(
+    r"执行动作：(?P<name>\S+)\s+id=(?P<id>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
+)
 
 # QuickerStarter 出错时**退出码仍然是 0**（2026-10-16 实测：找不到动作也返回 0），
 # 因此不能只看 returncode，必须解析输出文本。
@@ -148,6 +164,13 @@ class LauncherClient:
                         "description": matched.group("desc").strip(),
                     }
 
+        # 3) 名称补漏：从 Quicker 运行日志里捞（只补空，不覆盖上面拿到的）
+        log_names = self._scan_quicker_log_names()
+        for action_id, name in log_names.items():
+            entry = found.get(action_id)
+            if entry and not entry.get("name"):
+                entry["name"] = name
+
         actions = sorted(found.values(), key=lambda a: (a.get("name") or "~", a["id"]))
         named = sum(1 for a in actions if a.get("name"))
         # 一个名称都没拿到才叫 partial 吗？不——只要有没有名字的动作就是 partial，
@@ -155,11 +178,66 @@ class LauncherClient:
         source = "auto" if actions and named == len(actions) else "partial"
         return actions, source
 
+    def _scan_quicker_log_names(self) -> dict[str, str]:
+        """从 Quicker 日志（含轮转文件）解析 动作ID → 名称"""
+        if not self.data_dir:
+            return {}
+        logs_dir = self.data_dir / "logs"
+        if not logs_dir.exists():
+            return {}
+        names: dict[str, str] = {}
+        # 轮转文件可能很大（本机 quicker.log 约 8MB 级），只读文本即可；
+        # 解析失败一律跳过——名称是尽力而为的字段，绝不能拖垮同步。
+        for path in logs_dir.glob("quicker.log*"):
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for matched in QUICKER_LOG_RUN_RE.finditer(text):
+                names[matched.group("id").lower()] = matched.group("name")
+        return names
+
+    # ---- 缓存新鲜度 ----
+
+    def _cache_age(self) -> float | None:
+        """缓存距现在多少秒；没有缓存或时间戳不可解析 → None"""
+        catalog = self.store.load_launcher_catalog(self.tool_id)
+        if not catalog:
+            return None
+        raw = catalog.get("lastSynced")
+        if not isinstance(raw, str):
+            return None
+        try:
+            synced = datetime.datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=datetime.timezone.utc
+            )
+        except ValueError:
+            return None
+        return (
+            datetime.datetime.now(datetime.timezone.utc) - synced
+        ).total_seconds()
+
+    def _ensure_fresh(self, refresh: bool = False) -> None:
+        """必要时重扫一次动作清单。
+
+        静默失败：扫描要读启动器本地数据，失败（目录没了、Quicker 没装）不该让
+        「列出动作」整个炸掉——退回旧缓存继续服务，调用方看 lastSynced 就知道有多旧。
+        """
+        if not refresh:
+            age = self._cache_age()
+            if age is not None and age < ACTIONS_CACHE_TTL:
+                return
+        try:
+            self.sync_actions()
+        except LauncherError as exc:
+            _log(self.tool_id, "warning", f"动作清单刷新失败，沿用旧缓存: {exc}")
+
     # ---- 查询 ----
 
     def list_actions(
-        self, keyword: str | None = None, limit: int | None = None
+        self, keyword: str | None = None, limit: int | None = None, refresh: bool = False
     ) -> list[dict[str, Any]]:
+        self._ensure_fresh(refresh=refresh)
         actions = self.store.load_launcher_actions(self.tool_id)
         if keyword:
             needle = keyword.lower()
@@ -175,11 +253,13 @@ class LauncherClient:
             actions = actions[:limit]
         return actions
 
-    def find_action(
-        self, action_id: str | None = None, action_name: str | None = None
+    @staticmethod
+    def _match(
+        actions: list[dict[str, Any]],
+        action_id: str | None = None,
+        action_name: str | None = None,
     ) -> dict[str, Any] | None:
-        """按 ID 或名称定位动作；先精确后包含"""
-        actions = self.store.load_launcher_actions(self.tool_id)
+        """先精确后包含（纯函数，便于「重扫后再找一次」）"""
         if action_id:
             needle = action_id.lower()
             for action in actions:
@@ -193,6 +273,29 @@ class LauncherClient:
             for action in actions:
                 if needle in str(action.get("name") or "").lower():
                     return action
+        return None
+
+    def find_action(
+        self, action_id: str | None = None, action_name: str | None = None
+    ) -> dict[str, Any] | None:
+        """按 ID 或名称定位动作。
+
+        缓存里找不到时，若缓存已陈旧就重扫一次再找——用户刚在 Quicker 里新建的
+        动作不该因为「上次同步是 10 分钟前」而调不到。仍找不到就返回 None，
+        `run_action` 会拿原始 ID/名称直接调（runaction 本来就接受两者）。
+        """
+        hit = self._match(self.store.load_launcher_actions(self.tool_id), action_id, action_name)
+        if hit is not None:
+            return hit
+        age = self._cache_age()
+        if age is None or age >= ACTIONS_CACHE_TTL:
+            try:
+                self.sync_actions()
+            except LauncherError:
+                return None
+            return self._match(
+                self.store.load_launcher_actions(self.tool_id), action_id, action_name
+            )
         return None
 
     # ---- 调用 ----
@@ -278,9 +381,15 @@ class LauncherManager:
         return self.get_client(tool_id).sync_actions()
 
     def list_actions(
-        self, tool_id: str, keyword: str | None = None, limit: int | None = None
+        self,
+        tool_id: str,
+        keyword: str | None = None,
+        limit: int | None = None,
+        refresh: bool = False,
     ) -> list[dict[str, Any]]:
-        return self.get_client(tool_id).list_actions(keyword=keyword, limit=limit)
+        return self.get_client(tool_id).list_actions(
+            keyword=keyword, limit=limit, refresh=refresh
+        )
 
     async def run_action(
         self,

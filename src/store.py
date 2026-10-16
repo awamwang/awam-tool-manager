@@ -153,6 +153,14 @@ class JsonStore:
             return []
         return data.get("actions", [])
 
+    def load_launcher_catalog(self, parent_id: str) -> dict[str, Any] | None:
+        """读取启动器动作清单的**完整条目**（含 lastSynced / source）。
+
+        `load_launcher_actions` 只给 actions，判断缓存新鲜度需要 lastSynced——
+        没有它，`list_actions` 就只能永远读盘，成了事实上的死列表。
+        """
+        return self.load_json(self.get_launcher_actions_path(parent_id))
+
     def save_launcher_actions(self, parent_id: str, actions: list[dict[str, Any]], source: str) -> None:
         """保存某个启动器的动作清单
 

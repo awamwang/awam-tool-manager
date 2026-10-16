@@ -8,6 +8,7 @@
 """
 
 import asyncio
+import datetime
 import json
 import sys
 from pathlib import Path
@@ -324,3 +325,138 @@ def test_list_actions_needs_no_confirmation():
     payload = json.loads(text)
     assert payload["success"] is True
     assert payload["count"] == 2
+
+
+# ---- A13：动作清单不再是死列表 ----
+#
+# 背景：`list_actions` 原先只读 launcher-actions/*.json，而写盘只发生在
+# 手动 sync 时——Quicker 里新增/删除动作后，清单要等到有人想起调 sync 才变，
+# 事实上的死列表。现在按 lastSynced 判断新鲜度，过期自动重扫。
+#
+# 下面一律用「改写 lastSynced」而不是「等待 TTL 到期」来制造陈旧：
+# 依赖时钟刻度会让用例变成 flaky（Windows 上 time.time() 约 15ms 一跳，
+# 2026-10-16 已因此挂过一次）。
+
+
+def _set_synced(store, parent_id: str, when: datetime.datetime) -> None:
+    path = store.get_launcher_actions_path(parent_id)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["lastSynced"] = when.strftime("%Y-%m-%dT%H:%M:%SZ")
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def _make_stale(client, store, hours: float = 2) -> None:
+    _set_synced(store, "quicker", datetime.datetime.now(datetime.timezone.utc)
+                - datetime.timedelta(hours=hours))
+
+
+def _add_action_file(data_dir: Path, action_id: str) -> None:
+    (data_dir / "states" / f"state_{action_id}.json").write_text(
+        json.dumps({"ActionId": action_id, "States": {}}), encoding="utf-8"
+    )
+
+
+NEW_ACTION_ID = "33333333-3333-3333-3333-333333333333"
+
+
+def test_scan_supplements_names_from_run_log(tmp_path):
+    """日志是名称的第二个来源：只补空，不覆盖 state 缓存里的完整信息"""
+    data_dir = build_fake_quicker(tmp_path)
+    logs = data_dir / "logs"
+    logs.mkdir()
+    (logs / "quicker.log").write_text(
+        "2026-10-16 22:11:06,290 [action:识别二维码] INFO - "
+        "执行动作：识别二维码 id=22222222-2222-2222-2222-222222222222\n"
+        "2026-10-16 22:12:00,000 [action:文件搜索] INFO - "
+        "执行动作：文件/全文搜索 id=92c14d1b-0479-40f0-8952-1359a8a765fb\n",
+        encoding="utf-8",
+    )
+    tool = json.loads(json.dumps(QUICKER_TOOL))
+    tool["launcher"]["dataDir"] = str(data_dir)
+    client = LauncherClient(tool, JsonStore(tmp_path / "data"))
+
+    by_id = {a["id"]: a for a in client._scan_quicker()[0]}
+    # 缺名称的被补上了
+    assert by_id["22222222-2222-2222-2222-222222222222"]["name"] == "识别二维码"
+    # 已有完整信息的未被覆盖（description/type 仍在）
+    rich = by_id["92c14d1b-0479-40f0-8952-1359a8a765fb"]
+    assert rich["name"] == "文件/全文搜索"
+    assert rich["app"] == "_global"
+
+
+def test_list_actions_uses_cache_when_fresh(tmp_path):
+    """缓存新鲜 → 直接读盘，不重新扫描（省一次全量扫盘）"""
+    client = make_client(tmp_path)
+    store = client.store
+    client.sync_actions()
+    _add_action_file(Path(client.data_dir), NEW_ACTION_ID)
+    _set_synced(store, "quicker", datetime.datetime.now(datetime.timezone.utc))
+
+    ids = {a["id"] for a in client.list_actions()}
+    assert NEW_ACTION_ID not in ids, "缓存新鲜时不该看到扫描后才有的新动作"
+
+
+def test_list_actions_refreshes_when_stale(tmp_path):
+    """缓存过期 → 自动重扫，新动作出现在结果里"""
+    client = make_client(tmp_path)
+    store = client.store
+    client.sync_actions()
+    _add_action_file(Path(client.data_dir), NEW_ACTION_ID)
+    _make_stale(client, store)
+
+    ids = {a["id"] for a in client.list_actions()}
+    assert NEW_ACTION_ID in ids, "缓存陈旧后应自动重扫，拿到新动作"
+
+
+def test_list_actions_refresh_flag_forces_rescan(tmp_path):
+    """refresh=true 即便缓存新鲜也重扫"""
+    client = make_client(tmp_path)
+    store = client.store
+    client.sync_actions()
+    _add_action_file(Path(client.data_dir), NEW_ACTION_ID)
+    _set_synced(store, "quicker", datetime.datetime.now(datetime.timezone.utc))
+
+    ids = {a["id"] for a in client.list_actions(refresh=True)}
+    assert NEW_ACTION_ID in ids
+
+
+def test_find_action_rescans_for_newly_added_action(tmp_path):
+    """刚在 Quicker 里新建的动作，首次调用就该找得到（不该要求先手动 sync）"""
+    client = make_client(tmp_path)
+    store = client.store
+    client.sync_actions()
+    _add_action_file(Path(client.data_dir), NEW_ACTION_ID)
+    _make_stale(client, store)
+
+    found = client.find_action(action_id=NEW_ACTION_ID)
+    assert found is not None and found["id"] == NEW_ACTION_ID
+
+
+def test_refresh_failure_keeps_serving_old_cache(tmp_path):
+    """刷新失败（启动器数据目录没了）不能让「列出动作」整个炸掉"""
+    client = make_client(tmp_path)
+    store = client.store
+    client.sync_actions()
+    before = client.list_actions()
+    _make_stale(client, store)
+    # 把数据目录整个移走，模拟 Quicker 卸载 / 配置改错
+    import shutil  # noqa: PLC0415
+
+    shutil.rmtree(client.data_dir)
+
+    after = client.list_actions()
+    assert after == before, "刷新失败应静默沿用旧缓存，而不是抛异常或清空"
+
+
+def test_list_launcher_actions_reports_freshness():
+    """对外工具要暴露 lastSynced / source，否则调用方不知道清单有多旧"""
+    import server  # noqa: PLC0415
+
+    payload = json.loads(
+        asyncio.run(
+            server.dispatch_tool("list_launcher_actions", {"tool_id": "quicker", "limit": 1})
+        )
+    )
+    assert "lastSynced" in payload
+    assert "source" in payload
+    assert payload["count"] == 1

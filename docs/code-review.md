@@ -877,6 +877,24 @@ GetPromptResult"）→ **prompts/get 全部失败**。
     实现 Quicker 适配器；对外工具 12 → **15**（sync/list/run_launcher_action）。
     执行动作受 `destructive` 门禁，列/搜不受限。合计 **151 passed**
 
+33. ~~**A13：启动器动作清单不再是死列表**~~ → `list_actions` 原先只读
+    `launcher-actions/*.json`，而写盘只发生在手动 `sync_launcher_actions` 时，
+    Quicker 增删动作后要等人想起调 sync 才变——事实上的死列表（`lastSynced`
+    写了却没人读）。修复：`store.load_launcher_catalog` 暴露 `lastSynced`，
+    `LauncherClient._ensure_fresh` 按 `ACTIONS_CACHE_TTL`（300s）判定，
+    过期/无缓存/显式 `refresh=true` 时自动重扫；`find_action` 命中不到且缓存
+    陈旧时重扫再找一次（新动作首次调用即可命中）；刷新失败静默沿用旧缓存。
+    `list_launcher_actions` 的返回带上 `lastSynced`/`source`，否则「自动刷新」
+    只是把不透明变得更不透明。合计 **158 passed**
+
+> 顺带补上**名称的第二个来源**：Quicker 每次执行动作会往 `logs/quicker.log*`
+> 写 `执行动作：<名称> id=<uuid>`，只覆盖运行过的动作，但日志是累积的
+> （含轮转 .1~.5）且文本干净。本机实测补全 **16 个** state 缓存拿不到的名称
+> （144 → **160** / 212），其中就包括本次要调用的目标动作「识别二维码」。
+> 原则是**只补空、不覆盖**：state 缓存那边还带 `type`/`app`/`description`。
+> 另排查过 `data/*_searchhistory.db`，里面有 `search.sys.quicker.actions_<uuid>`
+> 条目，但只有 34 条且名称后面紧跟二进制噪音，是搜索历史而非全量索引，未采用。
+
 > 接入 Quicker 的两个实测坑（都写进了代码注释与回归用例）：
 > ① **动作清单必须「先解析 JSON 再取字符串」**——Quicker 把动作列表存成
 > 「JSON 数组的字符串」，扫文件原文永远匹配不到（`\"` 还在），第一版实测
@@ -901,7 +919,7 @@ pip install "mcp>=1.29.0,<2.0.0" pytest
 # 2) 静态检查
 python -m py_compile src/*.py tests/*.py scripts/*.py
 
-# 3) 单元测试（151 项：store/registry + backend_client 稳定性与依赖自装 + store 容错/原子写
+# 3) 单元测试（158 项：store/registry + backend_client 稳定性与依赖自装 + store 容错/原子写
 #    + server 分发与启动预热 + 搜索语义/schema 校验/annotations/destructive 门禁 + 协议层回环
 #    + 文档与 schema 的一致性 + 连接独占任务/anyio 作用域同一任务闭合 + PATH 自愈
 #    + 心跳探测 API 契约（send_ping 必须真实存在于 mcp.ClientSession））
@@ -1021,10 +1039,15 @@ A12（子工具级 destructive 门禁）由 `test_destructive_gate_is_per_sub_to
 `test_destructive_without_sub_tool_list_still_blocks_everything` 覆盖（清单内拦截 /
 清单外放行 / 未配置时回退条目级），并用真实 winget-mcp 后端端到端复测：
 查询免确认返回真实包信息、安装仍被拦且报错精确到子工具。
-A12 之后的 launcher 扩展（Quicker）由 `tests/test_launcher_client.py`（20 例）覆盖：
+A12 之后的 launcher 扩展（Quicker）由 `tests/test_launcher_client.py`（27 例）覆盖：
 动作清单解析（含「先解析 JSON 再取字符串」的回归）、关键词搜索、调用命令构造
 （`-cN` / `runaction:` / `?参数` / stdin 隔离）、GBK 解码与「退出码为 0 但输出说失败」
-的判定、执行确认门禁（合计 `151 passed`）。
+的判定、执行确认门禁。
+A13（动作清单自动刷新）由 7 例覆盖：新鲜读缓存 / 陈旧自动重扫 / `refresh=true`
+强制重扫 / 新动作首次调用可命中 / 刷新失败沿用旧缓存 / 日志补名称且不覆盖 /
+对外工具暴露 `lastSynced` 与 `source`。陈旧一律用**改写 `lastSynced`** 制造而非
+等待 TTL 到期——依赖时钟刻度会让用例变 flaky（Windows 的 `time.time()` 约 15ms
+一跳，2026-10-16 已因此挂过一次）。同样做了红绿双向验证（合计 `158 passed`）。
 
 > 同批修掉两处**测试脆性**（都是把「数据集内容」当成断言）：`test_dispatch_kind_filter`
 > 写死 `ids == ["everything-search-mcp"]`、`test_generated_table_covers_every_field`

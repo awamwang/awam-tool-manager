@@ -1,6 +1,6 @@
 {
   "parent": "quicker",
-  "lastSynced": "2026-10-16T13:47:19Z",
+  "lastSynced": "2026-10-16T14:27:56Z",
   "source": "partial",
   "actions": [
     {
@@ -43,6 +43,27 @@
       "name": "CapsLock拦截",
       "type": "XAction",
       "app": "_global",
+      "description": ""
+    },
+    {
+      "id": "ea88be9e-388d-4cb4-8a34-42376dfc2631",
+      "name": "EVER文藏",
+      "type": "",
+      "app": "",
+      "description": ""
+    },
+    {
+      "id": "89360385-627c-494f-92cf-3c305a5e07fa",
+      "name": "EVER智识",
+      "type": "",
+      "app": "",
+      "description": ""
+    },
+    {
+      "id": "6ece22a2-a17a-44a4-adcf-f0b4e2c1ae69",
+      "name": "QuickGPT",
+      "type": "",
+      "app": "",
       "description": ""
     },
     {
@@ -319,6 +340,13 @@
       "description": ""
     },
     {
+      "id": "57400179-d9c5-4a51-b550-67aa60c76b8f",
+      "name": "[ths]打开准备",
+      "type": "",
+      "app": "",
+      "description": ""
+    },
+    {
       "id": "23235eb7-aba1-419c-9bbf-1aa4e0dbddc9",
       "name": "[ths]流程买",
       "type": "XAction",
@@ -501,6 +529,13 @@
       "description": ""
     },
     {
+      "id": "ebc70ec8-d8df-49b6-88c9-41dfd3486e1b",
+      "name": "ai对话",
+      "type": "",
+      "app": "",
+      "description": ""
+    },
+    {
       "id": "057befb3-6b71-4d5a-908a-548737beeb4e",
       "name": "music",
       "type": "XAction",
@@ -641,20 +676,6 @@
       "description": ""
     },
     {
-      "id": "27974376-3e90-409b-94af-817ea7783b9a",
-      "name": "",
-      "type": "",
-      "app": "",
-      "description": ""
-    },
-    {
-      "id": "2a0a9725-ee20-46c5-845a-63f82fab6345",
-      "name": "",
-      "type": "",
-      "app": "",
-      "description": ""
-    },
-    {
       "id": "3343f104-ef76-4e63-a0bb-6bb71c55bdc4",
       "name": "",
       "type": "",
@@ -670,13 +691,6 @@
     },
     {
       "id": "460683a0-6bf6-48eb-8d52-b3a34d70990d",
-      "name": "",
-      "type": "",
-      "app": "",
-      "description": ""
-    },
-    {
-      "id": "4948130b-bd87-45eb-8434-5e34c593580a",
       "name": "",
       "type": "",
       "app": "",
@@ -711,34 +725,6 @@
       "description": ""
     },
     {
-      "id": "5479d192-6800-409e-a216-fea4bab07aed",
-      "name": "",
-      "type": "",
-      "app": "",
-      "description": ""
-    },
-    {
-      "id": "57400179-d9c5-4a51-b550-67aa60c76b8f",
-      "name": "",
-      "type": "",
-      "app": "",
-      "description": ""
-    },
-    {
-      "id": "5abe87c9-e7ee-445d-8438-0d297aa3d0ff",
-      "name": "",
-      "type": "",
-      "app": "",
-      "description": ""
-    },
-    {
-      "id": "5cd52663-45a5-4cfe-8438-19cfd3adf2a2",
-      "name": "",
-      "type": "",
-      "app": "",
-      "description": ""
-    },
-    {
       "id": "634c880c-e322-4ea2-8296-bb34a441b073",
       "name": "",
       "type": "",
@@ -767,21 +753,7 @@
       "description": ""
     },
     {
-      "id": "6ece22a2-a17a-44a4-adcf-f0b4e2c1ae69",
-      "name": "",
-      "type": "",
-      "app": "",
-      "description": ""
-    },
-    {
       "id": "71256140-610c-43de-bbda-0baa65114283",
-      "name": "",
-      "type": "",
-      "app": "",
-      "description": ""
-    },
-    {
-      "id": "767bc646-b61f-46ce-818f-0b89f38d40d5",
       "name": "",
       "type": "",
       "app": "",
@@ -823,13 +795,6 @@
       "description": ""
     },
     {
-      "id": "89360385-627c-494f-92cf-3c305a5e07fa",
-      "name": "",
-      "type": "",
-      "app": "",
-      "description": ""
-    },
-    {
       "id": "906b8de4-3e8d-48f1-ab41-d2b730b94992",
       "name": "",
       "type": "",
@@ -844,21 +809,7 @@
       "description": ""
     },
     {
-      "id": "9f530d6e-b87e-4806-8b0b-153f810c57c2",
-      "name": "",
-      "type": "",
-      "app": "",
-      "description": ""
-    },
-    {
       "id": "a20399b8-d26c-49bf-88ca-545dd9e3470c",
-      "name": "",
-      "type": "",
-      "app": "",
-      "description": ""
-    },
-    {
-      "id": "ae0efc97-2650-41c1-b57a-51ce828e69d5",
       "name": "",
       "type": "",
       "app": "",
@@ -942,13 +893,6 @@
       "description": ""
     },
     {
-      "id": "d7258f19-8149-4866-aaab-91c4583b24d9",
-      "name": "",
-      "type": "",
-      "app": "",
-      "description": ""
-    },
-    {
       "id": "d8c3a6c6-9104-447d-8e7c-21d6e971f544",
       "name": "",
       "type": "",
@@ -970,20 +914,6 @@
       "description": ""
     },
     {
-      "id": "ea88be9e-388d-4cb4-8a34-42376dfc2631",
-      "name": "",
-      "type": "",
-      "app": "",
-      "description": ""
-    },
-    {
-      "id": "ebc70ec8-d8df-49b6-88c9-41dfd3486e1b",
-      "name": "",
-      "type": "",
-      "app": "",
-      "description": ""
-    },
-    {
       "id": "edb2777f-02b7-42c9-8e7f-89c9e7f61c7e",
       "name": "",
       "type": "",
@@ -999,13 +929,6 @@
     },
     {
       "id": "f9895104-03cf-496f-87fc-046b9e652cdd",
-      "name": "",
-      "type": "",
-      "app": "",
-      "description": ""
-    },
-    {
-      "id": "fdce12d0-f53b-4d71-aa84-3031a23bbdfe",
       "name": "",
       "type": "",
       "app": "",
@@ -1058,6 +981,20 @@
       "name": "个股解析",
       "type": "XAction",
       "app": "tdxw.exe",
+      "description": ""
+    },
+    {
+      "id": "ae0efc97-2650-41c1-b57a-51ce828e69d5",
+      "name": "二维码工具",
+      "type": "",
+      "app": "",
+      "description": ""
+    },
+    {
+      "id": "fdce12d0-f53b-4d71-aa84-3031a23bbdfe",
+      "name": "二维码工具",
+      "type": "",
+      "app": "",
       "description": ""
     },
     {
@@ -1131,6 +1068,13 @@
       "description": "附加一些快捷键"
     },
     {
+      "id": "d7258f19-8149-4866-aaab-91c4583b24d9",
+      "name": "动作列表",
+      "type": "",
+      "app": "",
+      "description": ""
+    },
+    {
       "id": "1708e877-1dac-4c5a-8324-db8417115873",
       "name": "动作编辑者",
       "type": "XAction",
@@ -1180,6 +1124,13 @@
       "description": "实时搜索示例"
     },
     {
+      "id": "2a0a9725-ee20-46c5-845a-63f82fab6345",
+      "name": "实时显示按键",
+      "type": "",
+      "app": "",
+      "description": ""
+    },
+    {
       "id": "d7b87fe4-9b52-474a-83ad-8f631d31f00f",
       "name": "对符",
       "type": "XAction",
@@ -1198,6 +1149,20 @@
       "name": "成功声音",
       "type": "XAction",
       "app": "_global",
+      "description": ""
+    },
+    {
+      "id": "5abe87c9-e7ee-445d-8438-0d297aa3d0ff",
+      "name": "截图",
+      "type": "",
+      "app": "",
+      "description": ""
+    },
+    {
+      "id": "5cd52663-45a5-4cfe-8438-19cfd3adf2a2",
+      "name": "截图OCR",
+      "type": "",
+      "app": "",
       "description": ""
     },
     {
@@ -1411,10 +1376,45 @@
       "description": "切换文件视图"
     },
     {
+      "id": "5479d192-6800-409e-a216-fea4bab07aed",
+      "name": "视频旋转",
+      "type": "",
+      "app": "",
+      "description": ""
+    },
+    {
+      "id": "767bc646-b61f-46ce-818f-0b89f38d40d5",
+      "name": "视频旋转修复版",
+      "type": "",
+      "app": "",
+      "description": ""
+    },
+    {
       "id": "1cee4cb5-07af-4066-88f6-8197fd7456e4",
       "name": "解压",
       "type": "Windows Explorer home",
       "app": "xyplorer.exe",
+      "description": ""
+    },
+    {
+      "id": "27974376-3e90-409b-94af-817ea7783b9a",
+      "name": "解散文件",
+      "type": "",
+      "app": "",
+      "description": ""
+    },
+    {
+      "id": "4948130b-bd87-45eb-8434-5e34c593580a",
+      "name": "解除文件占用",
+      "type": "",
+      "app": "",
+      "description": ""
+    },
+    {
+      "id": "9f530d6e-b87e-4806-8b0b-153f810c57c2",
+      "name": "识别二维码",
+      "type": "",
+      "app": "",
       "description": ""
     },
     {

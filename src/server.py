@@ -381,6 +381,10 @@ async def list_tools() -> list[Tool]:
                     "limit": {
                         "type": "integer",
                         "description": "可选，最多返回多少条"
+                    },
+                    "refresh": {
+                        "type": "boolean",
+                        "description": "可选，强制重新扫描启动器本地数据（默认读缓存，缓存超过 5 分钟会自动重扫）"
                     }
                 },
                 "required": ["tool_id"]
@@ -654,14 +658,28 @@ async def dispatch_tool(name: str, arguments: dict) -> str:
         tool_id = arguments.get("tool_id", "")
         keyword = arguments.get("keyword")
         limit = arguments.get("limit")
+        # A13：默认读缓存（陈旧会自动重扫）；refresh=true 强制重扫
+        refresh = bool(arguments.get("refresh"))
         # list_actions 返回的是数组而非结果字典，不能用 ensure_success 包；
         # 启动器自己的错误转成带 errorType 的失败，而不是落到内部异常兜底
         try:
-            actions = launcher_manager.list_actions(tool_id, keyword=keyword, limit=limit)
+            actions = launcher_manager.list_actions(
+                tool_id, keyword=keyword, limit=limit, refresh=refresh
+            )
         except LauncherError as exc:
             fail(str(exc), error_type="launcher_error", toolId=tool_id)
+        # 带上 lastSynced / source：调用方要能判断这份清单有多旧、是否完整，
+        # 否则「自动刷新」只是把不透明变得更不透明。
+        catalog = store.load_launcher_catalog(tool_id) or {}
         result = json.dumps(
-            {"success": True, "toolId": tool_id, "count": len(actions), "actions": actions},
+            {
+                "success": True,
+                "toolId": tool_id,
+                "count": len(actions),
+                "lastSynced": catalog.get("lastSynced"),
+                "source": catalog.get("source"),
+                "actions": actions,
+            },
             ensure_ascii=False,
             indent=2,
         )
