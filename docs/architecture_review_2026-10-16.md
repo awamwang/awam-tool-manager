@@ -22,9 +22,11 @@
 
 ## 0. P1-04 重构后的基线声明与锚点映射（2026-10-17，任务 #8）
 
-**本报告正文的全部 file:line 引用均基于评审时点代码**（`server.py` 1020 行版本，HEAD `c40d80d`~`4edead9`）。2026-10-17 的 **P1-04 声明式注册表重构**（commits `ee252eb`–`a2a8079`，M00–M08 全量回归 192 passed）已改变引用地图：`server.py` 降至 **464 行**，新增 `src/errors.py`（35 行）与 `src/tool_specs.py`（728 行）。按下表换算行号；**不逐条改写正文**（正文是评审时点的历史记录，按「定级留档」原则保留）。
+**本报告正文的全部 file:line 引用均基于评审时点代码**（`server.py` 1020 行版本，HEAD `c40d80d`~`4edead9`）。2026-10-17 的 **P1-04 声明式注册表重构**（commits `ee252eb`–`a2a8079`，M00–M08 全量回归 192 passed）已改变引用地图：`server.py` 降至 **464 行**，新增 `src/errors.py` 与 `src/tool_specs.py`。按下表换算行号；**不逐条改写正文**（正文是评审时点的历史记录，按「定级留档」原则保留）。
 
-### 0.1 锚点映射表（旧 → 新，新锚点截至 HEAD `a2a8079`）
+> **三次校准说明（2026-10-17 晚，NE-4 清理收尾）**：P1-04 之后 **P1-03 errorType 契约补齐**（commits `7f66d32`–`fce1b4b`，S2–S6；其中 S6 仅新增 `tests/test_error_type_contract.py`、不动 `src/`）又改变了引用地图——`src/errors.py` 因 ErrorType 常量枚举落地从 35 行增至 **86 行**（`fail()` / `ensure_success()` 由 `:24`/`:31` 下移至 `:75`/`:82`）；`server.py` 与 `tool_specs.py` 仅行内替换（`"not_found"` → `ErrorType.NOT_FOUND` 等），**行数不变、锚点不漂**。下表「P1-04 后位置」列中，`errors.py` 两个锚点已按 HEAD `fce1b4b` 校准，其余锚点在 `a2a8079`~`fce1b4b` 间全部实测复核有效。
+
+### 0.1 锚点映射表（旧 → 新，新锚点经 HEAD `fce1b4b` 实测复核）
 
 | 本报告引用（旧，`server.py`） | P1-04 后位置 |
 |---|---|
@@ -34,14 +36,16 @@
 | `:100-105` `SHARED_OUTPUT_SCHEMA` | `tool_specs.py:79-91`（含 outputSchema↔structuredContent 约束注释原文） |
 | `:108-126` `_needs_destructive_confirm` | `tool_specs.py:102-120` |
 | `:132-136` `call_tool` 的 `except ToolError` | `server.py:130-137`（该函数逐字未动） |
-| `:147-151` `ensure_success` / `fail` | `errors.py:31` / `errors.py:24`；`server.py:45` re-export（同一对象） |
+| `:147-151` `ensure_success` / `fail` | `errors.py:82` / `errors.py:75`（P1-03 S2 后 errors.py 增至 86 行，两者由 `:31`/`:24` 下移）；`server.py:45` re-export（同一对象） |
 | `:158-431` 15 个 `Tool(...)` 字面量 | `tool_specs.py:351-657` `SERVER_TOOL_SPECS`（15 条 spec） |
-| `:171`/`:185` `kind` 的 driver 文案 | `tool_specs.py:365`/`:381`（NE-5：原文保留，本期不许修，见 §3.1 第 20 条） |
-| `:205-206` `launch_tool` 描述 | `tool_specs.py:407` |
-| `:303-324` `get_backend_logs` Tool 定义 | `tool_specs.py:516-537` |
+| `:171`/`:185` `kind` 的 driver 文案 | `tool_specs.py:366`/`:383`（NE-5：原文保留，本期不许修，见 §3.1 第 20 条；NE-5 注释在其上一行 `:365`/`:382`） |
+| `:174` `search_tools` 的 `required: ["keyword"]` | `tool_specs.py:369`（同属 inputSchema 声明不校验证据，旧行号落在 `:158-431` 区间内故单列） |
+| `:205-206` `launch_tool` 描述 | `tool_specs.py:408`（`description="取指定工具的启动命令（只返回命令，不实际执行启动）"`；spec 块 `:405-411`） |
+| `:303-324` `get_backend_logs` Tool 定义 | `tool_specs.py:517-540` |
 | `:489-493` structuredContent 返回 | `server.py:146-150`（逐字未动） |
 | `:500-717` `dispatch_tool` if/elif 链 | `server.py:153-163` 查表分发 + `tool_specs.py:123-347` 15 个 handler |
 | `:501` `arguments.get("keyword","")` | `tool_specs.py:124` |
+| `:504` 及 `523/575/580/617/623/634/641` 共 8 处 `json.dumps` 成功/错误包装 | `server.py:163` **统一为一处**（`json.dumps(payload, ensure_ascii=False, indent=2, default=str)`，NE-1：`default=str` 由 5 个工具统一为 15 个） |
 | `:577-580` `launch_tool` 分支 | `tool_specs.py:203-206` |
 | `:591` `call_backend_tool` destructive 门禁 | `tool_specs.py:224-232` |
 | `:622` `start_backend` 包装 | `tool_specs.py:254-258` |

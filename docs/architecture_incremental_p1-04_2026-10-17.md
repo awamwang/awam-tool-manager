@@ -5,8 +5,36 @@
 > **测试基线**：`pyenv 3.12.0 python -m pytest -q` → **183 passed**（2026-10-16 实测，**9 个贡献用例的文件**）。
 > **文件数口径（QA 2026-10-17 补充确认）**：`tests/` 下物理上有 **10 个** `test_*.py`，其中 `tests/test_e2e_install_gate.py`（随 `4dc8b31` 提交，142 行）**collect 0 条用例**——文件首行自述「一次性手工脚本，非 pytest 用例」，须手工 `python tests/test_e2e_install_gate.py` 跑。因此「9 个文件」仅在「贡献 pytest 用例的文件」口径下成立；引用时建议写成「9 个用例文件 + 1 个手工 E2E 脚本」（`docs/architecture.md:88` 已采用此写法）。
 > **上游输入**：`docs/architecture_review_2026-10-16.md` 的 ARC-P1-04；`docs/test_health_review_2026-10-16.md`（QA）。
-> **行号说明**：本文所有 `file:line` 均在 `4edead9` 上逐行重新核对过（P0 修复后行号已漂移，
-> 不复用评审报告里的旧行号）。
+> **行号说明（2026-10-17 二次修订，NE-4 清理）**：本文所有 `file:line` 均在设计时点的 `4edead9` 上逐行核对过（不复用评审报告里的旧行号）。**但 P1-04 重构（M00–M08）已把 `server.py` 从 1020 行降到 464 行**——因此 §1–§7 里的 `server.py:NNN` 全部是**重构前基线**（`ee252eb~1`，即 M01 的父提交）的行号，**不是当前 HEAD 的位置**。重构后的对应位置见下方 **§0 映射表**（逐条实测核对）；§12 核验记录里的 `server.py:NNN` 为重构后新锚点（已就地标注「新」）。本文按「历史留档」体例保留旧行号不改写正文——§1 的维护点清单是**针对重构前代码的证据**（如「`Tool` 字面量占 :158-431 约 273 行」正是「9 个维护点」论断的支撑），改写成新行号会破坏证据链。
+
+---
+
+## 0. `server.py` 行号口径与旧→新映射表（NE-4 清理，2026-10-17）
+
+**§1–§7 的 `server.py:NNN` = 重构前基线**（`ee252eb~1`，1020 行版本）。P1-04 后（HEAD，464 行）的对应位置：
+
+| 本文引用（旧，`server.py`） | 重构后位置（HEAD `fce1b4b` 实测复核；`a2a8079` 采集后 P1-03 S2–S6 对 `server.py`/`tool_specs.py` 仅行内替换、行数不变，锚点不漂） |
+|---|---|
+| `:28-31` `ToolAnnotations` 可选导入 | `tool_specs.py:23-26` |
+| `:73-91` `TOOL_ANNOTATION_HINTS` | `tool_specs.py:351-657` `SERVER_TOOL_SPECS`（annotations 与工具同条记录，表已删除） |
+| `:88` `set_backend_log_level` 的 `{}` | `tool_specs.py:560` `annotations={}` |
+| `:96-99` outputSchema 约束注释 | `tool_specs.py:79-85`（注释原文随常量搬入） |
+| `:100-105` `SHARED_OUTPUT_SCHEMA` | `tool_specs.py:86-91` |
+| `:108-126` `_needs_destructive_confirm` | `tool_specs.py:102-120` |
+| `:158-431` 15 个 `Tool(...)` 字面量 | `tool_specs.py:351-657` `SERVER_TOOL_SPECS` |
+| `:171` / `:185` `kind` 的 driver 文案 | `tool_specs.py:366` / `:383`（NE-5：原文保留，本期不许修；NE-5 注释在其上一行 `:365` / `:382`） |
+| `:435` `if hints:` 真值判断 | `tool_specs.py:684`（`if ToolAnnotations is not None and spec.annotations:`） |
+| `:439-440` outputSchema 挂载循环 | `tool_specs.py:686`（`tool.outputSchema = spec.output_schema or SHARED_OUTPUT_SCHEMA`） |
+| `:500-717` `dispatch_tool` if/elif 链 | `server.py:153-163` 查表分发 + `tool_specs.py:123-347` 15 个 handler |
+| `:504-714` 15 处 `json.dumps` | `server.py:163` 统一一处（`json.dumps(payload, ensure_ascii=False, indent=2, default=str)`） |
+| `:555-573` `get_tool_info` enrich 分支 | `tool_specs.py:180-198` |
+| `:696` `run_launcher_action` 条目级判定 | `tool_specs.py:329-336` |
+| `:717` `unknown_tool` else 分支 | `server.py:161` |
+| `:722-895` Resources / Prompts | `server.py:166-339`（未动，位置前移） |
+| `:860` 「只有 kind=mcp…」提示词文案 | `server.py:304` |
+| `:982-985` `main()` 启动日志 | `server.py:414-417` |
+
+**§12 核验记录里的新锚点**（重构后位置，就地标注过）：`server.py:342-409`（预热/恢复留驻）、`server.py:161`（unknown_tool）。其他文件的行号（`backend_client.py` / `registry.py` / `conftest.py` / `tests/`）不在 P1-04 改动范围内，照常有效。
 
 ---
 
@@ -582,7 +610,7 @@ graph LR
 
 | # | 检查点 | 结论 |
 |---|---|---|
-| 1 | NE-5：`driver` 漂移未被顺手修掉 | ✅ `tool_specs.py:365`/`:381` 原文「如 app、mcp、driver」保留，golden 同步钉住 |
+| 1 | NE-5：`driver` 漂移未被顺手修掉 | ✅ `tool_specs.py:366`/`:383` 原文「如 app、mcp、driver」保留（NE-5 注释在其上一行 `:365`/`:382`，M08 补），golden 同步钉住 |
 | 2 | `SHARED_OUTPUT_SCHEMA` 约束注释随常量搬入 | ✅ `tool_specs.py:79-91`，outputSchema↔structuredContent 注释原文随行 |
 | 3 | `_prewarm_backends`/`_restore_backends` 留在 `server.py` | ✅ `server.py:342-409`；`ensure_npm_bin_on_path` 仍可经 server 命名空间 monkeypatch |
 | 4 | golden 比对归一化 | ✅ `_fields()` 仅对 annotations 施加 `exclude_none=True`，其余四字段严格比；两条禁令（不补 null 键、不整表偷懒）遵守 |

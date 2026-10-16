@@ -3,6 +3,8 @@
 > 审核日期：2026-10-15　|　基准 commit：`65d108c`
 > 审核依据：[`docs/architecture.md`](architecture.md)（项目功能与架构总结）+ 源码 + 实测验证
 > 审核范围：`src/`（4 个模块）、`data/`（3 个 JSON）、`tests/`、依赖声明
+>
+> **行号基线声明（2026-10-17，NE-4 清理）**：本报告全部 `file:line` 仅在基准 commit `65d108c` 上有效（彼时 `server.py` 为 **581 行**）。此后仓库历经 A13/A14（`server.py` 增至约 1020 行）、P0 修复 `4dc8b31`、**P1-04 声明式注册表重构** `ee252eb`–`a2a8079`（`server.py` 1020 → **464 行**，`TOOL_ANNOTATION_HINTS` 删除、15 个 `Tool(...)` 字面量与 if/elif 分发链搬入 `src/tool_specs.py`）与 P1-03 errorType 补齐 `7f66d32`–`fce1b4b`。受影响的 6 处 `server.py:NNN` 引用（`:83`、`:109`、`:243-390`、`:386-387`、`:395`、`:520-543`）**对当前 HEAD 全部失效**，按「历史留档」体例**不改写正文**——本报告是 `65d108c` 时点的审核记录。P1-04 重构后的位置换算见 [`architecture_review_2026-10-16.md`](architecture_review_2026-10-16.md) §0.1（该表基线为 1020 行版本，与本报告的 581 行基线不同，勿直接套用）。
 
 ---
 
