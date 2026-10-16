@@ -63,7 +63,7 @@ awam-tool-manager/
 ├── SKILL.md                  # 技能声明（对外契约，已过期）
 ├── README.md                 # 项目说明（已过期）
 ├── TASKS.md                  # 任务清单
-├── requirements.txt          # mcp>=1.30.0,<2.0.0, pytest>=7.0.0
+├── requirements.txt          # mcp>=1.29.0,<2.0.0, pytest>=7.0.0
 ├── docs/
 │   ├── format.md             # 数据格式规范（部分过期）
 │   ├── architecture.md       # 本文档
@@ -79,7 +79,7 @@ awam-tool-manager/
 │   ├── store.py              # JSON 存储层（139 行，读容错 + 原子写）
 │   ├── registry.py           # 工具注册中心（140 行，含条目校验过滤）
 │   ├── schema.py             # 两层数据的 JSON Schema 与校验（240 行，**文档生成源**）
-│   └── backend_client.py     # 后端 MCP 客户端与连接池（1133 行）
+│   └── backend_client.py     # 后端 MCP 客户端与连接池（1246 行）
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表（148 行）
 └── tests/                    # 7 个文件，106 个用例（含真实 MCP 会话与文档漂移检测）
@@ -192,8 +192,8 @@ awam-tool-manager/
 | `store.py` | 139 | JSON 文件的读写与目录遍历，读有容错、写走原子替换，无缓存 | 标准库 |
 | `schema.py` | 240 | 两层数据的 JSON Schema 与校验（`jsonschema` 可选，缺失时降级）；**同时是 `docs/format.md` 字段表的唯一生成源** | `jsonschema`(可选) |
 | `registry.py` | 140 | 工具查询语义（列表 / 搜索含 `id` / 详情 / 启动信息），加载时过滤不合规条目 | `store`、`schema` |
-| `backend_client.py` | 1133 | 后端 MCP 子进程的连接管理、调用转发、缓存、心跳、日志、依赖自装 | `mcp`、`store` |
-| `server.py` | 801 | MCP 协议入口，定义并分发全部对外能力（含 annotations 与 destructive 门禁），启动时后台预热后端依赖 | `mcp`、`store`、`registry`、`backend_client`、`schema` |
+| `backend_client.py` | 1246 | 后端 MCP 子进程的连接管理、调用转发、缓存、心跳、日志、依赖自装 | `mcp`、`store` |
+| `server.py` | 828 | MCP 协议入口，定义并分发全部对外能力（含 annotations 与 destructive 门禁），启动时后台预热后端依赖 | `mcp`、`store`、`registry`、`backend_client`、`schema` |
 | `scripts/generate_format_doc.py` | 148 | 读 `schema.py` 渲染字段表并就地替换 `docs/format.md` 的生成区块；`--check` 做漂移检查 | 标准库、`schema` |
 
 ### 5.3 后端路由调用链
@@ -251,6 +251,24 @@ TaskGroup 的取消作用域，而 anyio 的 `CancelScope` **绑定进入它的�
 **子进程 stdin 隔离**：`ensure_npm_bin_on_path()` 与安装命令的 spawn 一律传
 `stdin=DEVNULL`。server 自身经 stdio 管道与网关通信，子进程若继承这条 stdin，
 npm/cli 链会阻塞在读 stdin 上永不返回（表现为启动挂死 → 网关 30s 超时）。
+
+**期望状态持久化与跨世代自愈（A10）**：
+
+toolport 网关会**周期性整池回收**它拉起的 server 进程（2026-10-16 实测约每
+几分钟一批：整批 downstream server 同时重生，回收走「关 stdin → 本服务优雅
+退出 → close_all 停掉全部后端」，不留孤儿）。每次回收后新 server 世代内存
+状态清零——stdio MCP server 的生命周期归网关管，进程内状态注定随进程消亡，
+用户视角就是「启动后保不住，每次都得重新初始化」。对策：
+
+- `start_backend` 成功 → 把启动意图写入 `backend_desired_state.json`
+  （原子写；文件损坏按空处理，绝不阻断启动）；
+- 每个新 server 世代启动时，`_restore_backends()` 后台任务据意图自动拉起
+  desired=running 的后端——用户跨网关回收也能随时查到 running；
+- `stop_backend` 成功 → 清除意图（用户明确说不要了，下代不再拉起）；
+- 意图对应的工具已删除 → 自动清掉过期记录。
+- 已知边界：若 server 被**硬杀**（非优雅退出），当代后端会孤儿化，下代自动
+  恢复时会再起一个（stdio 后端无端口冲突，可共存）；要「永不重启」需把后端
+  生命周期移出网关控制的 server 进程（外部 supervisor），属于后续架构演进。
 
 ---
 
@@ -334,7 +352,7 @@ python src/server.py
 | SKILL.md / README.md / TASKS.md / format.md 里的 launcher、adapters 描述 | ✅ 全部改为当前两层结构 |
 | `list_launchers` / `get_launcher_info` 的虚假声明 | ✅ 从文档移除；未知工具改为返回协议层错误 |
 | 参数名混乱（`mcp_tool_id` / `launcher_id`） | ✅ 统一为 `tool_id` |
-| `requirements.txt` 无上界导致新环境装 2.x 后崩溃 | ✅ 锁定 `mcp>=1.30.0,<2.0.0`（D2 先锁 `<2.0.0`，A5 再把下限提到 1.30 以启用 structuredContent / outputSchema） |
+| `requirements.txt` 无上界导致新环境装 2.x 后崩溃 | ✅ 锁定 `mcp>=1.29.0,<2.0.0`（D2 先锁 `<2.0.0`；A5 曾把下限提到 1.30，A9 实测 1.29 已具备全部所需能力后改回 1.29——生产环境 pyenv 3.12 现装 1.29.0） |
 | 业务失败不被 MCP 客户端感知（`isError` 恒为 False） | ✅ 改为抛 `ToolError` |
 | `read_resource` 返回 `TextContent`（缺 `.content` 属性必报错） | ✅ 改为 `ReadResourceContents` |
 | Prompt 模板教 AI 用错误参数名 | ✅ 修正示例并补充错误类型说明 |
@@ -399,7 +417,7 @@ python src/server.py
 
 | 项 | 说明 |
 |---|---|
-| `structuredContent` | ✅ 已启用（mcp>=1.30）：`call_tool` 返回带 `structuredContent` 的 `CallToolResult`，`list_tools` 给每个工具挂统一 `outputSchema`（见 `SHARED_OUTPUT_SCHEMA`） |
+| `structuredContent` | ✅ 已启用（mcp>=1.29，1.29 起 types.py 已定义、lowlevel server 已透传 `CallToolResult`）：`call_tool` 返回带 `structuredContent` 的 `CallToolResult`，`list_tools` 给每个工具挂统一 `outputSchema`（见 `SHARED_OUTPUT_SCHEMA`） |
 | 依赖自装 + 启动预热（A6 ✅ 已收口） | `install` 元数据接入执行：`ensure_installed()`（`_resolved_command` 剥壳解包 → `shutil.which` 检测 → 限时装一次 → 复检）+ `start()` 前置调用 + 服务启动时 `ensure_all_installed()` 后台预热（只装不启）。已用临时探针工具实测全链路 |
 | 工具变更通知 | `notifications/tools/list_changed` 未发送（顶层工具集静态，影响小） |
 | 标准 logging capability | 目前用自定义 Tool 查日志 |

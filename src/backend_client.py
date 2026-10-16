@@ -10,9 +10,12 @@ anyio 的 CancelScope 绑定进入它的任务——跨任务进入/退出会直
 
 import asyncio
 import contextlib
+import datetime
+import json
 import os
 import shutil
 import sys
+import tempfile
 import time
 from collections import deque
 from pathlib import Path
@@ -22,6 +25,35 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from store import JsonStore
+
+
+# 期望状态持久化文件：记录「用户明确 start_backend 成功的后端」。
+#
+# 为什么需要它（2026-10-16 实测）：toolport 网关会**周期性整池回收**它拉起的
+# 所有 server 进程（实测约每几分钟一批，回收时关 stdin → 本服务优雅退出 →
+# close_all 停掉全部后端）。每次回收后新 server 世代内存状态清零，所有后端
+# 状态回到 stopped——用户视角就是「启动后保不住，每次都得重新初始化」。
+# stdio MCP server 的生命周期归客户端（网关）管，进程内状态注定随进程消亡；
+# 把「启动意图」落盘后，每个新世代启动时自动恢复，用户任何时刻查状态都是
+# running。stop_backend 会清除意图——那是用户明确说「不要了」。
+DESIRED_STATE_FILE = (
+    Path(__file__).resolve().parent.parent / "backend_desired_state.json"
+)
+
+
+def _warn(msg: str) -> None:
+    """manager 层警告：走 stderr（MCP 协议stdout 通道不能被污染）"""
+    print(f"[awam:x][warning] {msg}", file=sys.stderr, flush=True)
+
+
+def _utc_now_iso() -> str:
+    """UTC ISO 时间戳（与 data/ 里其他时间字段同风格，Z 结尾）"""
+    return (
+        datetime.datetime.now(datetime.timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 # npm 全局 bin 目录的进程级解析缓存：
@@ -754,7 +786,13 @@ class BackendClient:
                     # anyio 原生限时：wait_for 会从外部任务取消协程，撕裂
                     # anyio 取消作用域栈并带崩整个 Server 进程（详见 start()）
                     with anyio.fail_after(self.HEARTBEAT_TIMEOUT):
-                        await self.session.ping()
+                        # 探测用 send_ping：mcp 1.x 的 ClientSession 只有
+                        # send_ping()，没有 ping()（TS SDK 才叫 ping）。
+                        # 曾误用 ping()：生产环境（pyenv 3.12 + mcp 1.29.0）
+                        # 每次启动后端后心跳必败 → 状态 error → 连接被清 →
+                        # 后端永远留不住（2026-10-16 网关实测复现）。
+                        # 测试环境装 1.30 且心跳 fake 自带 ping，双重掩盖。
+                        await self.session.send_ping()
                     self._last_heartbeat = time.time()
                     self._log("debug", "心跳正常")
             except asyncio.CancelledError:
@@ -966,6 +1004,76 @@ class BackendManager:
         tools = self.store.list_tools()
         return [t["id"] for t in tools if t.get("kind") == "mcp"]
 
+    # ---- 期望状态持久化（跨 server 世代的后端自愈，A10）----
+
+    def _load_desired_state(self) -> dict:
+        """读取期望状态表；文件不存在 / 损坏都按空处理——恢复是尽力而为，
+        绝不能因为状态文件的问题阻断服务启动。"""
+        try:
+            with open(DESIRED_STATE_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _save_desired_state(self, state: dict) -> None:
+        """原子写：本服务随时可能被网关 kill，截断写会留下半个 JSON。
+        与 store.save_json 同样的临时文件 + os.replace 套路。"""
+        DESIRED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(DESIRED_STATE_FILE.parent),
+            prefix=".desired.",
+            suffix=".tmp",
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(state, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, DESIRED_STATE_FILE)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+            raise
+
+    def _set_desired(self, tool_id: str, desired: bool) -> None:
+        """记录/清除某个后端的启动意图。写失败只警告不抛出——
+        意图持久化是增强，不能让它把正常的 start/stop 拖失败。"""
+        state = self._load_desired_state()
+        if desired:
+            state[tool_id] = {"desired": True, "updatedAt": _utc_now_iso()}
+        else:
+            state.pop(tool_id, None)
+        try:
+            self._save_desired_state(state)
+        except OSError as e:
+            _warn(f"期望状态写入失败（不影响本次操作）: {e}")
+
+    async def restore_desired_backends(self) -> dict:
+        """新 server 世代启动时恢复 desired=running 的后端
+
+        每个被网关拉起的 server 进程都是「新世代」：内存里没有任何后端
+        状态。这里把上次明确启动过的后端逐个拉起来，让用户跨网关回收
+        也能随时查到 running。单个工具的失败不影响其他工具。
+        """
+        state = self._load_desired_state()
+        results: dict[str, dict] = {}
+        for tool_id, entry in state.items():
+            if not (isinstance(entry, dict) and entry.get("desired")):
+                continue
+            client = self.get_client(tool_id)
+            if client is None:
+                # 工具已删除 / 不再是 mcp 类型：清掉过期记录，避免每代都白跑
+                self._set_desired(tool_id, False)
+                continue
+            if client.status == BackendClient.STATUS_RUNNING:
+                continue  # 已经活着（同代内重复调用），跳过
+            try:
+                results[tool_id] = await self.start_backend(tool_id)
+            except Exception as e:  # noqa: BLE001 —— 单个后端恢复失败不阻断其他
+                results[tool_id] = {"success": False, "error": f"{type(e).__name__}: {e}"}
+        return results
+
     async def ensure_all_installed(self) -> dict:
         """启动预热：为所有 MCP 工具提前装好缺失的依赖（只装不启）
 
@@ -996,13 +1104,15 @@ class BackendManager:
         }
 
     async def start_backend(self, tool_id: str) -> dict:
-        """启动指定后端，成功后自动同步工具目录"""
+        """启动指定后端，成功后自动同步工具目录，并记录启动意图（A10）"""
         client = self.get_client(tool_id)
         if not client:
             return {"success": False, "error": f"工具 '{tool_id}' 未配置 MCP 后端连接"}
 
         result = await client.start()
         if result.get("success"):
+            # 启动意图落盘：网关周期性回收 server 进程后，新世代靠它自动恢复
+            self._set_desired(tool_id, True)
             # 自动同步工具目录
             sync_result = await self.sync_tools_catalog(tool_id)
             if sync_result.get("success"):
@@ -1039,11 +1149,14 @@ class BackendManager:
             return {"success": False, "error": f"同步失败: {type(e).__name__}: {e}"}
 
     async def stop_backend(self, tool_id: str) -> dict:
-        """停止指定后端"""
+        """停止指定后端，并清除启动意图（A10：用户明确说不要了）"""
         client = self.get_client(tool_id)
         if not client:
             return {"success": False, "error": f"工具 '{tool_id}' 未配置 MCP 后端连接"}
-        return await client.stop()
+        result = await client.stop()
+        if result.get("success"):
+            self._set_desired(tool_id, False)
+        return result
 
     def get_backend_status(self, tool_id: str | None = None) -> dict:
         """获取后端状态"""

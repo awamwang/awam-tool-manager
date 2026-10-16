@@ -758,6 +758,30 @@ async def _prewarm_backends():
         log(f"启动预热失败（不影响服务，将退化为首次调用时按需安装）: {type(e).__name__}: {e}")
 
 
+async def _restore_backends():
+    """状态恢复：把上次明确启动过的后端重新拉起来（A10）
+
+    背景：toolport 网关周期性整池回收它拉起的 server 进程（实测约每几分钟
+    一批）。每次回收后新 server 世代内存状态清零，所有后端回到 stopped——
+    用户视角就是「启动后保不住，每次都得重新初始化」。start_backend 成功时
+    会把启动意图写进 backend_desired_state.json，这里在每个新世代启动时
+    据此恢复。
+
+    与预热的分工：预热只装不启（所有 MCP 工具）；恢复只启 desired=running
+    的（用户明确要过的）。恢复失败同样不阻断服务——最坏是用户下次调用时
+    看到 stopped，再手启一次（意图仍在，下代还会尝试）。
+    """
+    try:
+        result = await backend_manager.restore_desired_backends()
+        if result:
+            ok = sum(1 for r in result.values() if r.get("success"))
+            log(f"状态恢复：{ok}/{len(result)} 个 desired 后端已重新拉起")
+        else:
+            log("状态恢复：没有需要恢复的后端")
+    except Exception as e:
+        log(f"状态恢复失败（不影响服务）: {type(e).__name__}: {e}")
+
+
 async def main():
     """启动 MCP Server"""
     log("=" * 50)
@@ -776,6 +800,8 @@ async def main():
 
     # 后台预热后端依赖：安装是重操作，不能阻塞协议服务就绪
     prewarm_task = asyncio.create_task(_prewarm_backends())
+    # 后台恢复上次启动过的后端：网关回收 server 进程后状态自愈（A10）
+    restore_task = asyncio.create_task(_restore_backends())
 
     try:
         async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
@@ -785,9 +811,10 @@ async def main():
                 app.create_initialization_options()
             )
     finally:
-        prewarm_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await prewarm_task
+        for task in (prewarm_task, restore_task):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
         log("服务退出，关闭所有后端连接...")
         await backend_manager.close_all()
         log("清理完成")

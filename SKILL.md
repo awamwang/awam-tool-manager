@@ -84,7 +84,8 @@ awam-tool-manager/
 
 成功结果除文本通道（JSON 文本）外，还附带 **`structuredContent`**（dict），客户端无需
 再解析文本即可按结构消费；每个工具的 `outputSchema` 统一声明输出含顶层 `success`（bool）。
-依赖下限为 `mcp>=1.30`（structuredContent / outputSchema 是 1.30 起稳定的能力）。
+依赖下限为 `mcp>=1.29`（A9 实测 1.29 已有 structuredContent / outputSchema /
+CallToolResult 透传；生产环境 pyenv 3.12 即 1.29.0）。
 
 ## 安全约定
 
@@ -104,12 +105,19 @@ awam-tool-manager/
 > 无需重启 MCP Server；运行中则不受影响（避免留下孤儿进程），需先 `stop_backend` 再 `start_backend`。
 > 坏掉的 JSON 会被跳过并打印 stderr 告警，不会导致整个服务不可用。
 
+> **后端状态跨进程自愈（A10）**：`start_backend` 成功会把启动意图落盘（`backend_desired_state.json`）。
+> 上游网关（toolport）会周期性整池回收它拉起的 MCP server 进程，回收后新进程内存状态清零——
+> 有了意图落盘，每个新进程启动时会**自动恢复**上次启动过的后端，用户任何时刻查状态都是 running；
+> `stop_backend` 会清除意图。若后端业务依赖本机应用（如 everything-search-mcp 依赖 Everything
+> 桌面程序的 IPC），业务成败取决于该应用是否运行，与连接管理无关。
+
 > **新增/修改字段时**：只改 `src/schema.py`，再跑 `python scripts/generate_format_doc.py`
 > 更新 `docs/format.md` 的字段表。直接手改文档会被 `tests/test_docs_sync.py` 判为漂移。
 
 ## 依赖约束
 
-`requirements.txt` 锁定 `mcp>=1.30.0,<2.0.0`（1.30 起支持 structuredContent / outputSchema）。
+`requirements.txt` 锁定 `mcp>=1.29.0,<2.0.0`（A9 实测 1.29 已支持 structuredContent /
+outputSchema 与 CallToolResult 透传；心跳探测用 `send_ping()`，1.x 全版本可用）。
 **mcp 2.x 移除了本项目依赖的低层装饰器 API，不可直接升级**，迁移需重写 `server.py`。
 
 ## 数据格式

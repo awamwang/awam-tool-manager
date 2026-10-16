@@ -18,3 +18,6 @@ build/
 
 # 运行时鉴权会话存储（server 自动生成，内容因运行而异）
 authorized_tokens.json
+
+# 后端期望状态（start_backend 意图落盘，运行时生成；见 backend_client A10）
+backend_desired_state.json

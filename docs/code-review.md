@@ -779,6 +779,42 @@ GetPromptResult"）→ **prompts/get 全部失败**。
     （anyio `CancelScope` 绑定进入它的任务，跨任务进出必崩）；start/cleanup
     只经 `_ready` / `_shutdown` 事件与有界 join 协作。合计 **117 passed**
 
+**第十一批（已完成 ✅）**
+
+27. ~~**A9** —— 心跳探测调用不存在的 `session.ping()`，后端启动后必被杀~~
+    → 改 `send_ping()`（mcp 1.x 唯一存在的心跳 API）；`requirements.txt`
+    下限从 1.30 改回 **1.29**（实测 1.29 已具备 structuredContent /
+    outputSchema / CallToolResult 透传，生产 pyenv 3.12 即 1.29.0，原
+    1.30 下限建立在错误前提上）；补契约测试（探测方法必须真实存在于
+    `mcp.ClientSession`）+ 假 session 改用真实 SDK 表面白名单。
+    合计 **118 passed**
+
+> A9 背景（2026-10-16 用户报障：「start_backend 成功后状态仍是 stopped，
+> 子工具查询未运行」）：经 toolport daemon 真实链路复现——启动成功 →
+> 30s 内心跳 `AttributeError: 'ClientSession' object has no attribute
+> 'ping'` → 状态 error + 主动清理（杀后端子进程）→ 后续查询显示 error
+> （配置比对命中时）或 stopped（客户端被重建时），子工具一律「未运行」。
+> 测试盲区：心跳 failure 用例的假 session 自带 `ping` 方法（fake 模仿了
+> 错误代码而非真实 SDK）；开发 venv 装 1.30、生产装 1.29 的版本偏差
+> 又双重掩盖。教训：**fake 的表面必须对齐真实 SDK，关键 API 要有契约断言**。
+
+**第十二批（已完成 ✅）**
+
+28. ~~**A10** —— 期望状态持久化 + 跨 server 世代自动恢复~~ →
+    `start_backend` 成功把启动意图写入 `backend_desired_state.json`
+    （原子写、损坏按空处理）；每个新 server 世代启动时
+    `_restore_backends()` 后台任务据意图自动拉起 desired 后端；
+    `stop_backend` 清除意图；工具删除自动清过期记录。合计 **125 passed**
+
+> A10 背景（用户报障的第二个根因，2026-10-16 实测）：toolport 网关周期性
+> **整池回收**它拉起的 server 进程（约每几分钟一批，实测 17:52:00 /
+> 18:02:15 两批；回收走关 stdin → 本服务优雅退出 → close_all，不留孤儿）。
+> 每次回收后新世代内存状态清零，后端全部回到 stopped——用户视角就是
+> 「每次都得重新初始化」。stdio MCP server 的生命周期归网关管，进程内
+> 状态注定随进程消亡；落盘「启动意图」+ 新世代自动恢复，是让用户跨回收
+> 也能随时查到 running 的办法。真正的「永不重启」需要外部 supervisor
+> （后端生命周期移出网关控制的进程），列为后续架构演进。
+
 > A7/A8 背景（2026-10-16 实证，toolport 网关 4/4 事故同款）：
 > ① 网关 env dump 证明传入的是**完整环境**（200 个变量，PATH 含 npm-global），
 > 「PATH 被裁剪」的原诊断是错的；② 真根因是 npm 子进程**继承了 server 的
@@ -795,15 +831,17 @@ GetPromptResult"）→ **prompts/get 全部失败**。
 ## 9. 验证方法（可在本机复现）
 
 ```bash
-# 1) 依赖约束 —— 必须是 1.x（>=1.30 才能用 structuredContent / outputSchema）
+# 1) 依赖约束 —— 必须是 1.x（>=1.29；A9 实测 1.29 已有 structuredContent /
+#    outputSchema / CallToolResult 透传 / send_ping，生产环境即 1.29.0）
 pip install "mcp>=1.30.0,<2.0.0" pytest
 
 # 2) 静态检查
 python -m py_compile src/*.py tests/*.py scripts/*.py
 
-# 3) 单元测试（117 项：store/registry + backend_client 稳定性与依赖自装 + store 容错/原子写
+# 3) 单元测试（125 项：store/registry + backend_client 稳定性与依赖自装 + store 容错/原子写
 #    + server 分发与启动预热 + 搜索语义/schema 校验/annotations/destructive 门禁 + 协议层回环
-#    + 文档与 schema 的一致性 + 连接独占任务/anyio 作用域同一任务闭合 + PATH 自愈）
+#    + 文档与 schema 的一致性 + 连接独占任务/anyio 作用域同一任务闭合 + PATH 自愈
+#    + 心跳探测 API 契约（send_ping 必须真实存在于 mcp.ClientSession））
 python -m pytest tests/ -q
 
 # 3.1) 只查文档漂移（CI 友好，漂移时退出码 1）
@@ -909,4 +947,9 @@ A6（依赖自装 + 启动预热）由 `tests/test_backend_client.py`（剥壳�
 A7（fail_after 化 / PATH 自愈 / stdin 隔离 / 安装锁有界等待）与 A8（连接独占任务）
 由 `tests/test_backend_client.py` 新增用例覆盖（同一任务进出 context、start 超时
 不留孤儿连接任务、stop 后子进程回收），并用裸 JSON-RPC 管道脚本在网关等效环境下
-端到端复测：start_backend 3.6s 成功、退出码 0、stderr 零错误（合计 `117 passed`）。
+端到端复测：start_backend 3.6s 成功、退出码 0、stderr 零错误。
+A9（心跳 `ping()` → `send_ping()` + 依赖下限 1.30 → 1.29）由
+`test_heartbeat_probe_matches_real_sdk`（契约定死 + 行为断言）与
+`test_heartbeat_failure_cleans_up`（fake 改真实 SDK 表面）覆盖，
+并经 toolport daemon 真实链路复现「启动 → 跨心跳周期 → 状态保持 running」
+（合计 `125 passed`）。

@@ -5,6 +5,7 @@
 """
 import asyncio
 import contextlib
+import json
 import os
 import shutil
 import sys
@@ -445,7 +446,7 @@ def test_heartbeat_failure_cleans_up():
     """心跳失败不只改状态，还要释放子进程"""
 
     class DeadSession:
-        async def ping(self):
+        async def send_ping(self):
             raise RuntimeError("pipe closed")
 
     async def run():
@@ -465,6 +466,74 @@ def test_heartbeat_failure_cleans_up():
     assert client.status == BackendClient.STATUS_ERROR
     assert "exit:stdio" in client.tracker  # 子进程被释放
     assert client._stdio_context is None
+
+
+class _SdkSurfaceSession:
+    """只暴露真实 ClientSession 用到的 API 的假会话
+
+    心跳/工具缓存/调用只会碰 initialize / send_ping / list_tools /
+    call_tool。若代码调了不存在的方法（如曾经的 ping()），这里立刻
+    AttributeError——测试环境装的是开发版 mcp，真 SDK 的表面以本类的
+    白名单 + test_heartbeat_probe_matches_real_sdk 的契约定死。
+    """
+
+    def __init__(self):
+        self.ping_calls = 0
+
+    async def initialize(self):
+        return None
+
+    async def send_ping(self):
+        self.ping_calls += 1
+        return None
+
+    async def list_tools(self):
+        class _Result:
+            tools = []
+
+        return _Result()
+
+    async def call_tool(self, name, arguments):
+        raise AssertionError("心跳测试不应调用 call_tool")
+
+
+def test_heartbeat_probe_matches_real_sdk():
+    """A9：心跳探测必须落在真实 ClientSession 存在的方法上
+
+    曾经的 bug：`await session.ping()` —— mcp 1.x 只有 send_ping()。
+    生产环境（mcp 1.29.0）每次启动后端后心跳必败、连接被清、状态 error，
+    后端永远留不住；而开发环境（mcp 1.30）的心跳 fake 自带 ping 方法，
+    测试全绿也发现不了。本用例从两头堵死：
+    1. 契约断言：探测方法必须真实存在于 mcp.ClientSession；
+    2. 行为断言：心跳跑完一轮后状态仍为 running（假 session 表面即真实
+       SDK 白名单，调错方法会 AttributeError → 状态 error → 断言失败）。
+    """
+    import mcp
+
+    assert hasattr(mcp.ClientSession, "send_ping"), (
+        "mcp.ClientSession 没有 send_ping()——SDK API 变了，"
+        "请同步更新 _heartbeat_loop 的探测方式"
+    )
+
+    async def run():
+        client = FakeBackendClient()
+        client.status = BackendClient.STATUS_RUNNING
+        client.attach()
+        session = _SdkSurfaceSession()
+        client.session = session
+        client.HEARTBEAT_INTERVAL = 0.01
+        client._heartbeat_task = asyncio.create_task(client._heartbeat_loop())
+        for _ in range(100):
+            if session.ping_calls >= 2:
+                break
+            await asyncio.sleep(0.02)
+        await client.stop()
+        return client, session
+
+    client, session = asyncio.run(run())
+    assert session.ping_calls >= 2, "心跳应周期调用 send_ping"
+    assert client.status == BackendClient.STATUS_STOPPED  # stop 后的正常状态
+    assert "exit:stdio" in client.tracker
 
 
 class _FakeCallResult:
@@ -1332,3 +1401,164 @@ def test_stop_joins_connection_task():
 
     assert task.done(), "stop 应等待连接任务自行拆除后再返回"
     assert "exit:stdio" in client.tracker
+
+
+# ---- A10：期望状态持久化 + 跨 server 世代自动恢复 ----
+#
+# 背景（2026-10-16 用户报障「start 成功后状态仍是 stopped，每次都得重新
+# 初始化」的第二个根因）：toolport 网关周期性整池回收它拉起的 server 进程
+# （实测约每几分钟一批，回收走关 stdin → 本服务优雅退出 → close_all）。
+# 每次回收后新 server 世代内存状态清零，后端全部回到 stopped。stdio MCP
+# server 的生命周期归网关管，进程内状态注定随进程消亡——把「启动意图」
+# 落盘、新世代启动时自动恢复，是让用户跨回收也能随时查到 running 的唯一
+# 办法（真正的「永不重启」需要脱离网关的外部 supervisor，见架构文档）。
+# 这里用 fake 的 start/stop 驱动，不碰真实子进程。
+
+
+async def _ok_start(self):
+    """替身：直接成功的 client.start"""
+    self.status = BackendClient.STATUS_RUNNING
+    self.started_at = time.time()
+    return {"success": True, "message": "启动成功"}
+
+
+async def _fail_start(self):
+    """替身：失败的 client.start"""
+    return {"success": False, "error": "boom"}
+
+
+async def _ok_stop(self):
+    """替身：直接成功的 client.stop"""
+    self.status = BackendClient.STATUS_STOPPED
+    return {"success": True, "message": "已停止"}
+
+
+async def _ok_sync(self, tool_id):
+    """替身：manager.sync_tools_catalog"""
+    return {"success": True, "count": 0}
+
+
+def test_start_persists_desired_state(tmp_path, monkeypatch):
+    """A10：start 成功必须把启动意图落盘，否则新世代无从恢复"""
+    state_file = tmp_path / "desired.json"
+    monkeypatch.setattr(backend_client, "DESIRED_STATE_FILE", state_file)
+    monkeypatch.setattr(BackendClient, "start", _ok_start)
+    monkeypatch.setattr(BackendManager, "sync_tools_catalog", _ok_sync)
+
+    async def run():
+        manager = BackendManager(FakeStore({"mcp1": _mcp_tool({"type": "stdio"})}))
+        return await manager.start_backend("mcp1")
+
+    result = asyncio.run(run())
+    assert result["success"] is True
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert state["mcp1"]["desired"] is True
+
+
+def test_failed_start_does_not_persist(tmp_path, monkeypatch):
+    """A10：启动失败不写意图——否则每个新世代都会去拉一个注定失败的后端"""
+    state_file = tmp_path / "desired.json"
+    monkeypatch.setattr(backend_client, "DESIRED_STATE_FILE", state_file)
+    monkeypatch.setattr(BackendClient, "start", _fail_start)
+
+    async def run():
+        manager = BackendManager(FakeStore({"mcp1": _mcp_tool({"type": "stdio"})}))
+        return await manager.start_backend("mcp1")
+
+    result = asyncio.run(run())
+    assert result["success"] is False
+    assert not state_file.exists(), "失败启动不应留下意图文件"
+
+
+def test_stop_clears_desired_state(tmp_path, monkeypatch):
+    """A10：stop 成功清除意图——用户明确说不要了，恢复时不再拉起"""
+    state_file = tmp_path / "desired.json"
+    monkeypatch.setattr(backend_client, "DESIRED_STATE_FILE", state_file)
+    state_file.write_text(
+        json.dumps({"mcp1": {"desired": True}, "other": {"desired": True}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(BackendClient, "stop", _ok_stop)
+
+    async def run():
+        manager = BackendManager(FakeStore({"mcp1": _mcp_tool({"type": "stdio"})}))
+        return await manager.stop_backend("mcp1")
+
+    result = asyncio.run(run())
+    assert result["success"] is True
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert "mcp1" not in state
+    assert "other" in state, "只清目标，不碰其他工具的意图"
+
+
+def test_restore_starts_desired_backends(tmp_path, monkeypatch):
+    """A10：全新世代（新 manager，内存无状态）启动时自动拉起 desired 后端"""
+    state_file = tmp_path / "desired.json"
+    monkeypatch.setattr(backend_client, "DESIRED_STATE_FILE", state_file)
+    state_file.write_text(json.dumps({"mcp1": {"desired": True}}), encoding="utf-8")
+    monkeypatch.setattr(BackendClient, "start", _ok_start)
+    monkeypatch.setattr(BackendManager, "sync_tools_catalog", _ok_sync)
+
+    async def run():
+        # 全新世代：clients 为空，等于网关回收后新拉起的 server 进程
+        manager = BackendManager(FakeStore({"mcp1": _mcp_tool({"type": "stdio"})}))
+        result = await manager.restore_desired_backends()
+        return result, manager.get_backend_status("mcp1")
+
+    result, status = asyncio.run(run())
+    assert result["mcp1"]["success"] is True
+    assert status["status"]["status"] == BackendClient.STATUS_RUNNING
+
+
+def test_restore_skips_already_running(tmp_path, monkeypatch):
+    """A10：同代内已 running 的后端不重复启动"""
+    state_file = tmp_path / "desired.json"
+    monkeypatch.setattr(backend_client, "DESIRED_STATE_FILE", state_file)
+    state_file.write_text(json.dumps({"mcp1": {"desired": True}}), encoding="utf-8")
+    started = []
+
+    async def _counting_start(self):
+        started.append(self.tool_id)
+        self.status = BackendClient.STATUS_RUNNING
+        self.started_at = time.time()
+        return {"success": True, "message": "启动成功"}
+
+    monkeypatch.setattr(BackendClient, "start", _counting_start)
+    monkeypatch.setattr(BackendManager, "sync_tools_catalog", _ok_sync)
+
+    async def run():
+        manager = BackendManager(FakeStore({"mcp1": _mcp_tool({"type": "stdio"})}))
+        await manager.restore_desired_backends()
+        again = await manager.restore_desired_backends()
+        return again
+
+    again = asyncio.run(run())
+    assert started == ["mcp1"], "第二次恢复应发现已 running 而跳过"
+    assert again == {}
+
+
+def test_restore_cleans_stale_entries(tmp_path, monkeypatch):
+    """A10：工具已删除时清掉过期意图，避免每个新世代都白跑一次"""
+    state_file = tmp_path / "desired.json"
+    monkeypatch.setattr(backend_client, "DESIRED_STATE_FILE", state_file)
+    state_file.write_text(json.dumps({"gone": {"desired": True}}), encoding="utf-8")
+
+    async def run():
+        # store 里没有 "gone"：工具已删或不再是 mcp 类型
+        manager = BackendManager(FakeStore({}))
+        return await manager.restore_desired_backends()
+
+    result = asyncio.run(run())
+    assert result == {}
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert "gone" not in state, "过期意图应被清除"
+
+
+def test_desired_state_corrupt_file_treated_as_empty(tmp_path, monkeypatch):
+    """A10：意图文件损坏按空处理——恢复是尽力而为，不能阻断服务启动"""
+    state_file = tmp_path / "desired.json"
+    monkeypatch.setattr(backend_client, "DESIRED_STATE_FILE", state_file)
+    state_file.write_text("{ 半个 json", encoding="utf-8")
+
+    manager = BackendManager(FakeStore({}))
+    assert manager._load_desired_state() == {}
