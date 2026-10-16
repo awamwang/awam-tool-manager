@@ -362,6 +362,7 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
                 },
                 "kind": {
                     "type": "string",
+                    # NE-5：driver 是历史漂移，本期不许修（golden 钉住原文；修复并入后续漂移清理批次）
                     "description": "可选，按工具类型筛选（如 app、mcp、driver）"
                 }
             },
@@ -378,6 +379,7 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
             "properties": {
                 "kind": {
                     "type": "string",
+                    # NE-5：driver 是历史漂移，本期不许修（golden 钉住原文；修复并入后续漂移清理批次）
                     "description": "可选，按工具类型筛选（如 app、mcp、driver）"
                 }
             }
