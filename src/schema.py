@@ -132,6 +132,14 @@ TOOL_ENTRY_SCHEMA: dict[str, Any] = {
             "type": "boolean",
             "description": "是否有破坏性（对应 `destructiveHint`，`call_backend_tool` 会据此拦截）",
         },
+        "destructiveTools": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "子工具级破坏性清单：只有列在这里的后端子工具需要 `allowDestructive`"
+                " 确认；未配置时回退到条目级 `destructive`（即整个后端的所有调用都要确认）"
+            ),
+        },
         "metadata": {"type": "object", "description": "扩展元数据，键值对自由"},
         "createdAt": {"type": "string", "description": "创建时间，ISO 8601"},
         "updatedAt": {"type": "string", "description": "更新时间，ISO 8601"},

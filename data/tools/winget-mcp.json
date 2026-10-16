@@ -1,0 +1,26 @@
+{
+  "id": "winget-mcp",
+  "name": "WinGet MCP",
+  "displayName": "Windows 包管理器 MCP（官方内置）",
+  "kind": "mcp",
+  "description": "Windows Package Manager 官方内置 MCP 接口：查询已安装/可安装的包（find-winget-packages）、安装或升级包（install-winget-package）",
+  "version": "1.29.380",
+  "status": "installed",
+  "publisher": "Microsoft",
+  "website": "https://aka.ms/winget-command-mcp",
+  "tags": ["包管理", "软件安装", "MCP", "系统工具"],
+  "connection": {
+    "type": "stdio",
+    "command": "C:\\Users\\Administrator\\AppData\\Local\\Microsoft\\WindowsApps\\WindowsPackageManagerMCPServer.exe",
+    "args": []
+  },
+  "readOnly": false,
+  "destructive": true,
+  "destructiveTools": ["install-winget-package"],
+  "metadata": {
+    "discovery": "路径经 `winget mcp` 输出获得；注意该命令打印的是 winget 自身所在目录（本机 scoop 副本下无此 exe），实际可执行文件在 %LOCALAPPDATA%\\Microsoft\\WindowsApps\\",
+    "requiresEnable": "扩展特性需 `winget mcp --enable`（需商店访问）；默认不带参数即为 stdio server"
+  },
+  "createdAt": "2026-10-16T13:04:33Z",
+  "updatedAt": "2026-10-16T13:04:33Z"
+}

@@ -56,7 +56,7 @@ awam-tool-manager/
 | `list_tools` | `kind` | 列出所有工具 |
 | `get_tool_info` | `tool_id`(必填) | 查看工具详情 |
 | `launch_tool` | `tool_id`(必填) | 返回工具的启动命令（**目前不实际执行**） |
-| `call_backend_tool` | `tool_id`、`tool_name`(必填)、`arguments`、`allowDestructive` | 路由调用后端 MCP 的子工具（`destructive` 工具需显式确认） |
+| `call_backend_tool` | `tool_id`、`tool_name`(必填)、`arguments`、`allowDestructive` | 路由调用后端 MCP 的子工具；命中破坏性判定时需显式确认（A12：条目配了 `destructiveTools` 就只拦清单内子工具，未配则整个后端都拦） |
 | `list_backend_tools` | `tool_id`(必填)、`force_refresh` | 列出后端子工具（含参数 schema） |
 | `start_backend` | `tool_id`(必填) | 启动后端并自动同步工具目录；启动命令缺失时会先按 `install` 自动安装 |
 | `stop_backend` | `tool_id`(必填) | 停止后端 |

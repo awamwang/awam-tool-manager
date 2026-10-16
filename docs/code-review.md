@@ -847,6 +847,27 @@ GetPromptResult"）→ **prompts/get 全部失败**。
 > ④ 修复后裸 JSON-RPC 回归（与 Go 网关同构）：start_backend 3.6s 成功、
 > 两场景退出码均为 0、stderr 零错误。
 
+**第十四批（已完成 ✅）**
+
+30. ~~**A12** —— destructive 门禁粒度错误：拦截的是「整个后端」而非「子工具」~~ →
+    新增 `destructiveTools`（`schema.py` + `docs/format.md` 由脚本自动同步），
+    配置后只有清单内的后端子工具需要 `allowDestructive`，未配置时回退条目级
+    `destructive`；拦截判定与 warning 标注统一走 `_needs_destructive_confirm`
+    （此前免确认的调用也会被误标 destructive）。合计 **130 passed**
+
+> A12 背景（2026-10-16 接入 WinGet 官方 MCP 时实测）：winget-mcp 同时提供纯查询
+> `find-winget-packages` 与安装 `install-winget-package`，条目级 `destructive=true`
+> 一刀切 → **连查询都被拦**，且错误信息笼统指向整个后端。修复后实测：查询免确认
+> 直接返回真实数据（Git.Git 2.45.1 / 有更新），安装仍被拦且报错精确到子工具。
+> 教训：**数据模型里的布尔标记，要想清楚它描述的是「实体」还是「实体的某个操作」**；
+> 一刀切的安全策略会因为难用而被绕过，反而更不安全。
+
+31. ~~**接入 WinGet 官方 MCP**（P0）~~ → `winget mcp` 打印的 server 路径**在本机不可靠**
+    （它按 winget 自身所在目录拼接，scoop 副本下没有该 exe）；实际可执行文件在
+    `%LOCALAPPDATA%\Microsoft\WindowsApps\WindowsPackageManagerMCPServer.exe`。
+    条目落 `data/tools/winget-mcp.json`，实测握手（winget-mcp 1.29.380 / 协议
+    2025-06-18）、2 个子工具带完整 schema、查询与安装双路径路由均通。
+
 > 原先 §8 里有一个重复编号的「第三批（迭代，一致性）」小节，已合并到上面的批次。
 
 ---
@@ -856,12 +877,12 @@ GetPromptResult"）→ **prompts/get 全部失败**。
 ```bash
 # 1) 依赖约束 —— 必须是 1.x（>=1.29；A9 实测 1.29 已有 structuredContent /
 #    outputSchema / CallToolResult 透传 / send_ping，生产环境即 1.29.0）
-pip install "mcp>=1.30.0,<2.0.0" pytest
+pip install "mcp>=1.29.0,<2.0.0" pytest
 
 # 2) 静态检查
 python -m py_compile src/*.py tests/*.py scripts/*.py
 
-# 3) 单元测试（125 项：store/registry + backend_client 稳定性与依赖自装 + store 容错/原子写
+# 3) 单元测试（130 项：store/registry + backend_client 稳定性与依赖自装 + store 容错/原子写
 #    + server 分发与启动预热 + 搜索语义/schema 校验/annotations/destructive 门禁 + 协议层回环
 #    + 文档与 schema 的一致性 + 连接独占任务/anyio 作用域同一任务闭合 + PATH 自愈
 #    + 心跳探测 API 契约（send_ping 必须真实存在于 mcp.ClientSession））
@@ -976,5 +997,13 @@ A9（心跳 `ping()` → `send_ping()` + 依赖下限 1.30 → 1.29）由
 `test_heartbeat_failure_cleans_up`（fake 改真实 SDK 表面）覆盖，
 并经 toolport daemon 真实链路复现「启动 → 跨心跳周期 → 状态保持 running」。
 A11（start 被取消后卡 starting）由 `test_start_cancelled_does_not_strand_starting_status`
-覆盖，并在旧代码上先复现 FAILED、修复后 passed（红绿双向验证）
-（合计 `126 passed`）。
+覆盖，并在旧代码上先复现 FAILED、修复后 passed（红绿双向验证）。
+A12（子工具级 destructive 门禁）由 `test_destructive_gate_is_per_sub_tool` 与
+`test_destructive_without_sub_tool_list_still_blocks_everything` 覆盖（清单内拦截 /
+清单外放行 / 未配置时回退条目级），并用真实 winget-mcp 后端端到端复测：
+查询免确认返回真实包信息、安装仍被拦且报错精确到子工具（合计 `130 passed`）。
+
+> 同批修掉两处**测试脆性**（都是把「数据集内容」当成断言）：`test_dispatch_kind_filter`
+> 写死 `ids == ["everything-search-mcp"]`、`test_generated_table_covers_every_field`
+> 写死 `35` 行——接入 winget-mcp 与新增 `destructiveTools` 字段后双双变红。
+> 已分别改为断言筛选语义、从 schema 动态摊平计算行数。

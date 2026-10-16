@@ -85,8 +85,15 @@ def test_generated_table_covers_every_field():
     generator = _load_generator()
     table = generator.render_table(TOOL_ENTRY_SCHEMA)
     rows = [ln for ln in table.splitlines() if ln.startswith("| `")]
-    # 23 个顶层字段 + launch(3) / connection(5) / update(2) / install(2) 的子字段
-    assert len(rows) == 35
+    # 期望值从 schema 动态摊平：顶层字段 + 嵌套 object 的子字段。
+    # 原来写死 35（23 顶层 + launch3/connection5/update2/install2），
+    # 2026-10-16 新增 destructiveTools 字段后立刻变红——行数不该随字段增减手改。
+    expected = 0
+    for spec in TOOL_ENTRY_SCHEMA["properties"].values():
+        expected += 1
+        if spec.get("type") == "object" and "properties" in spec:
+            expected += len(spec["properties"])
+    assert len(rows) == expected, f"表行数 {len(rows)} != schema 摊平字段数 {expected}"
 
 
 # ---- 2. 文档里的示例必须能过校验 ----

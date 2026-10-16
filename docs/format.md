@@ -59,6 +59,7 @@
 | `capabilities` | `array<string>` | - | 能力标签（如 `search` / `index`） |
 | `readOnly` | `boolean` | - | 是否只读（对应 MCP 的 `readOnlyHint`） |
 | `destructive` | `boolean` | - | 是否有破坏性（对应 `destructiveHint`，`call_backend_tool` 会据此拦截） |
+| `destructiveTools` | `array<string>` | - | 子工具级破坏性清单：只有列在这里的后端子工具需要 `allowDestructive` 确认；未配置时回退到条目级 `destructive`（即整个后端的所有调用都要确认） |
 | `metadata` | `object` | - | 扩展元数据，键值对自由 |
 | `createdAt` | `string` | - | 创建时间，ISO 8601 |
 | `updatedAt` | `string` | - | 更新时间，ISO 8601 |

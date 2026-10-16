@@ -95,6 +95,27 @@ SHARED_OUTPUT_SCHEMA: dict = {
 }
 
 
+def _needs_destructive_confirm(tool: dict | None, sub_tool: str) -> bool:
+    """判断转发到 `sub_tool` 是否需要 `allowDestructive` 显式确认。
+
+    A12（2026-10-16）：破坏性实际属于「子工具」，不是「整个后端」。
+    接入 winget-mcp 时实测——它同时提供纯查询 `find-winget-packages` 与
+    会装软件的 `install-winget-package`，而条目级 `destructive=true` 一刀切，
+    导致连查询都被拦（错误信息还笼统地指向整个后端）。
+
+    规则：
+    - 条目未标 `destructive` → 不拦（保持既有行为）
+    - 标了 `destructive` 且未配 `destructiveTools` → 整后端都拦（旧语义，不回退）
+    - 标了 `destructive` 且配了 `destructiveTools` → 只拦清单内的子工具
+    """
+    if not tool or not tool.get("destructive"):
+        return False
+    listed = tool.get("destructiveTools")
+    if listed is None:
+        return True
+    return sub_tool in listed
+
+
 class ToolError(Exception):
     """业务级失败。
 
@@ -480,13 +501,13 @@ async def dispatch_tool(name: str, arguments: dict) -> str:
         backend_args = arguments.get("arguments") or {}
 
         # A2：数据里的 destructive 之前只是个装饰字段，被无差别转发。
-        # 这里把门禁落到转发前：目标工具标了 destructive 就必须显式确认，
-        # 否则默认拒绝（当前两个工具都是 destructive=false，不改变既有行为）。
+        # 这里把门禁落到转发前：命中判定的调用必须显式确认，否则默认拒绝
+        # （A12 起判定下放到子工具粒度，见 _needs_destructive_confirm）。
         target_tool = registry.get_tool(tool_id)
-        if target_tool and target_tool.get("destructive"):
+        if _needs_destructive_confirm(target_tool, tool_name):
             if not arguments.get("allowDestructive"):
                 fail(
-                    f"目标工具 '{tool_id}' 被标记为 destructive，"
+                    f"目标工具 '{tool_id}' 的子工具 '{tool_name}' 被判定为 destructive，"
                     f"需显式传 allowDestructive=true 才会转发调用",
                     error_type="destructive_blocked",
                     toolId=tool_id,
@@ -498,8 +519,9 @@ async def dispatch_tool(name: str, arguments: dict) -> str:
         res = ensure_success(
             await backend_manager.call_backend_tool(tool_id, tool_name, backend_args)
         )
-        if target_tool and target_tool.get("destructive"):
-            res["warning"] = f"目标工具 '{tool_id}' 被标记为 destructive"
+        # 与上面的拦截判定保持同源：免确认的子工具不该被标注成 destructive
+        if _needs_destructive_confirm(target_tool, tool_name):
+            res["warning"] = f"目标工具 '{tool_id}/{tool_name}' 被判定为 destructive"
         result = json.dumps(res, ensure_ascii=False, indent=2, default=str)
 
     elif name == "list_backend_tools":

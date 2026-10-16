@@ -54,7 +54,11 @@ def test_dispatch_read_only_paths():
 def test_dispatch_kind_filter():
     mcp_only = json.loads(run(dispatch_tool("list_tools", {"kind": "mcp"})))
     ids = [t["id"] for t in mcp_only["tools"]]
-    assert ids == ["everything-search-mcp"], f"kind 筛选失效: {ids}"
+    # 断言筛选语义而非固定清单：`data/tools/` 会随接入进度增加工具
+    # （2026-10-16 接入 winget-mcp 时，写死 ids == [...] 的旧断言立刻变红）。
+    assert "everything-search-mcp" in ids, f"kind 筛选漏了已接入的 MCP 工具: {ids}"
+    assert all(t["kind"] == "mcp" for t in mcp_only["tools"]), f"混入非 mcp: {ids}"
+    assert "everything" not in ids, "kind=app 的工具不应出现在 kind=mcp 的结果里"
 
 
 def test_unknown_tool_raises_typed_error():

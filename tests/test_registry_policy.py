@@ -179,6 +179,58 @@ def test_destructive_call_allowed_with_flag(monkeypatch):
     assert "destructive" in payload["warning"]
 
 
+def test_destructive_gate_is_per_sub_tool(monkeypatch):
+    """A12：破坏性属于「子工具」——只有清单内的子工具需要确认。
+
+    2026-10-16 接入 winget-mcp 时实测：它同时提供纯查询 find-winget-packages
+    与安装 install-winget-package，条目级 destructive 一刀切会把查询也拦掉。
+    """
+    monkeypatch.setattr(
+        server.registry,
+        "get_tool",
+        lambda tool_id: {
+            "id": tool_id,
+            "kind": "mcp",
+            "destructive": True,
+            "destructiveTools": ["nuke"],
+        },
+    )
+
+    async def fake_call(tool_id, tool_name, arguments):
+        return {"success": True, "result": f"{tool_name} ok"}
+
+    monkeypatch.setattr(server.backend_manager, "call_backend_tool", fake_call)
+
+    # 清单内的子工具：仍要显式确认
+    with pytest.raises(server.ToolError) as exc:
+        run(server.dispatch_tool("call_backend_tool", {"tool_id": "boom", "tool_name": "nuke"}))
+    assert json.loads(str(exc.value))["errorType"] == "destructive_blocked"
+
+    # 清单外的子工具（纯查询）：免确认直接转发，且不带 destructive 告警
+    payload = json.loads(
+        run(server.dispatch_tool("call_backend_tool", {"tool_id": "boom", "tool_name": "query"}))
+    )
+    assert payload["success"] is True
+    assert "warning" not in payload, "免确认的子工具不应被标注为 destructive"
+
+
+def test_destructive_without_sub_tool_list_still_blocks_everything(monkeypatch):
+    """未配 destructiveTools 时回退到条目级语义：整个后端都要确认（旧行为不回退）"""
+    monkeypatch.setattr(
+        server.registry,
+        "get_tool",
+        lambda tool_id: {"id": tool_id, "kind": "mcp", "destructive": True},
+    )
+
+    async def should_not_be_called(*args, **kwargs):  # pragma: no cover
+        raise AssertionError("未确认的 destructive 调用不应被转发")
+
+    monkeypatch.setattr(server.backend_manager, "call_backend_tool", should_not_be_called)
+
+    with pytest.raises(server.ToolError):
+        run(server.dispatch_tool("call_backend_tool", {"tool_id": "boom", "tool_name": "query"}))
+
+
 def test_read_only_tools_are_annotated():
     """只读工具必须带 readOnlyHint，转发类只标 openWorldHint"""
     tools = {t.name: t for t in run(server.list_tools())}

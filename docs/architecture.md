@@ -445,6 +445,7 @@ python src/server.py
 | `server.py` `ToolError` / `fail` / `ensure_success` | 业务错误 → MCP `isError` 的转换层 |
 | `server.py` `call_tool` | `tools/call` 入口，含意外异常兜底 |
 | `server.py` `dispatch_tool` | 12 个工具的分发（if/elif 链） |
+| `server.py` `_needs_destructive_confirm` | 子工具级破坏性判定（A12）：条目配了 `destructiveTools` 时只拦清单内的后端子工具，未配则回退条目级 `destructive`；与拦截判定同源，warning 标注不再误加 |
 | `server.py` `read_resource` | 返回 `Iterable[ReadResourceContents]` |
 | `server.py` `main` | stdio 事件循环 + 启动后台预热任务 `_prewarm_backends()`，`finally` 取消预热并关闭全部后端 |
 | `store.py` `load_json` / `save_json` | JSON 读写：读有容错（坏文件跳过），写走 `mkstemp` + `os.replace` 原子替换 |

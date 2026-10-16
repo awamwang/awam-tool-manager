@@ -103,6 +103,10 @@
 - [x] `validate_backend_catalog()` - 第二层数据（后端子工具缓存）的结构校验
 - [x] Tool annotations：只读工具 `readOnlyHint`，启停类 `idempotentHint`，转发类 `openWorldHint`
 - [x] `call_backend_tool` 的 destructive 门禁（`allowDestructive`，默认拒绝）
+- [x] **A12 子工具级破坏性门禁** - 破坏性实际属于「子工具」而非「整个后端」：
+      新增 `destructiveTools` 字段（schema + `docs/format.md` 自动同步），配置后只拦截
+      清单内的后端子工具，未配置则回退条目级 `destructive` 语义；拦截判定与
+      warning 标注共用 `_needs_destructive_confirm`，避免免确认调用被误标
 
 ### 测试覆盖
 - [x] `tests/test_registry.py` - store / registry 基础路径
@@ -110,13 +114,14 @@
       连接生命周期、期望状态持久化、启动状态机取消安全
 - [x] `tests/test_store.py`（8 用例）- 容错、原子写、时间戳
 - [x] `tests/test_server_dispatch.py`（24 用例）- 12 条分发路径、错误载荷、资源/提示定义、启动预热
-- [x] `tests/test_registry_policy.py`（14 用例）- 搜索语义、schema 校验、annotations、门禁
+- [x] `tests/test_registry_policy.py`（16 用例）- 搜索语义、schema 校验、annotations、
+      条目级与子工具级 destructive 门禁
 - [x] `tests/test_protocol_roundtrip.py`（9 用例）- **真实 MCP 会话**：isError 映射、
   resources/read、prompts/get、annotations 下发、structuredContent / outputSchema（不 mock SDK）
 - [x] `tests/test_backend_client.py` 补 BackendManager：错误归类、`close_all`、缓存 TTL
 - [x] `tests/test_server_dispatch.py` 补 `AnyUrl` 参数、resources 与 prompts 定义回归
-- [x] `tests/test_docs_sync.py`（10 用例）- 文档与 schema 一致、示例过校验、
-      `data/` 真实文件全部过校验且 `id` 与文件名一致
+- [x] `tests/test_docs_sync.py`（12 用例，`data/` 文件数变化时会增减）- 文档与 schema 一致、
+      示例过校验、`data/` 真实文件全部过校验且 `id` 与文件名一致
 - [x] **A3 并发限流（方案 2：单后端串行 + 超限报 busy）** - `BackendClient._call_lock` +
       `BackendBusyError` → `errorType=backend_busy`（不排队）；并发两个 `call_tool`
       一个成功、一个 busy 的回归已钉住
@@ -134,11 +139,13 @@
 - [x] 修掉 flaky：`test_tools_cache_respects_ttl_and_force_refresh` 依赖 `time.time()`
       相邻两次返回不同值（Windows 刻度约 15ms，可能同值 → `cache_age=0.0` 误判命中），
       改为显式回拨 `_tools_cache_time`，不再依赖时钟精度（10 连跑确定性通过）
-- [x] 合计 **126 passed**（7 个文件）；真实后端子进程启停 + 调用回归通过
+- [x] 合计 **130 passed**（7 个文件）；真实后端子进程启停 + 调用回归通过
 
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
 - [x] Everything Search MCP（`kind=mcp`，已实测连接、调用、启停跑通）
+- [x] **WinGet（`kind=mcp`，官方内置）** - 实测：握手（winget-mcp 1.29.380 / 协议 2025-06-18）、
+      2 个子工具带完整 schema、查询与安装双路径路由验证
 - [x] **Toolport 集成** - 已注册为 Toolport 的后端（registry `source: manual`，default profile），
       daemon 真实链路实测：启停、状态、子工具列表、路由调用全通
 - [x] **WorkBuddy 直连 MCP** - `~/.workbuddy/mcp.json` 新增 `awam-tool-manager` 条目
@@ -164,9 +171,8 @@
 ## 三、待完成 ⏳
 
 ### P0 - 核心打通
-- [ ] 接入 Steam（steam-local-mcp）
-- [ ] 接入 WinGet（官方内置 MCP）
-- [ ] 接入 npm（npm MCP）
+- [ ] 接入 Steam（steam-local-mcp）— ⚠️ 本机未安装 Steam，无法端到端实测
+- [ ] 接入 npm（npm MCP）— ⚠️ 需求待澄清：npm 官方无 MCP server，需明确接哪个包
 - [ ] launch_tool 真正执行启动（目前只返回命令）
 
 ### P1 - 体验完善
@@ -175,11 +181,11 @@
 - [ ] 工具帮助文档查看（--help 输出）
 
 ### P2 - 生态扩展
-- [ ] 接入 Scoop（写 CLI 适配器）
+- [ ] 接入 Scoop（写 CLI 适配器）— 本机已装（`S:\Libs\Scoop`），可实测
 - [ ] 接入 WeGame（腾讯平台）
-- [ ] 接入 uTools（效率启动器）
-- [ ] 接入 Quicker
-- [ ] 接入 PowerToys
+- [ ] 接入 uTools（效率启动器）— ⚠️ 本机未安装
+- [ ] 接入 Quicker — 本机已装，可实测
+- [ ] 接入 PowerToys — 本机已装，可实测
 
 ### P3 - 高级功能
 - [ ] 智能路由：根据用户意图自动选择从哪个安装器安装
