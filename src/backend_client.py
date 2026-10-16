@@ -768,6 +768,11 @@ class BackendClient:
                     return {
                         "success": False,
                         "status": "installing",
+                        # Q2（P1-03）：依赖安装中是分钟级忙态、不是错误——
+                        # 与 backend_busy 的秒级并发冲突分工不同（复用会
+                        # 混淆客户端重试语义），单列枚举第 16 种取值；
+                        # 契约卡要求「可重试」（SKILL.md 已同步）
+                        "errorType": ErrorType.BACKEND_INSTALLING,
                         "message": message,
                     }
                 blocked = install_result.get("installBlocked")

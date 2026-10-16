@@ -1534,6 +1534,8 @@ def test_start_returns_installing_without_spawn(monkeypatch):
 
     assert result["success"] is False
     assert result["status"] == "installing"
+    # Q2（P1-03）：安装中是分钟级忙态、不是错误——新增枚举第 16 种取值
+    assert result["errorType"] == "backend_installing"
     assert "稍后重试" in result["message"]
     assert client.status == BackendClient.STATUS_STOPPED
 
