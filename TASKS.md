@@ -227,6 +227,32 @@
       （pyenv 3.12.0 `python.exe` + `src/server.py`）；实测 15 个工具就位、
       A10 在新实例上 4 秒内自动恢复后端、`search_files` 端到端返回真实索引结果
 
+### 声明式注册表重构（P1-04，2026-10-17）
+- [x] **对外工具层收敛为单一声明源**：新增 `src/tool_specs.py`（15 条 `ServerToolSpec`：
+      name / description / inputSchema / annotations / handler 同条记录，`build_mcp_tools()`
+      统一构造，`validate_specs()` import 期自检）与 `src/errors.py`（`ToolError` / `fail` /
+      `ensure_success` 原样搬出，避免 server → tool_specs 循环 import，server 命名空间
+      re-export）；`server.py` 只保留协议装配 + 查表薄分发 + Resources/Prompts + 生命周期
+      （1020 → 464 行）。新增一个对外工具的标准动作从「9 个维护点、4 个手写副本」变为
+      「1 个文件、2 个相邻代码块」（1 条 spec + 1 个 handler）
+- [x] **行为等价判据**：15 个工具的 name / description / inputSchema / annotations /
+      outputSchema 五字段与重构前 HEAD 逐位一致。M00 在未改一行代码的 HEAD 上采集
+      `tests/golden/tools_list.json`（先于一切源码改动提交，`5f06756`）；由 golden 五字段
+      比对 + 三方名字守卫（spec 表 == `EXPECTED_TOOL_NAMES` == `list_tools()`）+ spec 完整性
+      （handler 可调用 / schema 结构合法 / 注解键合法）+ unknown_tool 与 15 名可达性守卫 +
+      SKILL.md 工具表守卫固化；「故意破坏一条 spec 确认守卫变红」一次性验证通过
+- [x] **提交序列**（M00–M07 每步一 commit、步骤后全量回归）：M00 `5f06756` → M01 `ee252eb`
+      → M02 `d2b4cd2` → M03 `019713d` → M04 `c3b2b08` → M05 `738b843`；M06（本文档 +
+      `docs/architecture.md` 同步）与 M07（SKILL.md 工具表守卫 + 全量回归 + 真实 stdio 冒烟
+      + P0 install 门禁 e2e 复跑）为收尾两步，哈希见 `git log`
+- [x] **非等价点（显式标注 NE-1~NE-5，U6 要求对用户可见）**：NE-1 `json.dumps` 统一带
+      `default=str`（5 → 15 个工具；可达输入上的 no-op，单向放宽，不启用 `strict_dumps`
+      回退）；NE-2 未知工具失败时机改为查表未命中即失败（错误消息与 errorType 逐字相同，
+      完全等价）；NE-3 `validate_specs()` import 期自检（对合法输入零差异，spec 表损坏时
+      快速失败）；NE-4 `server.py` 行数下降致旧文档行号引用失效（M06 已同步
+      `docs/architecture.md`）；NE-5 `search_tools`/`list_tools` 入参文案里的 `driver`
+      举例漂移本期不修（U1：改了违反行为等价，并入后续漂移清理批次）
+
 ### 其他
 - [x] Git 仓库初始化，代码版本管理
 - [x] .gitignore 配置（测试脚本、缓存文件排除）
@@ -373,7 +399,9 @@ awam-tool-manager/
 │   │   ├── winget-mcp.json
 │   │   └── quicker.json        # kind=launcher
 ├── src/
-│   ├── server.py               # MCP Server 入口 + 对外工具定义 + 分发
+│   ├── server.py               # MCP Server 入口：协议装配 + 薄分发 + 生命周期
+│   ├── tool_specs.py           # 对外 MCP 工具声明式注册表（SSOT：15 条 spec + handlers）
+│   ├── errors.py               # 业务错误出口（ToolError / fail / ensure_success）
 │   ├── store.py                # JSON 存储层（tools 走仓库，缓存走 runtime dir）
 │   ├── registry.py             # 工具注册中心
 │   ├── backend_client.py       # 后端 MCP 客户端与连接池（stdio）

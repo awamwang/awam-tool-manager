@@ -76,7 +76,9 @@ awam-tool-manager/
 │       ├── winget-mcp.json            (kind=mcp)
 │       └── quicker.json               (kind=launcher)
 ├── src/
-│   ├── server.py             # MCP Server 入口 + 全部对外工具定义 + 分发
+│   ├── server.py             # MCP Server 入口：协议装配 + 薄分发 + 生命周期
+│   ├── tool_specs.py         # 对外 MCP 工具声明式注册表（SSOT：15 条 spec + handlers）
+│   ├── errors.py             # 业务错误出口（ToolError / fail / ensure_success）
 │   ├── store.py              # JSON 存储层（tools 走仓库，缓存走运行时目录）
 │   ├── registry.py           # 工具注册中心（含条目校验过滤）
 │   ├── schema.py             # 两层数据的 JSON Schema 与校验（**文档生成源**）
@@ -85,7 +87,7 @@ awam-tool-manager/
 │   └── runtime_paths.py      # 运行时目录解析 + 旧路径迁移
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 9 个用例文件 + 1 个手工 E2E 脚本，183 个用例（含真实 MCP 会话与文档漂移检测）
+└── tests/                    # 11 个用例文件 + 1 个手工 E2E 脚本，191 个用例（含真实 MCP 会话与文档漂移检测）
 ```
 
 运行时数据（**不在仓库**，A14 起）：`%LOCALAPPDATA%\.awam-tool-manager/`
@@ -177,8 +179,9 @@ awam-tool-manager/
 └───────────────────────┬──────────────────────────────────┘
                         │  MCP / stdio (JSON-RPC)
 ┌───────────────────────▼──────────────────────────────────┐
-│  接口层  src/server.py                                   │
-│   · 15 个 Tool 定义 + 分发                                │
+│  接口层  src/server.py（协议装配 + 薄分发 + 生命周期）   │
+│   · 15 个 Tool 定义 + 分发：tool_specs.py 声明（SSOT）  │
+│   · errors.py：业务错误出口（fail / ensure_success）    │
 │   · 3 个 Resource、3 个 Prompt                           │
 │   · 全部返回值统一 JSON 序列化                            │
 │   · 启动时 migrate_legacy_runtime（旧路径数据迁入运行时目录）│
@@ -220,7 +223,9 @@ awam-tool-manager/
 | `registry.py` | 140 | 工具查询语义（列表 / 搜索含 `id` / 详情 / 启动信息），加载时过滤不合规条目 | `store`、`schema` |
 | `backend_client.py` | 1416 | 后端 MCP 子进程的连接管理、调用转发、缓存、心跳、日志、**install 执行门禁（P0）** | `mcp`、`store`、`runtime_paths` |
 | `launcher_client.py` | 405 | 启动器适配器（非 MCP，Quicker）：动作清单解析/搜索、一次性外部命令调用 | `store` |
-| `server.py` | 1020 | MCP 协议入口，定义并分发全部对外能力（含 annotations 与 destructive 门禁），启动时后台检测依赖 + 恢复期望状态 | `mcp`、`store`、`registry`、`backend_client`、`launcher_client`、`schema` |
+| `errors.py` | 35 | 业务错误出口：`ToolError` / `fail` / `ensure_success`（P1-04 从 server.py 原样搬出——tool_specs 的 handlers 要用，留在 server.py 会形成循环 import；server 命名空间继续 re-export） | 标准库 |
+| `tool_specs.py` | 728 | 对外 MCP 工具声明式注册表（SSOT）：15 条 `ServerToolSpec`（name/description/inputSchema/annotations/handler 同条记录）+ 15 个 handler + `build_mcp_tools()` / `get_spec()` / `validate_specs()`（import 期自检：重名/空 handler/非法注解键快速失败） | `mcp`、`errors`、`launcher_client` |
+| `server.py` | 464 | MCP 协议入口：协议装配 + 查表薄分发（`dispatch_tool` 约 10 行）+ Resources/Prompts + 生命周期（启动预热/状态恢复），启动时后台检测依赖 + 恢复期望状态 | `mcp`、`store`、`registry`、`backend_client`、`launcher_client`、`schema`、`errors`、`tool_specs` |
 | `scripts/generate_format_doc.py` | 148 | 读 `schema.py` 渲染字段表并就地替换 `docs/format.md` 的生成区块；`--check` 做漂移检查 | 标准库、`schema` |
 
 ### 5.3 后端路由调用链
@@ -345,6 +350,12 @@ toolport 网关会**周期性整池回收**它拉起的 server 进程（2026-10-
 ### 6.1 Tools（15 个）
 
 后端相关工具统一使用 **`tool_id`** 指定目标工具（`mcp_tool_id` / `launcher_id` 已废弃）。
+
+> **P1-04 起，本表与 `tools/list` 的实际下发由 `src/tool_specs.py` 的声明表
+> 单一来源产出**（15 条 `ServerToolSpec`）：注解、`inputSchema`、`outputSchema`
+> 与工具名同条记录，`dispatch_tool` 查表分发。下表的参数/说明与 spec 表的
+> 一致性由 `tests/test_tool_specs.py` 的 golden 五字段比对（采集自重构前
+> HEAD）与三方名字守卫锁定。
 
 | 工具名 | 参数 | 说明 |
 |---|---|---|
@@ -506,11 +517,12 @@ python src/server.py
 | 位置 | 关键实现 |
 |---|---|
 | `server.py` 顶部 | mcp 依赖的兼容导入（`ReadResourceContents` 缺失时降级） |
-| `server.py` `ToolError` / `fail` / `ensure_success` | 业务错误 → MCP `isError` 的转换层 |
+| `errors.py` `ToolError` / `fail` / `ensure_success` | 业务错误 → MCP `isError` 的转换层（P1-04 从 server.py 搬入 errors.py，server 命名空间 re-export，`from server import ToolError` 仍是同一个类对象） |
+| `tool_specs.py` `SERVER_TOOL_SPECS` / `build_mcp_tools()` | 15 个对外工具的声明表（SSOT）与 `Tool` 构造：annotations / outputSchema 在此统一挂载；`validate_specs()` 在 import 期自检 |
 | `server.py` `call_tool` | `tools/call` 入口，含意外异常兜底 |
-| `server.py` `dispatch_tool` | 15 个工具的分发（if/elif 链） |
+| `server.py` `dispatch_tool` | 15 个工具的查表分发（`get_spec` → handler → 统一 `json.dumps`；未命中即 `unknown_tool`） |
 | `launcher_client.py` `LauncherClient` | 启动器（非 MCP）适配器：`_scan_quicker` 解析动作清单、**先 json.loads 再取字符串**才能拿到动作名；`run_action` 走一次性外部命令（`-c<秒> "runaction:<ID>?参数"`），输出按 GBK 解码、失败按文本判定（退出码恒为 0） |
-| `server.py` `_needs_destructive_confirm` | 子工具级破坏性判定（A12）：条目配了 `destructiveTools` 时只拦清单内的后端子工具，未配则回退条目级 `destructive`；与拦截判定同源，warning 标注不再误加 |
+| `tool_specs.py` `_needs_destructive_confirm` | 子工具级破坏性判定（A12）：条目配了 `destructiveTools` 时只拦清单内的后端子工具，未配则回退条目级 `destructive`；与拦截判定同源，warning 标注不再误加（P1-04 随 handler 搬入 tool_specs.py） |
 | `server.py` `read_resource` | 返回 `Iterable[ReadResourceContents]` |
 | `server.py` `main` | stdio 事件循环 + 启动后台预热任务 `_prewarm_backends()`，`finally` 取消预热并关闭全部后端 |
 | `store.py` `load_json` / `save_json` | JSON 读写：读有容错（坏文件跳过），写走 `mkstemp` + `os.replace` 原子替换 |
