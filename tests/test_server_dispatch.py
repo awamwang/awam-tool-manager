@@ -208,9 +208,15 @@ def test_call_tool_wrapper_propagates_tool_error():
 
 
 def test_tool_definitions():
-    """12 个工具定义齐全，且参数名统一为 tool_id"""
+    """对外工具定义齐全（清单见 conftest.EXPECTED_TOOL_NAMES），且参数名统一为 tool_id"""
+    from conftest import EXPECTED_TOOL_NAMES
+
     tools = run(list_tools())
-    assert len(tools) == 12
+    names = {t.name for t in tools}
+    assert names == EXPECTED_TOOL_NAMES, (
+        f"工具集与预期不一致：多出 {names - EXPECTED_TOOL_NAMES}，"
+        f"缺少 {EXPECTED_TOOL_NAMES - names}"
+    )
 
     dumped = json.dumps([t.model_dump() for t in tools], ensure_ascii=False)
     assert "mcp_tool_id" not in dumped, "遗留参数名 mcp_tool_id 不应再出现"

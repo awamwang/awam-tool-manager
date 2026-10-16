@@ -76,11 +76,16 @@ def test_tools_list_carries_annotations():
         async with create_connected_server_and_client_session(server.app) as session:
             return (await session.list_tools()).tools
 
+    from conftest import EXPECTED_TOOL_NAMES
+
     tools = {t.name: t for t in run(go())}
 
-    assert len(tools) == 12
+    assert set(tools) == EXPECTED_TOOL_NAMES
     assert tools["search_tools"].annotations.readOnlyHint is True
     assert tools["call_backend_tool"].annotations.openWorldHint is True
+    # 启动器：列/同步只读或幂等，执行动作只标 openWorld（副作用运行时才可知）
+    assert tools["list_launcher_actions"].annotations.readOnlyHint is True
+    assert tools["run_launcher_action"].annotations.openWorldHint is True
 
 
 def test_resource_read_over_protocol():
@@ -170,8 +175,10 @@ def test_tools_list_carries_output_schema():
         async with create_connected_server_and_client_session(server.app) as session:
             return (await session.list_tools()).tools
 
+    from conftest import EXPECTED_TOOL_NAMES
+
     tools = {t.name: t for t in run(go())}
-    assert len(tools) == 12
+    assert set(tools) == EXPECTED_TOOL_NAMES
     for t in tools.values():
         assert t.outputSchema is not None, f"{t.name} 缺少 outputSchema"
         assert t.outputSchema["required"] == ["success"]

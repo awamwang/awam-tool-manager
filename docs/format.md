@@ -30,7 +30,7 @@
 | `id` | `string` | ✅ | 工具唯一 ID，**必须与文件名一致**（须匹配 `^[A-Za-z0-9._-]+$`） |
 | `name` | `string` | ✅ | 工具名称（英文/技术名） |
 | `displayName` | `string` | - | 显示名称（中文/用户友好），缺省回落 `name` |
-| `kind` | `string` | ✅ | 工具类型；决定能否建立后端连接，也决定 `get_tool_info` 的返回形状（取值：`app` / `mcp`） |
+| `kind` | `string` | ✅ | 工具类型：`app` 普通应用（`launch_tool` 返回命令）、`mcp` 可建后端连接、`launcher` 启动器（非 MCP 协议，但有可列/可搜/可调用的动作清单，见 `launcher`）（取值：`app` / `mcp` / `launcher`） |
 | `description` | `string` | - | 工具功能描述（参与搜索匹配） |
 | `status` | `string` | - | 安装状态（取值：`installed` / `not_installed` / `unknown`） |
 | `version` | `string` | - | 版本号 |
@@ -54,6 +54,11 @@
 | `install` | `object` | - | 安装方式；`start_backend` 检测到启动命令缺失时会自动执行一次 `command`（服务启动时也会后台预热），与 `update` 并存 |
 | `install.method` | `string` | - | 安装渠道（取值：`npm` / `winget` / `scoop` / `manual`） |
 | `install.command` | `string` | - | 安装命令 |
+| `launcher` | `object` | - | 启动器适配配置；仅 `kind=launcher` 有意义，决定如何列出与调用它的动作 |
+| `launcher.type` | `string` | - | 适配器类型（取值：`quicker`） |
+| `launcher.command` | `string` | - | 启动器可执行文件路径（如 QuickerStarter.exe） |
+| `launcher.dataDir` | `string` | - | 启动器数据目录（Quicker 的 states 所在目录） |
+| `launcher.timeout` | `number` | - | 单次动作调用的最长等待（秒）（缺省 `20`；必须 > 0） |
 | `tags` | `array<string>` | - | 标签分类（参与搜索匹配） |
 | `actions` | `array<string>` | - | 支持的动作（如 `launch` / `search`） |
 | `capabilities` | `array<string>` | - | 能力标签（如 `search` / `index`） |

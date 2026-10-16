@@ -1,0 +1,30 @@
+{
+  "id": "quicker",
+  "name": "Quicker",
+  "displayName": "Quicker 效率启动器",
+  "kind": "launcher",
+  "description": "Quicker 效率启动器：列出/搜索本机 Quicker 动作，并调用执行（支持传参与取回返回值）",
+  "version": "latest",
+  "status": "installed",
+  "publisher": "Quicker",
+  "website": "https://getquicker.net",
+  "tags": ["启动器", "效率工具", "动作", "自动化"],
+  "launcher": {
+    "type": "quicker",
+    "command": "C:\\Program Files\\Quicker\\QuickerStarter.exe",
+    "dataDir": "C:\\Users\\Administrator\\AppData\\Local\\Quicker",
+    "timeout": 20
+  },
+  "actions": ["list", "search", "run"],
+  "capabilities": ["launch", "search"],
+  "readOnly": false,
+  "destructive": true,
+  "metadata": {
+    "notes": "调用走 `QuickerStarter.exe -c<秒> \"runaction:<动作ID或名称>?参数\"`；-c 表示从控制台回传动作结果（1.30.12+）",
+    "caveatExitCode": "QuickerStarter 失败时退出码仍是 0，因此按输出文本判定失败（见 launcher_client.QUICKER_FAILURE_MARKERS）",
+    "caveatNames": "动作正文存在加密的 quicker.db（非 SQLite 魔数，读不了）；动作 ID 来自 states/state_<uuid>.json 文件名，名称来自其 state 缓存的动作列表，属尽力而为——缓存没覆盖的动作只有 ID（source=partial）",
+    "requiresRunning": "Quicker 需在运行中（否则 runaction 会拉起它，响应更慢）"
+  },
+  "createdAt": "2026-10-16T13:45:09Z",
+  "updatedAt": "2026-10-16T13:45:09Z"
+}

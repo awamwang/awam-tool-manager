@@ -41,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from store import JsonStore
 from registry import ToolRegistry
 from backend_client import BackendManager, ensure_npm_bin_on_path
+from launcher_client import LauncherError, LauncherManager
 from schema import schema_backend_available
 
 # 数据目录
@@ -50,6 +51,7 @@ DATA_DIR = Path(__file__).parent.parent / "data"
 store = JsonStore(DATA_DIR)
 registry = ToolRegistry(store)
 backend_manager = BackendManager(store)
+launcher_manager = LauncherManager(registry, store)
 
 # 创建 MCP Server
 app = Server("awam-tool-manager")
@@ -75,6 +77,10 @@ TOOL_ANNOTATION_HINTS: dict[str, dict[str, bool]] = {
     "start_backend": {"idempotentHint": True},
     "stop_backend": {"idempotentHint": True},
     "sync_backend_tools": {"idempotentHint": True},
+    # 启动器：列/同步是只读或幂等；执行动作会真的跑起来，只标 openWorld
+    "list_launcher_actions": {"readOnlyHint": True, "destructiveHint": False},
+    "sync_launcher_actions": {"idempotentHint": True},
+    "run_launcher_action": {"openWorldHint": True},
     "set_backend_log_level": {},
     # 转发到后端 MCP，属于"与外部世界交互"但静态无法判定副作用
     "call_backend_tool": {"openWorldHint": True},
@@ -344,6 +350,76 @@ async def list_tools() -> list[Tool]:
                 "required": ["tool_id"]
             }
         ),
+        Tool(
+            name="sync_launcher_actions",
+            description="手动同步启动器的动作清单（从启动器本地数据扫描，Quicker 的动作名依赖其缓存，可能只拿到 ID）",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tool_id": {
+                        "type": "string",
+                        "description": "启动器工具 ID"
+                    }
+                },
+                "required": ["tool_id"]
+            }
+        ),
+        Tool(
+            name="list_launcher_actions",
+            description="列出/搜索启动器（如 Quicker）的动作：按名称、描述、所属程序或 ID 关键词过滤",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tool_id": {
+                        "type": "string",
+                        "description": "启动器工具 ID"
+                    },
+                    "keyword": {
+                        "type": "string",
+                        "description": "可选，按名称/描述/所属程序/ID 过滤"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "可选，最多返回多少条"
+                    }
+                },
+                "required": ["tool_id"]
+            }
+        ),
+        Tool(
+            name="run_launcher_action",
+            description="调用启动器的动作（如执行一个 Quicker 动作），可传参并等待返回结果",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tool_id": {
+                        "type": "string",
+                        "description": "启动器工具 ID"
+                    },
+                    "action_id": {
+                        "type": "string",
+                        "description": "动作 ID（推荐：稳定不变；二选一，与 action_name 至少给一个）"
+                    },
+                    "action_name": {
+                        "type": "string",
+                        "description": "动作名称（Quicker 要求名称不重复且不含空格）"
+                    },
+                    "param": {
+                        "type": "string",
+                        "description": "可选，传给动作的参数（Quicker 用 ? 分隔符，不支持换行）"
+                    },
+                    "wait": {
+                        "type": "number",
+                        "description": "可选，最长等待秒数（默认取 launcher.timeout，缺省 20）"
+                    },
+                    "allowDestructive": {
+                        "type": "boolean",
+                        "description": "启动器被标记为 destructive 时，需显式传 true 才会执行"
+                    }
+                },
+                "required": ["tool_id"]
+            }
+        ),
     ]
     if ToolAnnotations is not None:
         for tool in tools:
@@ -566,6 +642,53 @@ async def dispatch_tool(name: str, arguments: dict) -> str:
         tool_id = arguments.get("tool_id", "")
         log(f"手动同步后端工具目录: {tool_id}")
         res = ensure_success(await backend_manager.sync_tools_catalog(tool_id))
+        result = json.dumps(res, ensure_ascii=False, indent=2)
+
+    elif name == "sync_launcher_actions":
+        tool_id = arguments.get("tool_id", "")
+        log(f"手动同步启动器动作清单: {tool_id}")
+        res = ensure_success(launcher_manager.sync(tool_id))
+        result = json.dumps(res, ensure_ascii=False, indent=2)
+
+    elif name == "list_launcher_actions":
+        tool_id = arguments.get("tool_id", "")
+        keyword = arguments.get("keyword")
+        limit = arguments.get("limit")
+        # list_actions 返回的是数组而非结果字典，不能用 ensure_success 包；
+        # 启动器自己的错误转成带 errorType 的失败，而不是落到内部异常兜底
+        try:
+            actions = launcher_manager.list_actions(tool_id, keyword=keyword, limit=limit)
+        except LauncherError as exc:
+            fail(str(exc), error_type="launcher_error", toolId=tool_id)
+        result = json.dumps(
+            {"success": True, "toolId": tool_id, "count": len(actions), "actions": actions},
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    elif name == "run_launcher_action":
+        tool_id = arguments.get("tool_id", "")
+        target_tool = registry.get_tool(tool_id)
+        # 执行动作是真的会跑起来（Quicker 动作可以是任何操作），
+        # 与 call_backend_tool 一致：条目标了 destructive 就要显式确认。
+        if target_tool and target_tool.get("destructive"):
+            if not arguments.get("allowDestructive"):
+                fail(
+                    f"启动器 '{tool_id}' 被标记为 destructive，"
+                    f"需显式传 allowDestructive=true 才会执行动作",
+                    error_type="destructive_blocked",
+                    toolId=tool_id,
+                )
+            log(f"⚠️ 已确认执行 destructive 启动器动作: {tool_id}")
+        res = ensure_success(
+            await launcher_manager.run_action(
+                tool_id,
+                action_id=arguments.get("action_id"),
+                action_name=arguments.get("action_name"),
+                param=arguments.get("param"),
+                wait=arguments.get("wait"),
+            )
+        )
         result = json.dumps(res, ensure_ascii=False, indent=2)
 
     else:

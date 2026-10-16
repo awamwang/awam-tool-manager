@@ -22,6 +22,7 @@ class JsonStore:
         self.base_dir = Path(base_dir)
         self.tools_dir = self.base_dir / "tools"
         self.backend_tools_dir = self.base_dir / "backend-tools"
+        self.launcher_actions_dir = self.base_dir / "launcher-actions"
 
     def load_json(self, path: Path) -> dict[str, Any] | None:
         """读取 JSON 文件
@@ -136,4 +137,42 @@ class JsonStore:
         for f in self.backend_tools_dir.glob("*.json"):
             parent_id = f.stem
             result[parent_id] = self.load_backend_tools(parent_id)
+        return result
+
+    # ---- 启动器动作清单（launcher-actions/ 目录）----
+    # 与 backend-tools 同构：都是自动生成的「第二层数据」，区别只在于
+    # 来源不是 MCP 的 tools/list，而是启动器本地数据（Quicker 的 states）。
+
+    def get_launcher_actions_path(self, parent_id: str) -> Path:
+        return self.launcher_actions_dir / f"{parent_id}.json"
+
+    def load_launcher_actions(self, parent_id: str) -> list[dict[str, Any]]:
+        """读取某个启动器的所有动作"""
+        data = self.load_json(self.get_launcher_actions_path(parent_id))
+        if data is None:
+            return []
+        return data.get("actions", [])
+
+    def save_launcher_actions(self, parent_id: str, actions: list[dict[str, Any]], source: str) -> None:
+        """保存某个启动器的动作清单
+
+        `source` 区分完整同步（`auto`）与只拿到部分字段（`partial`）——
+        Quicker 的动作名来自其 state 缓存，缓存缺失时只剩动作 ID 也要能落盘。
+        """
+        data = {
+            "parent": parent_id,
+            "lastSynced": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "source": source,
+            "actions": actions,
+        }
+        self.save_json(self.get_launcher_actions_path(parent_id), data)
+
+    def list_launcher_actions(self) -> dict[str, list[dict[str, Any]]]:
+        """列出所有启动器的动作"""
+        if not self.launcher_actions_dir.exists():
+            return {}
+        result = {}
+        for f in self.launcher_actions_dir.glob("*.json"):
+            parent_id = f.stem
+            result[parent_id] = self.load_launcher_actions(parent_id)
         return result

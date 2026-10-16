@@ -44,8 +44,11 @@ TOOL_ENTRY_SCHEMA: dict[str, Any] = {
         "displayName": {"type": "string", "description": "显示名称（中文/用户友好），缺省回落 `name`"},
         "kind": {
             "type": "string",
-            "enum": ["app", "mcp"],
-            "description": "工具类型；决定能否建立后端连接，也决定 `get_tool_info` 的返回形状",
+            "enum": ["app", "mcp", "launcher"],
+            "description": (
+                "工具类型：`app` 普通应用（`launch_tool` 返回命令）、`mcp` 可建后端连接、"
+                "`launcher` 启动器（非 MCP 协议，但有可列/可搜/可调用的动作清单，见 `launcher`）"
+            ),
         },
         "description": {"type": "string", "description": "工具功能描述（参与搜索匹配）"},
         "status": {
@@ -114,6 +117,25 @@ TOOL_ENTRY_SCHEMA: dict[str, Any] = {
                     "description": "安装渠道",
                 },
                 "command": {"type": "string", "description": "安装命令"},
+            },
+        },
+        "launcher": {
+            "type": "object",
+            "description": "启动器适配配置；仅 `kind=launcher` 有意义，决定如何列出与调用它的动作",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "enum": ["quicker"],
+                    "description": "适配器类型",
+                },
+                "command": {"type": "string", "description": "启动器可执行文件路径（如 QuickerStarter.exe）"},
+                "dataDir": {"type": "string", "description": "启动器数据目录（Quicker 的 states 所在目录）"},
+                "timeout": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "default": 20,
+                    "description": "单次动作调用的最长等待（秒）",
+                },
             },
         },
         "tags": {"type": "array", "items": {"type": "string"}, "description": "标签分类（参与搜索匹配）"},
@@ -190,8 +212,8 @@ def _basic_checks(data: Any) -> str | None:
             return f"缺少必填字段或类型错误: {field}"
 
     kind = data["kind"]
-    if kind not in ("app", "mcp"):
-        return f"kind 取值非法: {kind}（应为 app / mcp）"
+    if kind not in ("app", "mcp", "launcher"):
+        return f"kind 取值非法: {kind}（应为 app / mcp / launcher）"
 
     connection = data.get("connection")
     if kind == "mcp" and connection is not None:
@@ -222,6 +244,40 @@ def _validate_with_schema(data: Any, schema: dict[str, Any]) -> str | None:
     return f"{path}: {first.message}"
 
 
+LAUNCHER_ACTIONS_SCHEMA: dict[str, Any] = {
+    "title": "LauncherActions",
+    "type": "object",
+    "required": ["parent", "actions"],
+    "properties": {
+        "parent": {"type": "string", "description": "父启动器工具的 ID"},
+        "lastSynced": {"type": "string", "description": "上次同步时间，ISO 8601；用于判断缓存有多旧"},
+        "source": {
+            "type": "string",
+            "enum": ["auto", "partial"],
+            "description": (
+                "来源：`auto` 完整自动同步；`partial` 表示只拿到了部分字段"
+                "（Quicker 的动作名依赖其 state 缓存，缺失时只剩动作 ID）"
+            ),
+        },
+        "actions": {
+            "type": "array",
+            "description": "启动器提供的动作列表",
+            "items": {
+                "type": "object",
+                "required": ["id"],
+                "properties": {
+                    "id": {"type": "string", "description": "动作 ID（`run_launcher_action` 用它指定动作）"},
+                    "name": {"type": "string", "description": "动作名称；取不到时为空串（只有 ID 也能调用）"},
+                    "type": {"type": "string", "description": "动作类型（Quicker 如 XAction / SendKeys）"},
+                    "app": {"type": "string", "description": "动作所属程序（Quicker 的上下文程序，如 `_global`）"},
+                    "description": {"type": "string", "description": "动作描述"},
+                },
+            },
+        },
+    },
+}
+
+
 def validate_tool_entry(data: Any) -> str | None:
     """校验一条工具条目（`data/tools/{tool_id}.json`），返回错误描述；合法则返回 None"""
     error = _basic_checks(data)
@@ -241,6 +297,19 @@ def validate_backend_catalog(data: Any) -> str | None:
     if "tools" in data and not isinstance(data["tools"], list):
         return "tools 必须是数组"
     return _validate_with_schema(data, BACKEND_CATALOG_SCHEMA)
+
+
+def validate_launcher_catalog(data: Any) -> str | None:
+    """校验一份启动器动作清单（`data/launcher-actions/{tool_id}.json`）
+
+    与后端子工具缓存同理：自动生成，只做结构校验。`actions` 不是数组、或动作缺
+    `id` 都会让 `run_launcher_action` 的查表静默失效，不如加载时就告警。
+    """
+    if not isinstance(data, dict):
+        return f"顶层不是对象（实际为 {type(data).__name__}）"
+    if "actions" in data and not isinstance(data["actions"], list):
+        return "actions 必须是数组"
+    return _validate_with_schema(data, LAUNCHER_ACTIONS_SCHEMA)
 
 
 def schema_backend_available() -> bool:

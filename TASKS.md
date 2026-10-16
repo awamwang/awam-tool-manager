@@ -139,7 +139,21 @@
 - [x] 修掉 flaky：`test_tools_cache_respects_ttl_and_force_refresh` 依赖 `time.time()`
       相邻两次返回不同值（Windows 刻度约 15ms，可能同值 → `cache_age=0.0` 误判命中），
       改为显式回拨 `_tools_cache_time`，不再依赖时钟精度（10 连跑确定性通过）
-- [x] 合计 **130 passed**（7 个文件）；真实后端子进程启停 + 调用回归通过
+- [x] `tests/test_launcher_client.py`（20 用例）- 启动器动作清单解析（含「必须解析 JSON
+      再取字符串」的回归）、关键词搜索、调用命令构造（`-cN` / `runaction:` / `?参数` /
+      stdin 隔离）、GBK 解码与「退出码为 0 但输出说失败」的判定、执行确认门禁
+- [x] 合计 **151 passed**（8 个文件）；真实后端子进程启停 + 调用回归通过
+
+### 启动器接入（`kind=launcher`，2026-10-16）
+- [x] **新增 `kind=launcher` 工具类型** - 启动器不是 MCP，但有可列/可搜/可调用的动作：
+      `launcher` 配置（适配器类型 / 命令 / 数据目录 / 超时）+ 第二层数据
+      `data/launcher-actions/{tool_id}.json`（与 backend-tools 同构）
+- [x] **新增 3 个对外工具**（12 → 15）：`sync_launcher_actions` / `list_launcher_actions`
+      / `run_launcher_action`；执行受 `destructive` 门禁（需 `allowDestructive`），列/搜不受限
+- [x] **Quicker 适配器**（`src/launcher_client.py`）- 调用走
+      `QuickerStarter.exe -c<秒> "runaction:<ID或名称>?参数"`；动作 ID 来自
+      `states/state_<uuid>.json` 文件名，名称来自其 state 缓存的动作列表（尽力而为，
+      缓存没覆盖到的只有 ID，`source=partial`）
 
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
@@ -165,6 +179,11 @@
   `glob("*.json")` 做参数化，目录为空时用例会静默消失，等于丢失这条真实数据校验）
 - 上游 `everything-search-mcp` 返回体 `path` 为空、`isFile`/`isFolder` 恒 false
   （全路径塞在 `name` 里）——属上游包自身的数据整形，转发层原样透传；消费方以 `fullPath` 为准
+- **Quicker 动作名是尽力而为的**：动作正文在加密的 `quicker.db`（非 SQLite 魔数），
+  名称只能从 state 缓存里解析，缓存没覆盖的动作只剩 ID（`source=partial`，本机实测
+  212 个动作里 144 个有名称）。只有 ID 也能调用，但搜索会漏——想补名称只能人工登记
+- **Quicker 调用的成功路径尚未真实执行验证**：只用不存在的动作 ID 验证了错误路径
+  （证明命令构造、GBK 解码、失败判定都正确），真实执行会跑用户动作，需授权后再冒烟
 
 ---
 
@@ -184,7 +203,8 @@
 - [ ] 接入 Scoop（写 CLI 适配器）— 本机已装（`S:\Libs\Scoop`），可实测
 - [ ] 接入 WeGame（腾讯平台）
 - [ ] 接入 uTools（效率启动器）— ⚠️ 本机未安装
-- [ ] 接入 Quicker — 本机已装，可实测
+- [x] 接入 Quicker — ✅ 已完成（见「启动器接入」）：实测同步 212 个动作、144 个有名称，
+      关键词搜索命中（"搜索"→5 条 / "剪贴"→2 条），调用链路通（错误路径已验证）
 - [ ] 接入 PowerToys — 本机已装，可实测
 
 ### P3 - 高级功能
@@ -284,14 +304,20 @@ awam-tool-manager/
 ├── data/
 │   ├── tools/                  # 工具条目
 │   │   ├── everything.json
-│   │   └── everything-search-mcp.json
-│   └── backend-tools/          # 后端子工具缓存
-│       └── everything-search-mcp.json
+│   │   ├── everything-search-mcp.json
+│   │   ├── winget-mcp.json
+│   │   └── quicker.json        # kind=launcher
+│   ├── backend-tools/          # 后端 MCP 子工具缓存（自动生成）
+│   │   ├── everything-search-mcp.json
+│   │   └── winget-mcp.json
+│   └── launcher-actions/       # 启动器动作清单缓存（自动生成）
+│       └── quicker.json
 ├── src/
 │   ├── server.py               # MCP Server 入口 + 对外工具定义 + 分发
 │   ├── store.py                # JSON 存储层
 │   ├── registry.py             # 工具注册中心
-│   ├── backend_client.py       # 后端 MCP 客户端与连接池
+│   ├── backend_client.py       # 后端 MCP 客户端与连接池（stdio）
+│   ├── launcher_client.py      # 启动器适配器（非 MCP：Quicker）
 │   └── schema.py               # 两层数据的 JSON Schema 校验 + **文档生成源**
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
@@ -301,6 +327,7 @@ awam-tool-manager/
     ├── test_registry_policy.py
     ├── test_server_dispatch.py
     ├── test_backend_client.py
+    ├── test_launcher_client.py
     ├── test_protocol_roundtrip.py   # 真实 MCP 会话，不 mock SDK
     └── test_docs_sync.py            # 文档/示例/data 与 schema 的一致性
 ```

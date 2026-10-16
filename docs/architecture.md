@@ -432,6 +432,7 @@ python src/server.py
 | 工具变更通知 | `notifications/tools/list_changed` 未发送（顶层工具集静态，影响小） |
 | 标准 logging capability | 目前用自定义 Tool 查日志 |
 | 并发限流（A3 ✅ 已收口） | 单后端串行（`_call_lock`），并发调用报 `backend_busy`；要升级信号量 + 排队只需调 `MAX_CONCURRENT_CALLS` |
+| 启动器（`kind=launcher`） | ✅ 已接入 Quicker：非 MCP，调用是一次性外部命令；动作清单走第二层数据 `data/launcher-actions/`，对外 `sync/list/run_launcher_action`。**边界**：动作正文在加密 db，名称只能从 state 缓存尽力解析（可能 `source=partial`，只剩 ID） |
 
 > 完整清单见 [`code-review.md`](code-review.md) 与 [`mcp-conformance.md`](mcp-conformance.md)。
 
@@ -445,6 +446,7 @@ python src/server.py
 | `server.py` `ToolError` / `fail` / `ensure_success` | 业务错误 → MCP `isError` 的转换层 |
 | `server.py` `call_tool` | `tools/call` 入口，含意外异常兜底 |
 | `server.py` `dispatch_tool` | 12 个工具的分发（if/elif 链） |
+| `launcher_client.py` `LauncherClient` | 启动器（非 MCP）适配器：`_scan_quicker` 解析动作清单、**先 json.loads 再取字符串**才能拿到动作名；`run_action` 走一次性外部命令（`-c<秒> "runaction:<ID>?参数"`），输出按 GBK 解码、失败按文本判定（退出码恒为 0） |
 | `server.py` `_needs_destructive_confirm` | 子工具级破坏性判定（A12）：条目配了 `destructiveTools` 时只拦清单内的后端子工具，未配则回退条目级 `destructive`；与拦截判定同源，warning 标注不再误加 |
 | `server.py` `read_resource` | 返回 `Iterable[ReadResourceContents]` |
 | `server.py` `main` | stdio 事件循环 + 启动后台预热任务 `_prewarm_backends()`，`finally` 取消预热并关闭全部后端 |

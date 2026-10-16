@@ -868,6 +868,25 @@ GetPromptResult"）→ **prompts/get 全部失败**。
     条目落 `data/tools/winget-mcp.json`，实测握手（winget-mcp 1.29.380 / 协议
     2025-06-18）、2 个子工具带完整 schema、查询与安装双路径路由均通。
 
+**第十五批（已完成 ✅）**
+
+32. ~~**接入 Quicker（P2）+ 新增 `kind=launcher` 工具类型**~~ → 启动器不是 MCP 但有
+    可列/可搜/可调用的动作，为此扩了三层：`schema.py` 的 `kind` 加 `launcher` 与
+    `launcher` 配置块 + 新增 `LAUNCHER_ACTIONS_SCHEMA`；`store.py` 加
+    `launcher-actions/` 读写（与 backend-tools 同构）；`src/launcher_client.py`
+    实现 Quicker 适配器；对外工具 12 → **15**（sync/list/run_launcher_action）。
+    执行动作受 `destructive` 门禁，列/搜不受限。合计 **151 passed**
+
+> 接入 Quicker 的两个实测坑（都写进了代码注释与回归用例）：
+> ① **动作清单必须「先解析 JSON 再取字符串」**——Quicker 把动作列表存成
+> 「JSON 数组的字符串」，扫文件原文永远匹配不到（`\"` 还在），第一版实测
+> 拿到 92 个 ID、0 个名称；改后 212 个动作、144 个有名称。写测试时又踩了
+> 同一坑的镜像版本：fake 数据多套了一层 `json.dumps`，6 个用例全红。
+> ② **QuickerStarter 失败时退出码仍是 0**，且输出是 GBK——只能按输出文本判定
+> 成败，按 UTF-8 解会得到乱码。
+> 经验：**外部程序集成时，退出码不可信是常态**；解析别人的数据时，
+> 「扫文本」和「解析后取值」是两条不同的路，选错就会静默拿到空结果。
+
 > 原先 §8 里有一个重复编号的「第三批（迭代，一致性）」小节，已合并到上面的批次。
 
 ---
@@ -882,7 +901,7 @@ pip install "mcp>=1.29.0,<2.0.0" pytest
 # 2) 静态检查
 python -m py_compile src/*.py tests/*.py scripts/*.py
 
-# 3) 单元测试（130 项：store/registry + backend_client 稳定性与依赖自装 + store 容错/原子写
+# 3) 单元测试（151 项：store/registry + backend_client 稳定性与依赖自装 + store 容错/原子写
 #    + server 分发与启动预热 + 搜索语义/schema 校验/annotations/destructive 门禁 + 协议层回环
 #    + 文档与 schema 的一致性 + 连接独占任务/anyio 作用域同一任务闭合 + PATH 自愈
 #    + 心跳探测 API 契约（send_ping 必须真实存在于 mcp.ClientSession））
@@ -1001,7 +1020,11 @@ A11（start 被取消后卡 starting）由 `test_start_cancelled_does_not_strand
 A12（子工具级 destructive 门禁）由 `test_destructive_gate_is_per_sub_tool` 与
 `test_destructive_without_sub_tool_list_still_blocks_everything` 覆盖（清单内拦截 /
 清单外放行 / 未配置时回退条目级），并用真实 winget-mcp 后端端到端复测：
-查询免确认返回真实包信息、安装仍被拦且报错精确到子工具（合计 `130 passed`）。
+查询免确认返回真实包信息、安装仍被拦且报错精确到子工具。
+A12 之后的 launcher 扩展（Quicker）由 `tests/test_launcher_client.py`（20 例）覆盖：
+动作清单解析（含「先解析 JSON 再取字符串」的回归）、关键词搜索、调用命令构造
+（`-cN` / `runaction:` / `?参数` / stdin 隔离）、GBK 解码与「退出码为 0 但输出说失败」
+的判定、执行确认门禁（合计 `151 passed`）。
 
 > 同批修掉两处**测试脆性**（都是把「数据集内容」当成断言）：`test_dispatch_kind_filter`
 > 写死 `ids == ["everything-search-mcp"]`、`test_generated_table_covers_every_field`

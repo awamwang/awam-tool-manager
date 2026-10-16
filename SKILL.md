@@ -64,6 +64,14 @@ awam-tool-manager/
 | `get_backend_logs` | `tool_id`(必填)、`level`、`limit` | 查看后端日志（`limit<=0` 返回空） |
 | `set_backend_log_level` | `tool_id`、`level`(必填) | 设置后端日志级别（低于该级别的日志不再入队/打印） |
 | `sync_backend_tools` | `tool_id`(必填) | 手动同步子工具目录 |
+| `list_launcher_actions` | `tool_id`(必填)、`keyword`、`limit` | 列出/搜索启动器（Quicker）的动作 |
+| `run_launcher_action` | `tool_id`(必填)、`action_id`、`action_name`、`param`、`wait`、`allowDestructive` | 执行启动器动作；条目标了 `destructive` 时需 `allowDestructive=true` |
+| `sync_launcher_actions` | `tool_id`(必填) | 手动同步启动器动作清单 |
+
+> `kind=launcher`（启动器，如 Quicker）不是 MCP：没有长连接，调用是一次性外部命令
+> （`QuickerStarter.exe -c<秒> "runaction:<ID或名称>?参数"`）。动作清单缓存在
+> `data/launcher-actions/{tool_id}.json`，`source=partial` 表示部分动作只拿到 ID
+> （Quicker 的 `quicker.db` 是加密的，名称只能从其 state 缓存尽力解析）。
 
 另有 3 个 Resource：`awam://tools`、`awam://mcp-servers`、`awam://backends/status`。
 
