@@ -101,15 +101,22 @@ awam-tool-manager/
 
 `errorType` 取值：`not_found` / `unknown_tool` / `unknown_resource` / `unknown_prompt`
 / `invalid_params` / `connection_error` / `runtime_error` / `config_error`
-/ `destructive_blocked` / `backend_busy` / `internal_error` / `launcher_error`
-/ `install_required` / `install_not_allowed`。
+/ `destructive_blocked` / `backend_busy` / `backend_installing` / `internal_error`
+/ `launcher_error` / `install_required` / `install_not_allowed` / `unknown_error`。
 
+- **`invalid_params`**：参数缺失 / 类型错 / 取值非法。当前发射点：`set_backend_log_level`
+  的 `level` 非法值（参数校验议题上线后将扩大启用面）。
 - **`backend_busy`**：同一后端正在处理另一个调用（单后端串行，并发调用会被直接拒绝，不排队）。
   调用方应稍后重试，不要无限重试打满。
+- **`backend_installing`**：后端依赖正在自动安装中——分钟级忙态，不是错误（与 `backend_busy`
+  的秒级并发冲突分工不同，故单列）。**可重试**：轮询 `get_backend_status` 或稍后重试
+  `start_backend`；不要并发重试。
 - **`install_required`**：后端依赖缺失，且**未授权**自动执行 `install.command`（默认即此状态）。
   见「安全约定」——开授权后重试 `start_backend` 即可。
 - **`install_not_allowed`**：已授权，但 `install.command` 不在受支持的白名单内
   （含 shell 元字符或前缀不合法），已拒绝执行。改条目里的命令后重试。
+- **`unknown_error`**：兜底值——后端抛出了既非 `BackendBusyError` / `ConnectionError` /
+  `RuntimeError` 的未分类异常。出现它说明后端抛了未预期类型：看 `get_backend_logs`；可重试一次。
 
 成功结果除文本通道（JSON 文本）外，还附带 **`structuredContent`**（dict），客户端无需
 再解析文本即可按结构消费；每个工具的 `outputSchema` 统一声明输出含顶层 `success`（bool）。
