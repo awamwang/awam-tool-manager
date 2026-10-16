@@ -44,6 +44,10 @@ from registry import ToolRegistry
 from backend_client import BackendClient, BackendManager, ensure_npm_bin_on_path
 from launcher_client import LauncherError, LauncherManager
 from schema import schema_backend_available
+# P1-04：业务错误三件套搬到 errors.py（tool_specs 的 handlers 要用，留在
+# server.py 会形成 server → tool_specs → server 循环 import），这里继续
+# re-export，`from server import ToolError` 等外部引用拿到的仍是同一个类对象。
+from errors import ToolError, fail, ensure_success
 
 # 数据目录：DATA_DIR 放人写的声明（进版本库），RUNTIME_DIR 放程序生成的
 # 运行时数据（本机应用数据目录）。两者此前混在 data/ 下，导致活实例改写
@@ -124,31 +128,6 @@ def _needs_destructive_confirm(tool: dict | None, sub_tool: str) -> bool:
     if listed is None:
         return True
     return sub_tool in listed
-
-
-class ToolError(Exception):
-    """业务级失败。
-
-    mcp 1.x 的低层 Server 会把 @app.call_tool() 的**正常返回值**恒包装成
-    CallToolResult(isError=False)，因此「让客户端知道这次调用失败了」的唯一
-    途径就是抛出异常 —— SDK 捕获后会自动转成 isError=True 的结果。
-
-    异常正文统一为 JSON，确保客户端既能感知失败，也能读到可读的原因。
-    """
-
-
-def fail(error: str, error_type: str = "invalid_params", **extra) -> None:
-    """抛出携带 JSON 载荷的业务错误"""
-    payload = {"success": False, "errorType": error_type, "error": error}
-    payload.update(extra)
-    raise ToolError(json.dumps(payload, ensure_ascii=False))
-
-
-def ensure_success(res: dict) -> dict:
-    """后端 / 注册中心返回的失败结果一律转成 ToolError"""
-    if not res.get("success"):
-        raise ToolError(json.dumps(res, ensure_ascii=False, default=str))
-    return res
 
 
 @app.list_tools()
