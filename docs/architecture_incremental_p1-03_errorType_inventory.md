@@ -284,12 +284,18 @@ Q3 的 schema 容忍度硬性前提架构侧已核验完毕（`additionalPropert
 
 - `src/errors.py`（35 行）：`fail()` 在 `:24`、`ensure_success()` 在 `:31`——枚举建议加在
   `:13` 的 `ToolError` 类之后、`fail()` 之前，与 `fail()` 同模块（U4 裁决落点）。
-- 现有 15 处裸字符串发射点分布：`backend_client.py` 13 处（`:780`/`:782` 的动态
-  `error_type` 是字符串表达式，收敛时注意保持动态性）+ `registry.py` 2 处（`:121`/`:129`）
-  + `tool_specs.py` 4 处（`:168`/`:229`/`:310`/`:334`）+ `server.py` 5 处
-  （`:137`/`:161`/`:220`/`:334`/unknown_resource 同文件另 1 处共 5）。
-  **注意**：`errors.py:22` 的 `fail()` 默认参数值 `"invalid_params"` 是第 16 个字面量——
-  收敛时它自然引用常量，A1 落地后该值首次可达。
+- **裸字符串出现点全量清单**（2026-10-17 实测，收敛时常量化即替换这些位置）：
+  - `backend_client.py` **8 处**：`:780`/`:782` 条件表达式里的 `"install_not_allowed"` /
+    `"install_required"` 裸串；`:793` 的 `"errorType": error_type`（动态变量，值来自
+    `:779-783` 的条件表达式——收敛时保持动态性，引用两个常量而非写死）；
+    `:1367`/`:1378`/`:1384`/`:1390`/`:1396` 五处 dict 字面量；
+  - `registry.py` **2 处**：`:121`/`:129` dict 字面量（注意：registry 是 return dict，
+    不是 `fail()` 调用）；
+  - `tool_specs.py` **4 处**：`:168`/`:229`/`:310`/`:334` 的 `fail()` kwargs；
+  - `server.py` **4 处**：`:137`/`:161`/`:220`/`:334` 的 `fail()` kwargs；
+  - `errors.py` **1 处**：`:22` 的 `fail()` 默认参数值 `"invalid_params"`——A1 落地后
+    该值首次可达，收敛时自然引用常量。
+  - 合计 **19 处字面量出现，覆盖 15 个 distinct 值**；Q2 扩容后 16 个值。
 - `backend_installing` 直接入枚举（Q2），合法集 16 个值。
 
 ### S3 锚点：12 处机械补齐
