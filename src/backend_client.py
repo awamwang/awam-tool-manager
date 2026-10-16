@@ -1336,9 +1336,16 @@ class BackendManager:
             # 后端异常时 list_tools 可能返回空列表，此时写盘会用空结果覆盖上一次
             # 成功同步的缓存，导致已缓存的工具目录永久丢失。宁可不同步。
             if not tools:
+                # Q3（P1-03）：这是「部分成功 + 告警」——同步失败了，但
+                # 旧缓存被明智地保留。errorType 归类 runtime_error；
+                # warning 说明「已保留原缓存」，与 call_backend_tool 命中
+                # destructive 时挂 warning 的既有手法一致（SHARED_OUTPUT_
+                # SCHEMA 的 additionalProperties=true 容忍附加字段）
                 return {
                     "success": False,
-                    "error": "后端返回空工具列表，保留原缓存未覆盖"
+                    "errorType": ErrorType.RUNTIME_ERROR,
+                    "error": "后端返回空工具列表，保留原缓存未覆盖",
+                    "warning": "后端返回空工具列表，已保留原缓存未覆盖",
                 }
 
             # 保存到 backend-tools/ 目录

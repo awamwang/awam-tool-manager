@@ -366,6 +366,28 @@ def test_call_backend_tool_on_unknown_tool():
     assert result["errorType"] == "config_error"
 
 
+def test_sync_empty_tool_list_keeps_cache_with_warning():
+    """Q3（P1-03）：后端返回空工具列表——部分成功 + 告警，不是硬失败"""
+
+    class EmptyClient(FakeBackendClient):
+        async def list_tools(self, force_refresh=False):
+            return []
+
+    store = FakeStore({"mcp1": _mcp_tool({"type": "stdio"})})
+    manager = BackendManager(store)
+    client = EmptyClient(tool_id="mcp1")
+    client.status = BackendClient.STATUS_RUNNING
+    manager.clients["mcp1"] = client
+
+    result = asyncio.run(manager.sync_tools_catalog("mcp1"))
+
+    assert result["success"] is False
+    assert result["errorType"] == "runtime_error"
+    assert "已保留原缓存" in result["warning"]
+    # 缓存保护语义不变：空列表不许写盘（FakeStore 没有
+    # save_backend_tools，若代码尝试写盘会直接 AttributeError）
+
+
 def test_list_mcp_tools_only_returns_mcp_kind():
     store = FakeStore({
         "app1": {"id": "app1", "kind": "app"},
