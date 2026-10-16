@@ -5,6 +5,13 @@
    （server.py 旧 if/elif 全链落空后的 else 分支）逐字一致；
 2. 15 个已注册名字都不落 `unknown_tool`——查表分发没漏搬任何一个 handler。
 
+**NE-1 留痕（U6 裁决要求）**：重构后 `json.dumps` 统一带 `default=str`
+（旧代码只有 5 个工具带）。这是**有意的单向放宽**：这 10 个受影响工具的载荷
+全部由「JSON 文件读出的数据 + 字面量」构成，`default=str` 在可达输入上是
+no-op；唯一理论差异是「以前会抛 TypeError → 被 call_tool 转成 internal_error
+的情况，现在会成功序列化」，方向是更不容易失败。不启用 `strict_dumps`
+回退方案（那会把隐藏的不一致固化成永久分支逻辑）。
+
 探针只验证「查表分发接上了」，不真连后端 / 启动器：backend 与 launcher
 两个 manager 的方法全部打成良性失败（返回体经 ensure_success 转 ToolError，
 errorType=probe_blocked ≠ unknown_tool）。ctx 持有的是同一批 manager 对象，

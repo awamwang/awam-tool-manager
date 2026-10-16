@@ -179,3 +179,28 @@ def test_update_and_install_subfields_are_checked():
     assert validate_tool_entry({**base, "update": {"method": "apt"}}) is not None
     assert validate_tool_entry({**base, "install": {"command": "npm i -g x"}}) is None
     assert validate_tool_entry({**base, "install": {"command": 123}}) is not None
+
+
+# ---- 5. SKILL.md 对外工具表 vs tool_specs 声明表（P1-04）----
+
+
+def test_skill_tool_table_matches_server_tool_specs():
+    """SKILL.md「对外 MCP 工具」表里的工具名集合必须与 SERVER_TOOL_SPECS 一致。
+
+    P1-04 把 tools/list 的定义源收敛到 src/tool_specs.py 后，SKILL.md 的
+    工具表是最后一份手写副本。本期不做生成器（U2），只加「漂移即红」守卫：
+    加了工具忘了改文档（或反过来），这里就红。
+    """
+    from tool_specs import SERVER_TOOL_SPECS  # noqa: E402
+
+    skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+    section = skill.split("## 对外 MCP 工具", 1)[1].split("\n## ", 1)[0]
+    # 表格首列形如 `| `search_tools` | ...`
+    documented = set(re.findall(r"^\| `([a-z_]+)` \|", section, re.MULTILINE))
+
+    spec_names = {s.name for s in SERVER_TOOL_SPECS}
+    assert documented, "SKILL.md 工具表没解析到任何工具名，测试可能解析错了"
+    assert documented == spec_names, (
+        f"SKILL.md 工具表与 tool_specs 声明表不一致："
+        f"文档多出 {documented - spec_names}，spec 多出 {spec_names - documented}"
+    )
