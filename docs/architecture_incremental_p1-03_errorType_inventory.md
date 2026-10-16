@@ -97,7 +97,9 @@
 > **计数修正（2026-10-17 二次校准，重要）**：①我在此前给 team-lead 的汇报中说「29 处 `success: False`、23 处缺失」，
 > 那个数字是把 B 层（内部站点）误算进了缺口。**精确口径是：总数 30、客户端可达 14、内部 8、已合规 8**。
 > ②原文档记 B 层 9 处，实为 **8**——所列「start() 取消分支」（`backend_client.py:577`）实为
-> `except asyncio.CancelledError: ... raise`，**不发 `success: False` payload**（已逐行核实）。
+> `except asyncio.CancelledError: ... raise`，**不发 `success: False` payload**（已逐行核实；
+> team-lead 独立复核时另发现 `:679-681`（`_connection_loop` 的取消处理，置 `_conn_error` 后
+> raise）同样是零 payload——两处取消路径均不产生 `success: False`，B 层 8 处属实）。
 > ③A 层 14 处中 **12 处可机械补齐 + 2 处需先做设计决策**（A5→§4-Q3、A14→§4-Q2）——
 > 原文档「13 处机械 + 1 处设计问题」的汇总为笔误（§3.2 表明细逐项相加即 12），
 > 且按类型分解 `config_error`×7 + `runtime_error`×3 + `connection_error`×1 + `invalid_params`×1 = 12 自洽。
