@@ -571,3 +571,41 @@ graph LR
 | ARC-P1-04「kind 扩展成本高」 | §1.3 给出 11 点权威清单；§2.4 明确 L2 不统一的理由与留的门 |
 | ARC-P1-03「errorType 契约只落实 1 处」 | §4 判定 P1-04 为其前置、顺序不可调换、出口唯一化留门 |
 | TOP-5 建议中的「文档由代码生成」模式 | §2.6 沿用 `schema.py` → `format.md` 的先例，但本期只做测试守卫（U2） |
+
+---
+
+## 12. 实现核验记录（2026-10-17，架构侧 Task #9）
+
+里程碑 M01–M06 已提交（`ee252eb` → `cc414a7`），M07 收尾进行中。架构侧逐项核验结论：
+
+### 12.1 通过的检查点
+
+| # | 检查点 | 结论 |
+|---|---|---|
+| 1 | NE-5：`driver` 漂移未被顺手修掉 | ✅ `tool_specs.py:365`/`:381` 原文「如 app、mcp、driver」保留，golden 同步钉住 |
+| 2 | `SHARED_OUTPUT_SCHEMA` 约束注释随常量搬入 | ✅ `tool_specs.py:79-91`，outputSchema↔structuredContent 注释原文随行 |
+| 3 | `_prewarm_backends`/`_restore_backends` 留在 `server.py` | ✅ `server.py:342-409`；`ensure_npm_bin_on_path` 仍可经 server 命名空间 monkeypatch |
+| 4 | golden 比对归一化 | ✅ `_fields()` 仅对 annotations 施加 `exclude_none=True`，其余四字段严格比；两条禁令（不补 null 键、不整表偷懒）遵守 |
+| 5 | 既有测试零改动 | ✅ M01–M06 全程仅 2 个新文件（+242 行）；`conftest.py` 自 A14 起未动；收尾期 `test_docs_sync.py` 为纯追加（+25/-0，既有断言未动） |
+| 6 | 15 分支机械替换零越界 | ✅ 逐分支比对：五类替换 + `json.dumps`→return；A2/A12/A13 及解释性注释全部保留；`run_launcher_action` 条目级 destructive 直判未被误重构为 `_needs_destructive_confirm`；`get_backend_status` 的 `arguments.get("tool_id")` 无默认值细节保留 |
+| 7 | unknown_tool 逐字等价 | ✅ 消息 / errorType / toolName 字段与旧 `server.py:696` 一致（新 `server.py:161`），有专门测试断言 |
+| 8 | annotations 挂载等价 | ✅ 15 条与旧 `TOOL_ANNOTATION_HINTS` 逐条一致；`if hints:` 真值判断保留；`set_backend_log_level` 的 `{}` → 不挂 → golden 记 None（唯一 None 案例） |
+| 9 | spec 顺序 | ✅ 沿用旧 `list_tools` 字面量顺序（非 hints 表顺序），golden 逐位锁定保序 |
+| 10 | 非 dispatch 部分 | ✅ `call_tool` / `_result_to_structured` / `list_resources` / `read_resource` / `list_prompts` / `get_prompt` / `_prewarm_backends` / `_restore_backends` / `main` 九个区块与重构前逐字相同 |
+| 11 | re-export 同一性 | ✅ `from server import ToolError/fail/ensure_success/SHARED_OUTPUT_SCHEMA/_needs_destructive_confirm` 均为同一对象；旧 4 个测试文件 import 的符号全部仍在 |
+| 12 | 循环 import / R1 | ✅ `errors.py` 仅 docstring 提及 server；`tool_specs` 仅 TYPE_CHECKING import managers；无裸 manager 名 |
+| 13 | 全量回归 | ✅ 192 passed / 0 failed（191 committed + 收尾新增 SKILL.md 守卫 1 条） |
+| 14 | M00 golden 采集时点 | ✅ `5f06756` 仅含 golden 一个文件（533 行），彼时 `src/` 未动一行 |
+| 15 | U8 文档同步 | ✅ M06（`cc414a7`）：architecture.md 目录树 / 架构图 / 模块表行数（464/728/35 与实际一致）/ §5.2 注记 / §6.1 表全部更新 |
+
+### 12.2 待处置项
+
+| # | 事项 | 状态 |
+|---|---|---|
+| A | **U6 硬性要求②：M07 最终提交信息必须逐条列出 NE-1~NE-5** | ⚠️ 未兑现。M02–M06 六个里程碑提交均为单行标题。文档级留痕已在 M06 的 TASKS.md 完整落地，代码级 NE-1（`server.py:157`）/ NE-3（`tool_specs.py:725`）已在，测试级 NE-1 留痕已在收尾 diff 补齐。**剩余动作仅剩最终提交信息** |
+| B | NE-5 代码级注释缺失（建议） | ℹ️ driver 漂移有 golden 机械保护 + TASKS.md 文档保护，但 spec 处无「历史漂移本期不许修」注释。建议 M07 补一行，防未来维护者再次顺手修（零行为风险） |
+| C | `test_docs_sync.py` 纯追加口径 | ℗ 记录在案：SKILL.md 漂移守卫（U2 的廉价替代）追加进既有 docs-sync 守卫文件而非新建文件。纯追加、按关注点分组合理，架构侧认可 |
+
+### 12.3 结论
+
+P1-04 实现与设计**逐项一致**：三层等价证明的行为面全部落地，五个非等价点全部按设计处置且留痕完整，U1–U8 八项裁决全部兑现（U6 余最终提交信息一项待 M07）。可以进入 QA 全量回归（任务 #6）与最终提交（任务 #7）。
