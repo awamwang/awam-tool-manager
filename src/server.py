@@ -42,16 +42,23 @@ from store import JsonStore
 from runtime_paths import get_runtime_dir, migrate_legacy_runtime
 from registry import ToolRegistry
 from backend_client import BackendClient, BackendManager, ensure_npm_bin_on_path
-from launcher_client import LauncherError, LauncherManager
+from launcher_client import LauncherManager
 from schema import schema_backend_available
 # P1-04：业务错误三件套搬到 errors.py（tool_specs 的 handlers 要用，留在
 # server.py 会形成 server → tool_specs → server 循环 import），这里继续
 # re-export，`from server import ToolError` 等外部引用拿到的仍是同一个类对象。
 from errors import ToolError, fail, ensure_success
 # P1-04：对外工具声明式注册表——list_tools 的定义源与 dispatch 的查表目标。
-# SHARED_OUTPUT_SCHEMA 已随常量搬到 tool_specs（连注释一起），这里 re-export
-# 保护外部引用。
-from tool_specs import SHARED_OUTPUT_SCHEMA, ToolContext, build_mcp_tools  # noqa: F401
+# SHARED_OUTPUT_SCHEMA 已随常量搬到 tool_specs（连注释一起），
+# _needs_destructive_confirm 已随 handler 搬到 tool_specs；两者在这里
+# re-export 保护外部引用。
+from tool_specs import (
+    SHARED_OUTPUT_SCHEMA,  # noqa: F401
+    _needs_destructive_confirm,  # noqa: F401
+    ToolContext,
+    build_mcp_tools,
+    get_spec,
+)
 
 # 数据目录：DATA_DIR 放人写的声明（进版本库），RUNTIME_DIR 放程序生成的
 # 运行时数据（本机应用数据目录）。两者此前混在 data/ 下，导致活实例改写
@@ -109,27 +116,6 @@ TOOL_ANNOTATION_HINTS: dict[str, dict[str, bool]] = {
     # 转发到后端 MCP，属于"与外部世界交互"但静态无法判定副作用
     "call_backend_tool": {"openWorldHint": True},
 }
-
-
-def _needs_destructive_confirm(tool: dict | None, sub_tool: str) -> bool:
-    """判断转发到 `sub_tool` 是否需要 `allowDestructive` 显式确认。
-
-    A12（2026-10-16）：破坏性实际属于「子工具」，不是「整个后端」。
-    接入 winget-mcp 时实测——它同时提供纯查询 `find-winget-packages` 与
-    会装软件的 `install-winget-package`，而条目级 `destructive=true` 一刀切，
-    导致连查询都被拦（错误信息还笼统地指向整个后端）。
-
-    规则：
-    - 条目未标 `destructive` → 不拦（保持既有行为）
-    - 标了 `destructive` 且未配 `destructiveTools` → 整后端都拦（旧语义，不回退）
-    - 标了 `destructive` 且配了 `destructiveTools` → 只拦清单内的子工具
-    """
-    if not tool or not tool.get("destructive"):
-        return False
-    listed = tool.get("destructiveTools")
-    if listed is None:
-        return True
-    return sub_tool in listed
 
 
 @app.list_tools()
@@ -196,228 +182,17 @@ async def call_tool(name: str, arguments: dict) -> CallToolResult:
 
 async def dispatch_tool(name: str, arguments: dict) -> str:
     """按工具名分发，返回 JSON 文本"""
-    result = ""
+    # P1-04 M03 迁移期脚手架：已搬迁到 tool_specs 的工具走「查表 → handler →
+    # 统一序列化」；未搬迁的继续走下方旧 if/elif。M04 删除本脚手架与全链。
+    spec = get_spec(name)
+    if spec is not None and spec.handler is not None:
+        payload = await spec.handler(arguments, _TOOL_CONTEXT)
+        return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 
-    if name == "search_tools":
-        keyword = arguments.get("keyword", "")
-        kind = arguments.get("kind")
-        tools = registry.search_tools(keyword, kind)
-        result = json.dumps({
-            "success": True,
-            "keyword": keyword,
-            "count": len(tools),
-            "tools": [
-                {
-                    "id": t["id"],
-                    "name": t.get("displayName", t["name"]),
-                    "kind": t.get("kind", "unknown"),
-                    "description": t.get("description", "")[:100],
-                    "status": t.get("status", "installed")
-                }
-                for t in tools
-            ]
-        }, ensure_ascii=False, indent=2)
-
-    elif name == "list_tools":
-        kind = arguments.get("kind")
-        tools = registry.list_all_tools(kind)
-        result = json.dumps({
-            "success": True,
-            "count": len(tools),
-            "tools": [
-                {
-                    "id": t["id"],
-                    "name": t.get("displayName", t["name"]),
-                    "kind": t.get("kind", "unknown"),
-                    "description": t.get("description", "")[:100],
-                    "status": t.get("status", "installed")
-                }
-                for t in tools
-            ]
-        }, ensure_ascii=False, indent=2)
-
-    elif name == "get_tool_info":
-        tool_id = arguments.get("tool_id", "")
-        tool = registry.get_tool(tool_id)
-
-        if not tool:
-            fail(f"未找到工具: {tool_id}", error_type="not_found", toolId=tool_id)
-
-        kind = tool.get("kind", "unknown")
-        result_data = {
-            "success": True,
-            "id": tool["id"],
-            "name": tool.get("displayName", tool["name"]),
-            "kind": kind,
-            "status": tool.get("status", "unknown"),
-            "description": tool.get("description", "")
-        }
-
-        if kind == "app":
-            result_data["version"] = tool.get("version", "未知")
-            result_data["tags"] = tool.get("tags", [])
-            if tool.get("launch"):
-                result_data["launch"] = tool["launch"]
-
-        elif kind == "mcp":
-            backend_res = backend_manager.get_backend_status(tool_id)
-            if backend_res.get("success"):
-                result_data["backend"] = backend_res.get("status", {})
-
-            backend_tools = registry.list_backend_tools(tool_id)
-            result_data["backendTools"] = [
-                {
-                    "name": t["name"],
-                    "description": t.get("description", "")
-                }
-                for t in backend_tools
-            ]
-
-        result = json.dumps(result_data, ensure_ascii=False, indent=2, default=str)
-
-    elif name == "launch_tool":
-        tool_id = arguments.get("tool_id", "")
-        res = ensure_success(registry.launch_tool(tool_id))
-        result = json.dumps(res, ensure_ascii=False, indent=2)
-
-    elif name == "call_backend_tool":
-        tool_id = arguments.get("tool_id", "")
-        tool_name = arguments.get("tool_name", "")
-        backend_args = arguments.get("arguments") or {}
-
-        # A2：数据里的 destructive 之前只是个装饰字段，被无差别转发。
-        # 这里把门禁落到转发前：命中判定的调用必须显式确认，否则默认拒绝
-        # （A12 起判定下放到子工具粒度，见 _needs_destructive_confirm）。
-        target_tool = registry.get_tool(tool_id)
-        if _needs_destructive_confirm(target_tool, tool_name):
-            if not arguments.get("allowDestructive"):
-                fail(
-                    f"目标工具 '{tool_id}' 的子工具 '{tool_name}' 被判定为 destructive，"
-                    f"需显式传 allowDestructive=true 才会转发调用",
-                    error_type="destructive_blocked",
-                    toolId=tool_id,
-                    toolName=tool_name,
-                )
-            log(f"⚠️ 已确认转发到 destructive 工具: {tool_id}/{tool_name}")
-
-        log(f"路由调用: {tool_id}/{tool_name}")
-        res = ensure_success(
-            await backend_manager.call_backend_tool(tool_id, tool_name, backend_args)
-        )
-        # 与上面的拦截判定保持同源：免确认的子工具不该被标注成 destructive
-        if _needs_destructive_confirm(target_tool, tool_name):
-            res["warning"] = f"目标工具 '{tool_id}/{tool_name}' 被判定为 destructive"
-        result = json.dumps(res, ensure_ascii=False, indent=2, default=str)
-
-    elif name == "list_backend_tools":
-        tool_id = arguments.get("tool_id", "")
-        force_refresh = arguments.get("force_refresh", False)
-        res = ensure_success(
-            await backend_manager.list_backend_tools(tool_id, force_refresh=force_refresh)
-        )
-        result = json.dumps(res, ensure_ascii=False, indent=2, default=str)
-
-    elif name == "start_backend":
-        tool_id = arguments.get("tool_id", "")
-        log(f"启动后端: {tool_id}")
-        res = ensure_success(await backend_manager.start_backend(tool_id))
-        result = json.dumps(res, ensure_ascii=False, indent=2)
-
-    elif name == "stop_backend":
-        tool_id = arguments.get("tool_id", "")
-        log(f"停止后端: {tool_id}")
-        res = ensure_success(await backend_manager.stop_backend(tool_id))
-        result = json.dumps(res, ensure_ascii=False, indent=2)
-
-    elif name == "get_backend_status":
-        tool_id = arguments.get("tool_id")
-        res = ensure_success(backend_manager.get_backend_status(tool_id))
-        result = json.dumps(res, ensure_ascii=False, indent=2, default=str)
-
-    elif name == "get_backend_logs":
-        tool_id = arguments.get("tool_id", "")
-        level = arguments.get("level")
-        limit = arguments.get("limit", 50)
-        res = ensure_success(backend_manager.get_backend_logs(tool_id, level, limit))
-        result = json.dumps(res, ensure_ascii=False, indent=2, default=str)
-
-    elif name == "set_backend_log_level":
-        tool_id = arguments.get("tool_id", "")
-        level = arguments.get("level", "")
-        res = ensure_success(backend_manager.set_backend_log_level(tool_id, level))
-        result = json.dumps(res, ensure_ascii=False, indent=2)
-
-    elif name == "sync_backend_tools":
-        tool_id = arguments.get("tool_id", "")
-        log(f"手动同步后端工具目录: {tool_id}")
-        res = ensure_success(await backend_manager.sync_tools_catalog(tool_id))
-        result = json.dumps(res, ensure_ascii=False, indent=2)
-
-    elif name == "sync_launcher_actions":
-        tool_id = arguments.get("tool_id", "")
-        log(f"手动同步启动器动作清单: {tool_id}")
-        res = ensure_success(launcher_manager.sync(tool_id))
-        result = json.dumps(res, ensure_ascii=False, indent=2)
-
-    elif name == "list_launcher_actions":
-        tool_id = arguments.get("tool_id", "")
-        keyword = arguments.get("keyword")
-        limit = arguments.get("limit")
-        # A13：默认读缓存（陈旧会自动重扫）；refresh=true 强制重扫
-        refresh = bool(arguments.get("refresh"))
-        # list_actions 返回的是数组而非结果字典，不能用 ensure_success 包；
-        # 启动器自己的错误转成带 errorType 的失败，而不是落到内部异常兜底
-        try:
-            actions = launcher_manager.list_actions(
-                tool_id, keyword=keyword, limit=limit, refresh=refresh
-            )
-        except LauncherError as exc:
-            fail(str(exc), error_type="launcher_error", toolId=tool_id)
-        # 带上 lastSynced / source：调用方要能判断这份清单有多旧、是否完整，
-        # 否则「自动刷新」只是把不透明变得更不透明。
-        catalog = store.load_launcher_catalog(tool_id) or {}
-        result = json.dumps(
-            {
-                "success": True,
-                "toolId": tool_id,
-                "count": len(actions),
-                "lastSynced": catalog.get("lastSynced"),
-                "source": catalog.get("source"),
-                "actions": actions,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-
-    elif name == "run_launcher_action":
-        tool_id = arguments.get("tool_id", "")
-        target_tool = registry.get_tool(tool_id)
-        # 执行动作是真的会跑起来（Quicker 动作可以是任何操作），
-        # 与 call_backend_tool 一致：条目标了 destructive 就要显式确认。
-        if target_tool and target_tool.get("destructive"):
-            if not arguments.get("allowDestructive"):
-                fail(
-                    f"启动器 '{tool_id}' 被标记为 destructive，"
-                    f"需显式传 allowDestructive=true 才会执行动作",
-                    error_type="destructive_blocked",
-                    toolId=tool_id,
-                )
-            log(f"⚠️ 已确认执行 destructive 启动器动作: {tool_id}")
-        res = ensure_success(
-            await launcher_manager.run_action(
-                tool_id,
-                action_id=arguments.get("action_id"),
-                action_name=arguments.get("action_name"),
-                param=arguments.get("param"),
-                wait=arguments.get("wait"),
-            )
-        )
-        result = json.dumps(res, ensure_ascii=False, indent=2)
-
-    else:
-        fail(f"未知工具: {name}", error_type="unknown_tool", toolName=name)
-
-    return result
+    # M03 末批：15 个分支已全部搬迁进 tool_specs，仅剩未知工具兜底；
+    # M04 收薄时并入查表分支。
+    fail(f"未知工具: {name}", error_type="unknown_tool", toolName=name)
+    return ""  # fail 必定抛错，不会执行到这里
 
 
 # ============ Resources（资源） ============
