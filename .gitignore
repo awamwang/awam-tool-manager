@@ -25,3 +25,10 @@ build/
 # 免得工作区又变脏。等所有实例都升级后可以删掉这两行。
 /data/backend-tools/
 /data/launcher-actions/
+
+# ---- 宿主其他 MCP 进程落到本目录的运行时文件 ----
+# WorkBuddy 宿主以本仓库为 CWD 拉起它自己的 MCP 进程，其中 torrent-search-mcp
+# （uv 工具）启动即在 CWD 创建 ./authorized_tokens.json（Telegram 会话令牌的
+# SHA-256 哈希，可用 TELEGRAM_AUTH_FILE 环境变量改落点）。不是本项目的数据，
+# 但会让每次会话恢复后 git status 都变脏——与上面忽略旧位置运行时数据同理由。
+/authorized_tokens.json
