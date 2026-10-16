@@ -52,9 +52,10 @@
 | `update` | `object` | - | 更新方式 |
 | `update.method` | `string` | - | 更新渠道（取值：`winget` / `scoop` / `npm` / `manual`） |
 | `update.packageId` | `string` | - | 包管理器中的包 ID |
-| `install` | `object` | - | 安装方式；`start_backend` 检测到启动命令缺失时会自动执行一次 `command`（服务启动时也会后台预热），与 `update` 并存 |
+| `install` | `object` | - | 安装方式；`start_backend` 检测到启动命令缺失时，仅在**显式授权**后才会执行一次 `command`（默认不执行，见安全约定），与 `update` 并存 |
 | `install.method` | `string` | - | 安装渠道（取值：`npm` / `winget` / `scoop` / `manual`） |
 | `install.command` | `string` | - | 安装命令 |
+| `install.auto` | `boolean` | - | 是否允许自动执行 `command`；默认 false。需显式设为 true，或设环境变量 AWAM_AUTO_INSTALL=1，否则 install.command 永不被自动执行 |
 | `launcher` | `object` | - | 启动器适配配置；仅 `kind=launcher` 有意义，决定如何列出与调用它的动作 |
 | `launcher.type` | `string` | - | 适配器类型（取值：`quicker`） |
 | `launcher.command` | `string` | - | 启动器可执行文件路径（如 QuickerStarter.exe） |

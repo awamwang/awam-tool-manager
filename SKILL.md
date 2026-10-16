@@ -17,7 +17,7 @@ MCP 只是工具的一种类型（`kind=mcp`），普通应用是另一种（`ki
 - **路由调用**：把调用转发给 `kind=mcp` 工具对应的后端 MCP Server
 - **进程管理**：管理后端 MCP 子进程的启停、状态、日志
 - **目录同步**：拉取后端 MCP 的子工具清单并缓存到本地
-- **依赖自装**：启动命令缺失时按 `install` 元数据自动安装（服务启动时后台预热，只装不启）
+- **依赖自装**：启动命令缺失时按 `install` 元数据安装（**默认不执行，需显式授权**，见「安全约定」；服务启动时后台预热已退化为纯检测）
 
 ## 目录结构
 
@@ -69,7 +69,7 @@ awam-tool-manager/
 | `launch_tool` | `tool_id`(必填) | 返回工具的启动命令（**目前不实际执行**） |
 | `call_backend_tool` | `tool_id`、`tool_name`(必填)、`arguments`、`allowDestructive` | 路由调用后端 MCP 的子工具；命中破坏性判定时需显式确认（A12：条目配了 `destructiveTools` 就只拦清单内子工具，未配则整个后端都拦） |
 | `list_backend_tools` | `tool_id`(必填)、`force_refresh` | 列出后端子工具（含参数 schema） |
-| `start_backend` | `tool_id`(必填) | 启动后端并自动同步工具目录；启动命令缺失时会先按 `install` 自动安装 |
+| `start_backend` | `tool_id`(必填) | 启动后端并自动同步工具目录；启动命令缺失时**仅在显式授权后**才按 `install` 安装（未授权返回 `install_required`，见「安全约定」） |
 | `stop_backend` | `tool_id`(必填) | 停止后端 |
 | `get_backend_status` | `tool_id` | 查看单个或全部后端状态 |
 | `get_backend_logs` | `tool_id`(必填)、`level`、`limit` | 查看后端日志（`limit<=0` 返回空） |
@@ -99,12 +99,17 @@ awam-tool-manager/
 { "success": false, "errorType": "not_found", "error": "未找到工具: xxx" }
 ```
 
-`errorType` 取值：`not_found` / `unknown_tool` / `unknown_resource` / `invalid_params`
-/ `connection_error` / `runtime_error` / `config_error` / `destructive_blocked`
-/ `backend_busy` / `internal_error`。
+`errorType` 取值：`not_found` / `unknown_tool` / `unknown_resource` / `unknown_prompt`
+/ `invalid_params` / `connection_error` / `runtime_error` / `config_error`
+/ `destructive_blocked` / `backend_busy` / `internal_error` / `launcher_error`
+/ `install_required` / `install_not_allowed`。
 
 - **`backend_busy`**：同一后端正在处理另一个调用（单后端串行，并发调用会被直接拒绝，不排队）。
   调用方应稍后重试，不要无限重试打满。
+- **`install_required`**：后端依赖缺失，且**未授权**自动执行 `install.command`（默认即此状态）。
+  见「安全约定」——开授权后重试 `start_backend` 即可。
+- **`install_not_allowed`**：已授权，但 `install.command` 不在受支持的白名单内
+  （含 shell 元字符或前缀不合法），已拒绝执行。改条目里的命令后重试。
 
 成功结果除文本通道（JSON 文本）外，还附带 **`structuredContent`**（dict），客户端无需
 再解析文本即可按结构消费；每个工具的 `outputSchema` 统一声明输出含顶层 `success`（bool）。
@@ -117,13 +122,28 @@ CallToolResult 透传；生产环境 pyenv 3.12 即 1.29.0）。
 - `call_backend_tool` 转发前会检查目标工具的 `destructive`：
   为 `true` 时必须显式传 `allowDestructive=true`，否则返回 `destructive_blocked`
 - 不合规的 `data/tools/*.json` 会被跳过并向 stderr 告警，不会让整个服务不可用
+- **`install.command` 默认不被自动执行**（P0 修复）：它写在进版本库的数据文件里、
+  且会经 shell 执行，旧逻辑让它在「服务启动预热」和 `start_backend` 两条路径上
+  无条件运行，与「`launch_tool` 只返回命令、不实际执行」的取舍正好相反。
+  现在必须显式授权才执行，授权有两个来源（任一即可）：
+  1. 环境变量 `AWAM_AUTO_INSTALL=1` —— 部署者在 MCP 客户端配置里显式打开；
+  2. 条目 `install.auto: true` —— 逐工具 opt-in。
+  授权之后还要过一道命令白名单：不含 shell 元字符（`&&` `;` `|` `$()` 等），
+  且前缀属于 `npm i -g` / `winget install` / `pip install` 等受支持形式，
+  否则返回 `install_not_allowed`。未授权时 `start_backend` 返回
+  `install_required`（**不 spawn 子进程**），服务启动预热则退化为纯检测，
+  只在 stderr 报告「谁缺依赖、缺什么」，不执行任何外部命令。
+
+> 想恢复「启动即自动装」的旧行为：在 MCP 客户端配置的 `env` 里加
+> `"AWAM_AUTO_INSTALL": "1"`。这是**部署者的显式决定**，不应由程序默认代劳。
 
 ## 新增工具步骤
 
 1. 在 `data/tools/` 下新建 `{tool_id}.json`（字段见 `docs/format.md`）
 2. 普通应用写 `kind=app` + `launch`；MCP 工具写 `kind=mcp` + `connection`
 3. MCP 工具调用 `start_backend(tool_id=...)` 建立连接并自动同步子工具目录；
-   启动命令不在 PATH 时会按 `install.command` 自动安装一次（服务启动时也会后台预热）
+   启动命令不在 PATH 时**默认不安装**，返回 `install_required`——需要自动安装
+   就设 `AWAM_AUTO_INSTALL=1` 或给条目配 `install.auto: true`（见「安全约定」）
 
 > 修改已有工具的 `connection` 时，若后端当前是停止/错误状态，**下次调用会用新配置重建连接**，
 > 无需重启 MCP Server；运行中则不受影响（避免留下孤儿进程），需先 `stop_backend` 再 `start_backend`。

@@ -61,6 +61,17 @@ def _utc_now_iso() -> str:
     )
 
 
+def install_auto_authorized_by_env() -> bool:
+    """部署者是否通过环境变量显式授权「自动执行 install.command」
+
+    授权语义是「我知道这会执行 shell 命令、我同意」——它必须由**人**在 MCP
+    客户端配置里显式打开（例如 WorkBuddy 的 mcp.json env 块），不能由程序
+    自己默认打开。默认关闭。
+    """
+    raw = os.environ.get(BackendClient.INSTALL_ENV_VAR, "")
+    return raw.strip().lower() in BackendClient.INSTALL_ENV_TRUTHY
+
+
 # npm 全局 bin 目录的进程级解析缓存：
 #   None  = 尚未解析；
 #   ""    = 解析失败（npm 不可用或超时，不再重试，避免每次调用都干等）；
@@ -181,6 +192,34 @@ class BackendClient:
     # 干等：npm i -g 动辄数十秒，会把调用方的 tools/call 预算（toolport
     # 网关为 30s）耗光。等不到就返回 installing 状态，让调用方轮询。
     INSTALL_LOCK_TIMEOUT = 5.0
+    # P0 修复（install 执行门禁）：install.command 来自**进版本库**的
+    # data/tools/*.json，旧逻辑让它在「服务启动预热」和「start_backend」两条
+    # 路径上被无条件 create_subprocess_shell 执行——来源不可控、无任何
+    # destructive/allowDestructive 门禁，与「launch_tool 只返回命令不执行」
+    # 的取舍正好相反，构成最小权限倒置。现在**默认拒绝执行**，只有显式授权
+    # 才放行，放行后还要再过一道命令形态白名单。
+    INSTALL_ENV_VAR = "AWAM_AUTO_INSTALL"
+    INSTALL_ENV_TRUTHY = {"1", "true", "yes", "on"}
+    # 授权后也只放行常见包管理器的安装形式：命令按空白切词，前缀必须落在
+    # 下表内（大小写不敏感）。
+    INSTALL_COMMAND_ALLOWLIST: tuple[tuple[str, ...], ...] = (
+        ("npm", "i", "-g"),
+        ("npm", "install", "-g"),
+        ("npm", "install", "--global"),
+        ("pnpm", "add", "-g"),
+        ("pnpm", "add", "--global"),
+        ("yarn", "global", "add"),
+        ("winget", "install"),
+        ("scoop", "install"),
+        ("pip", "install"),
+        ("pip3", "install"),
+        ("pipx", "install"),
+        ("uv", "pip", "install"),
+    )
+    # shell 元字符：命中即拒绝。install.command 走 create_subprocess_shell，
+    # 一个 `&&` / `;` / `$()` 就能在前缀合法的情况下串联任意命令，
+    # 前缀白名单必须配合这条才有效。
+    INSTALL_FORBIDDEN_CHARS = "&|;<>$`\\\"'\n\r"
     # 工具列表缓存有效期（秒）
     TOOLS_CACHE_TTL = 300
 
@@ -330,6 +369,47 @@ class BackendClient:
             return None
         return command
 
+    def _install_authorized(self) -> bool:
+        """本条目的 install.command 是否被授权自动执行
+
+        两个授权来源，任一即可：
+
+        1. 环境变量 `AWAM_AUTO_INSTALL` 为真 —— 部署者（本机用户）在 MCP
+           客户端配置里显式打开，语义是「我知道这会执行 shell，我同意」；
+        2. 条目 `install.auto` 严格为 `true` —— 数据文件自己逐工具 opt-in。
+
+        默认都不开。install.command 与 connection.command 有本质区别：
+        后者是「启动本工具必需的参数」，前者是一条**会改系统状态的命令**，
+        且写在进版本库的数据文件里——不能默认就替用户跑。
+        """
+        if install_auto_authorized_by_env():
+            return True
+        install = self.install_config if isinstance(self.install_config, dict) else {}
+        return install.get("auto") is True
+
+    @classmethod
+    def _install_command_allowed(cls, command: str) -> tuple[bool, str]:
+        """授权之后的第二道闸：命令形态是否在受支持的白名单内
+
+        返回 `(是否放行, 拒绝原因)`。两道条件同时满足才放行：
+
+        1. 不含 shell 元字符 —— 命令经 `create_subprocess_shell` 走 shell
+           解释，一个 `&&` / `;` / `$(...)` 就能在前缀合法的情况下串联
+           任意命令，所以前缀白名单必须配合这条才有效；
+        2. 按空白切词后的前缀命中 `INSTALL_COMMAND_ALLOWLIST`，且前缀
+           **之后还必须跟有参数**（包名）—— 裸的 `npm i -g` 什么都不装，
+           却同样是一条会走 shell 的命令，没有放行的理由。
+        """
+        bad = sorted({c for c in command if c in cls.INSTALL_FORBIDDEN_CHARS})
+        if bad:
+            return False, f"包含 shell 元字符 {' '.join(bad)}"
+        tokens = [t.lower() for t in command.split()]
+        for prefix in cls.INSTALL_COMMAND_ALLOWLIST:
+            if tokens[: len(prefix)] == list(prefix) and len(tokens) > len(prefix):
+                return True, ""
+        allowed = " / ".join(" ".join(p) for p in cls.INSTALL_COMMAND_ALLOWLIST)
+        return False, f"前缀不在白名单内（仅支持: {allowed}）"
+
     @staticmethod
     async def _kill_and_reap(proc, reap: bool = True) -> None:
         """杀掉安装子进程并回收（超时 / 被取消时调用，避免孤儿 npm）"""
@@ -358,15 +438,21 @@ class BackendClient:
         4. 没有 install.command → 返回 available=False 但**不阻塞**：由
            spawn 产出原生错误，行为与接入前完全一致，不把「本来能起」的
            配置误判死（例如 bash -c 跟一串脚本参数，which 无从判定）；
-        5. 有 install.command → 加锁执行一次安装（限时 INSTALL_TIMEOUT），
-           装完复检。**锁等待有上限**（INSTALL_LOCK_TIMEOUT）：别人正在
-           装（典型是启动预热持锁跑 npm i -g）时返回 installing 让调用方
-           轮询，不把调用方的 tools/call 预算耗在干等上。安装真正跑完
-           （无论成败）才记 attempted；被取消（调用方断开/网关超时取消）
-           时不标记，重试还能再装。
+        5. 有 install.command → **先过 P0 门禁**：未显式授权（环境变量
+           AWAM_AUTO_INSTALL 或条目 install.auto=true）就不执行；授权了
+           还要命令形态落在白名单内才执行。两道都过后才加锁执行一次安装
+           （限时 INSTALL_TIMEOUT），装完复检。**锁等待有上限**
+           （INSTALL_LOCK_TIMEOUT）：别人正在装（典型是启动预热持锁跑
+           npm i -g）时返回 installing 让调用方轮询，不把调用方的
+           tools/call 预算耗在干等上。安装真正跑完（无论成败）才记
+           attempted；被取消（调用方断开/网关超时取消）时不标记，重试
+          还能再装。
 
-        返回 {"success", "available", "installed", "installing"?}：
-        success=False 仅表示「装了但还没好」「正在装」或「安装执行失败」，
+        返回 {"success", "available", "installed", "installing"?, "installBlocked"?}：
+        success=False 仅表示「装了但还没好」「正在装」或「安装执行失败」。
+        被门禁拦下（installBlocked = "unauthorized" / "not_allowed"）时
+        success 仍为 True——那是**策略性拒绝**，不是执行失败，由
+        installBlocked 表达，调用方据此决定是否阻断启动。
         调用方（start / 启动预热）只记录不阻断——自装只会让启动更容易
         成功，不会让任何原本能启动的配置变得更糟。
         """
@@ -399,6 +485,40 @@ class BackendClient:
                 "available": False,
                 "installed": False,
                 "note": "未配置安装命令",
+            }
+
+        # ── P0 门禁第一道：显式授权 ──────────────────────────────
+        # install.command 来自进版本库的 data/tools/*.json，且会经
+        # create_subprocess_shell 走 shell 解释。旧逻辑让它无条件执行
+        # （服务启动预热 + start_backend 两条路径），与「launch_tool 只返回
+        # 命令不执行」方向相反。没人明确同意之前，一条都不跑。
+        if not self._install_authorized():
+            self._log(
+                "info",
+                f"启动目标 {target} 不在 PATH，但未授权自动安装"
+                f"（设 {self.INSTALL_ENV_VAR}=1 或条目 install.auto=true 可开启），跳过自装",
+            )
+            return {
+                "success": True,
+                "available": False,
+                "installed": False,
+                "installBlocked": "unauthorized",
+                "note": (
+                    f"依赖缺失且未授权自动安装：如需自动执行 install.command，"
+                    f"请设环境变量 {self.INSTALL_ENV_VAR}=1，或在条目里配 install.auto=true"
+                ),
+            }
+
+        # ── P0 门禁第二道：命令形态白名单 ────────────────────────
+        allowed, reason = self._install_command_allowed(install_command)
+        if not allowed:
+            self._log("error", f"安装命令被门禁拒绝（{reason}）: {install_command}")
+            return {
+                "success": True,
+                "available": False,
+                "installed": False,
+                "installBlocked": "not_allowed",
+                "error": f"安装命令被门禁拒绝（{reason}）: {install_command}",
             }
 
         # 加锁执行一次安装。锁等待有上限（INSTALL_LOCK_TIMEOUT）：预热
@@ -647,6 +767,30 @@ class BackendClient:
                     return {
                         "success": False,
                         "status": "installing",
+                        "message": message,
+                    }
+                blocked = install_result.get("installBlocked")
+                if blocked and not install_result.get("available"):
+                    # P0 门禁拦下且依赖确实缺失：不 spawn—— spawn 只会拿到
+                    # 「命令不存在」的原生错误，把真实原因（没授权/命令不合规）
+                    # 盖掉。直接返回带 errorType 的结构化失败，调用方知道该
+                    # 干什么（开授权 / 换命令），而不是对着 FileNotFoundError 猜。
+                    self.status = self.STATUS_STOPPED
+                    error_type = (
+                        "install_not_allowed"
+                        if blocked == "not_allowed"
+                        else "install_required"
+                    )
+                    message = (
+                        install_result.get("note")
+                        or install_result.get("error")
+                        or "依赖缺失"
+                    )
+                    self._log("warning", message)
+                    return {
+                        "success": False,
+                        "status": error_type,
+                        "errorType": error_type,
                         "message": message,
                     }
                 if install_result.get("installed"):
@@ -1104,6 +1248,10 @@ class BackendManager:
 
         只装不启：预热阶段拉起所有子进程会无谓占用资源，而这些工具
         可能很久都不会被调用。单个工具的失败不影响其他工具。
+
+        **P0 之后**：预热不再意味着「一定会装」。门禁在 ensure_installed
+        内部统一生效——未授权时预热退化为一次纯检测（只读 PATH，不执行
+        任何外部命令），结果里 blocked 计数与 details 逐条说明缺谁、缺什么。
         """
         details = []
         for tool_id in self.list_mcp_tools():
@@ -1121,6 +1269,7 @@ class BackendManager:
             "total": len(details),
             "available": sum(1 for d in details if d.get("available")),
             "installed": sum(1 for d in details if d.get("installed")),
+            "blocked": sum(1 for d in details if d.get("installBlocked")),
             "details": details,
         }
 

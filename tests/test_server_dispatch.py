@@ -367,6 +367,38 @@ def test_prewarm_logs_when_everything_ready(monkeypatch, capsys):
     assert "依赖均已就绪" in capsys.readouterr().err
 
 
+def test_prewarm_blocked_logs_missing_and_switch(monkeypatch, capsys):
+    """P0：未授权时预热不安装，但必须把「缺谁 + 怎么开」写进启动日志"""
+
+    async def fake_ensure_npm_bin():
+        return None
+
+    async def fake_ensure_all_installed():
+        return {
+            "success": True,
+            "total": 2,
+            "available": 1,
+            "installed": 0,
+            "blocked": 1,
+            "details": [
+                {"tool_id": "everything-search-mcp", "installBlocked": "unauthorized"},
+                {"tool_id": "winget-mcp", "available": True},
+            ],
+        }
+
+    monkeypatch.setattr(server, "ensure_npm_bin_on_path", fake_ensure_npm_bin)
+    monkeypatch.setattr(
+        server.backend_manager, "ensure_all_installed", fake_ensure_all_installed
+    )
+    run(server._prewarm_backends())
+
+    err = capsys.readouterr().err
+    assert "未授权自动安装" in err
+    assert "everything-search-mcp" in err
+    assert "不执行任何安装命令" in err
+    assert server.BackendClient.INSTALL_ENV_VAR in err
+
+
 def test_prewarm_swallows_failures(monkeypatch, capsys):
     """预热异常必须被吞掉：服务照常就绪，退化为首次调用时按需安装"""
 

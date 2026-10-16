@@ -164,6 +164,39 @@
       合成数据/自包含
 - [x] 合计 **168 passed**（9 个文件）；真实后端子进程启停 + 调用回归通过
 
+### 架构评审与 P0 修复（2026-10-16 深夜 评审 / 2026-10-17 修复）
+
+背景：用户要求「检查项目架构以及软件原理有没有问题」。走了双线独立评审——
+架构师（高见远）出 `docs/architecture_review_2026-10-16.md`，QA（严过关）出
+`docs/test_health_review_2026-10-16.md`（实测 168 passed、覆盖率 83%、4 条红绿验证）。
+
+- [x] **ARC-P0-01 修复：`install.command` 执行门禁**（用户拍板维持 P0）
+      - 病根：`install.command` 写在**进版本库**的 `data/tools/*.json` 里，旧逻辑让它在
+        「服务启动预热」和 `start_backend` 两条路径上被无条件
+        `create_subprocess_shell` 执行——来源不可控、无任何
+        `destructive`/`allowDestructive` 门禁，与「`launch_tool` 只返回命令不执行」
+        的取舍正好相反（最小权限倒置 + 本地命令执行面）。
+      - 三段式门禁（全收在 `BackendClient.ensure_installed()`）：
+        ①**授权**：`AWAM_AUTO_INSTALL=1`（部署者显式开）**或**条目 `install.auto=true`，
+        两者都缺就不执行；②**白名单**：无 shell 元字符（`&&` `;` `|` `$()`…）+
+        前缀命中 `INSTALL_COMMAND_ALLOWLIST`（`npm i -g` / `winget install` /
+        `pip install` 等）且前缀后跟有包名；③**失败可见**：被拦下且依赖确实缺失时
+        `start()` **不 spawn**，返回带 `errorType` 的结构化失败。
+      - 新增 `errorType`：`install_required` / `install_not_allowed`（SKILL.md 枚举已补全）。
+      - 启动预热**退化为纯检测**：只读 PATH、不执行任何外部命令，stderr 报告
+        「谁缺依赖、缺什么、怎么开授权」。
+      - `schema.py` 加 `install.auto`（boolean，默认 false），`docs/format.md` 由
+        生成器同步。
+      - 测试 168 → **183 passed**：新增 15 条门禁用例；既有 A6/A7 用例补显式授权。
+        红绿验证：拆掉授权门禁 → 6 条变红；拆掉白名单 → 2 条变红；还原后全绿。
+      - **真实 stdio 端到端验证**（QA 指出的测试盲区，手工补）：
+        `tests/test_e2e_install_gate.py` 用真实子进程 + 真实 MCP 会话跑两轮——
+        未授权返回 `install_required` 且 stderr 无「执行安装」；授权后命令确实进 shell。
+- [x] 顺带清掉的评审漂移：`architecture.md` §5.2 模块表（补 `runtime_paths.py` /
+      `launcher_client.py`、行数改「约」并注明易腐）、§5.4 依赖自装描述重写、
+      实现索引「12 个工具」→ 15；`README.md:13` `mcp>=1.9.0` → 1.29；
+      `SKILL.md` errorType 枚举补全为真实集合。
+
 ### 启动器接入（`kind=launcher`，2026-10-16）
 - [x] **新增 `kind=launcher` 工具类型** - 启动器不是 MCP，但有可列/可搜/可调用的动作：
       `launcher` 配置（适配器类型 / 命令 / 数据目录 / 超时）+ 第二层数据
@@ -185,7 +218,7 @@
 - [x] **Toolport 集成** - 已注册为 Toolport 的后端（registry `source: manual`，default profile），
       daemon 真实链路实测：启停、状态、子工具列表、路由调用全通
 - [x] **WorkBuddy 直连 MCP** - `~/.workbuddy/mcp.json` 新增 `awam-tool-manager` 条目
-      （pyenv 3.12.0 `python.exe` + `src/server.py`）；实测 12 个工具就位、
+      （pyenv 3.12.0 `python.exe` + `src/server.py`）；实测 15 个工具就位、
       A10 在新实例上 4 秒内自动恢复后端、`search_files` 端到端返回真实索引结果
 
 ### 其他

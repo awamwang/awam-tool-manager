@@ -39,7 +39,7 @@
 | 后端进程生命周期管理（启停 / 状态 / 日志） | `backend_client.py` | ✅ |
 | 心跳检测（30s） | `backend_client.py` | ✅ |
 | 工具目录自动同步到磁盘 | `backend_client.py` | ✅ |
-| 后端依赖自动安装 + 启动预热 | `backend_client.py` | ✅ 已实测跑通 |
+| 后端依赖安装门禁（默认拒绝 + 授权 + 白名单） | `backend_client.py` | ✅ P0 修复，已实测 |
 | MCP Resources / Prompts | `server.py` | ✅ |
 
 ### 2.2 已废弃、不应再参照的旧概念
@@ -209,13 +209,18 @@ awam-tool-manager/
 
 ### 5.2 模块职责
 
-| 模块 | 行数 | 职责 | 依赖 |
+> 行数为**易腐数字**（每次提交都会变），这里只保留数量级参考，精确值以
+> `wc -l src/*.py` 为准；新增/移除模块时必须同步本表。
+
+| 模块 | 行数（约） | 职责 | 依赖 |
 |---|---|---|---|
-| `store.py` | 139 | JSON 文件的读写与目录遍历，读有容错、写走原子替换，无缓存 | 标准库 |
-| `schema.py` | 240 | 两层数据的 JSON Schema 与校验（`jsonschema` 可选，缺失时降级）；**同时是 `docs/format.md` 字段表的唯一生成源** | `jsonschema`(可选) |
+| `store.py` | 194 | JSON 文件的读写与目录遍历，读有容错、写走原子替换，无缓存 | 标准库 |
+| `runtime_paths.py` | 93 | 运行时目录解析（`%LOCALAPPDATA%\.awam-tool-manager`，`AWAM_RUNTIME_DIR` 可覆盖）+ 旧路径数据一次性迁移 | 标准库 |
+| `schema.py` | 321 | 两层数据的 JSON Schema 与校验（`jsonschema` 可选，缺失时降级）；**同时是 `docs/format.md` 字段表的唯一生成源** | `jsonschema`(可选) |
 | `registry.py` | 140 | 工具查询语义（列表 / 搜索含 `id` / 详情 / 启动信息），加载时过滤不合规条目 | `store`、`schema` |
-| `backend_client.py` | 1246 | 后端 MCP 子进程的连接管理、调用转发、缓存、心跳、日志、依赖自装 | `mcp`、`store` |
-| `server.py` | 828 | MCP 协议入口，定义并分发全部对外能力（含 annotations 与 destructive 门禁），启动时后台预热后端依赖 | `mcp`、`store`、`registry`、`backend_client`、`schema` |
+| `backend_client.py` | 1416 | 后端 MCP 子进程的连接管理、调用转发、缓存、心跳、日志、**install 执行门禁（P0）** | `mcp`、`store`、`runtime_paths` |
+| `launcher_client.py` | 405 | 启动器适配器（非 MCP，Quicker）：动作清单解析/搜索、一次性外部命令调用 | `store` |
+| `server.py` | 1020 | MCP 协议入口，定义并分发全部对外能力（含 annotations 与 destructive 门禁），启动时后台检测依赖 + 恢复期望状态 | `mcp`、`store`、`registry`、`backend_client`、`launcher_client`、`schema` |
 | `scripts/generate_format_doc.py` | 148 | 读 `schema.py` 渲染字段表并就地替换 `docs/format.md` 的生成区块；`--check` 做漂移检查 | 标准库、`schema` |
 
 ### 5.3 后端路由调用链
@@ -243,8 +248,9 @@ call_backend_tool(tool_id, tool_name, arguments)
 ```
 
 - `start()` 成功后会**预热工具列表**并启动心跳任务（间隔 30s，探测超时 10s）；
-- `start()` 在 spawn 子进程前会先走一遍 `ensure_installed()`：启动命令的真实目标不在 PATH
-  且配了 `install` 时自动安装（限时 300s、只装一次），装完复检再继续启动；
+- `start()` 在 spawn 子进程前会先走一遍 `ensure_installed()`。该方法的策略见
+  「install 执行门禁」小节——**默认不执行安装命令**，未授权且依赖缺失时直接返回
+  `install_required` 而不 spawn；
 - `BackendManager.start_backend()` 在启动成功后**自动执行一次 `sync_tools_catalog`**；
 - 心跳失败会把状态置为 `error` 并**主动清理连接**（不再留僵尸子进程）；
 - 调用超时同样会把连接标记为 `error` 并后台清理，让后续请求快速失败而不是继续卡住。
@@ -283,6 +289,36 @@ TaskGroup 的取消作用域，而 anyio 的 `CancelScope` **绑定进入它的�
 **子进程 stdin 隔离**：`ensure_npm_bin_on_path()` 与安装命令的 spawn 一律传
 `stdin=DEVNULL`。server 自身经 stdio 管道与网关通信，子进程若继承这条 stdin，
 npm/cli 链会阻塞在读 stdin 上永不返回（表现为启动挂死 → 网关 30s 超时）。
+
+**install 执行门禁（P0 修复，2026-10-17）**：
+
+`install.command` 与 `connection.command` 有本质区别：后者是「启动本工具必需的
+参数」，前者是一条**会改系统状态的命令**，且写在**进版本库**的
+`data/tools/*.json` 里。旧逻辑让它在两条路径上被无条件
+`create_subprocess_shell` 执行——服务启动预热（`_prewarm_backends` →
+`ensure_all_installed`）与 `start_backend`（`start()` 前置 `ensure_installed`），
+既无调用方意图，也无任何 `destructive` / `allowDestructive` 门禁，与
+「`launch_tool` 只返回命令、不实际执行」的取舍正好相反（最小权限倒置）。
+
+修复后是三段式门禁，全部收在 `BackendClient.ensure_installed()` 内：
+
+1. **授权**：环境变量 `AWAM_AUTO_INSTALL` 为真（部署者显式打开）**或**条目
+   `install.auto === true`（逐工具 opt-in）。两者都缺 → 不执行，返回
+   `installBlocked="unauthorized"`；
+2. **命令白名单**：授权后仍要「无 shell 元字符」+「前缀命中
+   `INSTALL_COMMAND_ALLOWLIST` 且前缀后跟有包名」。`&&` / `;` / `$()` 能在
+   前缀合法的情况下串联任意命令，所以这两条必须同时满足；
+3. **失败可见**：被拦下且依赖确实缺失时，`start()` **不 spawn**，直接返回带
+   `errorType` 的结构化失败（`install_required` / `install_not_allowed`），
+   而不是丢一个「命令不存在」的原生错误把真实原因盖掉。
+
+连带变化：服务启动预热**退化为纯检测**——只读 PATH、不执行任何外部命令，
+在 stderr 报告「谁缺依赖、缺什么、怎么开授权」。想恢复旧行为由部署者在 MCP
+客户端配置里显式设 `AWAM_AUTO_INSTALL=1`，这是**人的决定**，不由程序默认代劳。
+
+> 边界说明：`ensure_npm_bin_on_path()` 仍会在启动时执行**硬编码**的
+> `npm prefix -g`。它不是配置驱动、无注入面，且是 PATH 自愈（A7）的必要
+> 前提，因此未纳入门禁；如威胁模型要求「启动零外部命令」，可一并加开关。
 
 **期望状态持久化与跨世代自愈（A10）**：
 
@@ -455,7 +491,7 @@ python src/server.py
 | 项 | 说明 |
 |---|---|
 | `structuredContent` | ✅ 已启用（mcp>=1.29，1.29 起 types.py 已定义、lowlevel server 已透传 `CallToolResult`）：`call_tool` 返回带 `structuredContent` 的 `CallToolResult`，`list_tools` 给每个工具挂统一 `outputSchema`（见 `SHARED_OUTPUT_SCHEMA`） |
-| 依赖自装 + 启动预热（A6 ✅ 已收口） | `install` 元数据接入执行：`ensure_installed()`（`_resolved_command` 剥壳解包 → `shutil.which` 检测 → 限时装一次 → 复检）+ `start()` 前置调用 + 服务启动时 `ensure_all_installed()` 后台预热（只装不启）。已用临时探针工具实测全链路 |
+| 依赖自装 + 启动预热（A6 ✅ 已收口；P0 后**默认不再执行安装**） | `install` 元数据接入执行：`ensure_installed()`（`_resolved_command` 剥壳解包 → `shutil.which` 检测 → 门禁 → 限时装一次 → 复检）+ `start()` 前置调用。启动预热在 P0 后**退化为纯检测**（只读 PATH、不执行外部命令），要恢复自动安装需部署者显式设 `AWAM_AUTO_INSTALL=1` 或条目 `install.auto=true` |
 | 工具变更通知 | `notifications/tools/list_changed` 未发送（顶层工具集静态，影响小） |
 | 标准 logging capability | 目前用自定义 Tool 查日志 |
 | 并发限流（A3 ✅ 已收口） | 单后端串行（`_call_lock`），并发调用报 `backend_busy`；要升级信号量 + 排队只需调 `MAX_CONCURRENT_CALLS` |
@@ -472,16 +508,17 @@ python src/server.py
 | `server.py` 顶部 | mcp 依赖的兼容导入（`ReadResourceContents` 缺失时降级） |
 | `server.py` `ToolError` / `fail` / `ensure_success` | 业务错误 → MCP `isError` 的转换层 |
 | `server.py` `call_tool` | `tools/call` 入口，含意外异常兜底 |
-| `server.py` `dispatch_tool` | 12 个工具的分发（if/elif 链） |
+| `server.py` `dispatch_tool` | 15 个工具的分发（if/elif 链） |
 | `launcher_client.py` `LauncherClient` | 启动器（非 MCP）适配器：`_scan_quicker` 解析动作清单、**先 json.loads 再取字符串**才能拿到动作名；`run_action` 走一次性外部命令（`-c<秒> "runaction:<ID>?参数"`），输出按 GBK 解码、失败按文本判定（退出码恒为 0） |
 | `server.py` `_needs_destructive_confirm` | 子工具级破坏性判定（A12）：条目配了 `destructiveTools` 时只拦清单内的后端子工具，未配则回退条目级 `destructive`；与拦截判定同源，warning 标注不再误加 |
 | `server.py` `read_resource` | 返回 `Iterable[ReadResourceContents]` |
 | `server.py` `main` | stdio 事件循环 + 启动后台预热任务 `_prewarm_backends()`，`finally` 取消预热并关闭全部后端 |
 | `store.py` `load_json` / `save_json` | JSON 读写：读有容错（坏文件跳过），写走 `mkstemp` + `os.replace` 原子替换 |
 | `registry.py` `search_tools` | 关键词匹配 id / name / displayName / description / tags（含 `id`，避免「搜得到工具却搜不到它的 ID」） |
-| `backend_client.py` `BackendClient.start` | 子进程启动、连接、预热工具列表、起心跳；spawn 前先 `ensure_installed()` 自装缺失依赖 |
-| `backend_client.py` `BackendClient.ensure_installed` | 依赖自装：剥壳解包启动命令 → `shutil.which` 检测 → 限时装一次（`INSTALL_TIMEOUT`）→ 复检；幂等，装不坏不阻断 |
-| `backend_client.py` `BackendManager.ensure_all_installed` | 启动预热：遍历所有 MCP 工具只装不启，单个失败不影响整体 |
+| `backend_client.py` `BackendClient.start` | 子进程启动、连接、预热工具列表、起心跳；spawn 前先 `ensure_installed()`，被门禁拦下时返回 `install_required` / `install_not_allowed` 且不 spawn |
+| `backend_client.py` `BackendClient.ensure_installed` | 依赖安装：剥壳解包启动命令 → `shutil.which` 检测 → **P0 门禁（授权 + 命令白名单）** → 限时装一次（`INSTALL_TIMEOUT`）→ 复检；幂等，装不坏不阻断 |
+| `backend_client.py` `BackendManager.ensure_all_installed` | 启动预热：遍历所有 MCP 工具**只检测**（P0 后不执行安装），单个失败不影响整体；汇总 `blocked` 计数供启动日志报告 |
+| `backend_client.py` `install_auto_authorized_by_env` / `_install_authorized` / `_install_command_allowed` | P0 门禁三件套：环境变量授权、条目 opt-in、命令白名单与 shell 元字符检查 |
 | backend_client.py 新增的 `_cleanup_lock` 保证清理串行且幂等（第一轮修复前两个 context 共用 try） |
 | `backend_client.py` `BackendClient.call_tool` | 转发调用，`wait_for` 限时，超时标记连接不可用 |
 | `backend_client.py` `BackendManager.get_client` | 连接池；以磁盘配置为真相源，空闲时按新 `connection` / `install` 重建 |

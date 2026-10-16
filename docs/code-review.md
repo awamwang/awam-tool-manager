@@ -6,7 +6,46 @@
 
 ---
 
-## 0. 第九次更新：A6 —— 后端依赖自动安装 + 启动预热（最新）
+## 0. 第十次更新：P0 修复 —— `install.command` 执行门禁（最新）
+
+> 本轮不是代码缺陷复扫，而是对**架构评审结论 ARC-P0-01** 的定向修复。
+> 完整背景见 [`architecture_review-2026-10-16.md`](architecture_review-2026-10-16.md)。
+
+**病根**：`install.command` 写在**进版本库**的 `data/tools/*.json` 里，旧逻辑让它在
+「服务启动预热」与 `start_backend` 两条路径上被无条件
+`create_subprocess_shell` 执行——**来源不可控、无调用方意图、无任何
+`destructive` / `allowDestructive` 门禁**。同一个项目里 `launch_tool` 刻意
+「只返回命令、不实际执行」，方向正好相反：最小权限倒置 + 本地命令执行面。
+
+**修复（三段式，全收在 `BackendClient.ensure_installed()`）**：
+
+| 段 | 机制 | 失败时的返回 |
+|---|---|---|
+| ① 授权 | 环境变量 `AWAM_AUTO_INSTALL` 为真（部署者显式开）**或**条目 `install.auto === true`（逐工具 opt-in） | `installBlocked="unauthorized"`，不执行 |
+| ② 命令白名单 | 无 shell 元字符（`&&` `;` `\|` `$()` 反引号 引号 换行…）**且** 按空白切词后前缀命中 `INSTALL_COMMAND_ALLOWLIST`（`npm i -g` / `winget install` / `pip install` 等 12 种）**且** 前缀后跟有包名 | `installBlocked="not_allowed"`，不执行 |
+| ③ 失败可见 | 被拦下且依赖确实缺失时 `start()` **不 spawn**，直接返回带 `errorType` 的结构化失败 | `install_required` / `install_not_allowed` |
+
+**连带变化**：服务启动预热 `_prewarm_backends()` **退化为纯检测**——只读 PATH、
+不执行任何外部命令，在 stderr 报告「谁缺依赖、缺什么、怎么开授权」；
+`ensure_all_installed()` 新增 `blocked` 汇总计数。`schema.py` 增加
+`install.auto`（boolean，默认 false），`docs/format.md` 由生成器同步。
+
+**验证**：
+
+- 测试 **168 → 183 passed**（新增 15 条门禁用例；既有 A6/A7 用例补显式授权后行为不变）。
+- **红绿验证**：临时把授权门禁短路 → 6 条变红（日志出现 `执行安装: npm i -g a`，
+  即旧 P0 行为）；临时把白名单短路 → 2 条变红；两次还原后全绿、`git status` 干净。
+- **真实 stdio 端到端**（tests/ 长期缺失的一层，`tests/test_e2e_install_gate.py`）：
+  真实子进程 + 真实 MCP 会话跑两轮——未授权返回 `install_required` 且 stderr
+  无「执行安装」；`AWAM_AUTO_INSTALL=1` 后命令确实被提交给 shell。
+
+**明确保留的边界**：`ensure_npm_bin_on_path()` 仍会在启动时执行**硬编码**的
+`npm prefix -g`。它不来自配置、无注入面，且是 PATH 自愈（A7）的前提，故未纳入门禁；
+若威胁模型要求「启动零外部命令」，需再为它加同一个开关。
+
+---
+
+## 0. 第九次更新：A6 —— 后端依赖自动安装 + 启动预热
 
 **起因（用户实测反馈）**：`everything-search-mcp` 经 toolport 调用 `start_backend` 总是超时。
 逐阶段计时定位到耗时全在 `npx -y` 的 registry 往返（9–26s 波动），与后端 initialize 无关；

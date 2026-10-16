@@ -109,7 +109,7 @@ TOOL_ENTRY_SCHEMA: dict[str, Any] = {
         },
         "install": {
             "type": "object",
-            "description": "安装方式；`start_backend` 检测到启动命令缺失时会自动执行一次 `command`（服务启动时也会后台预热），与 `update` 并存",
+            "description": "安装方式；`start_backend` 检测到启动命令缺失时，仅在**显式授权**后才会执行一次 `command`（默认不执行，见安全约定），与 `update` 并存",
             "properties": {
                 "method": {
                     "type": "string",
@@ -117,6 +117,10 @@ TOOL_ENTRY_SCHEMA: dict[str, Any] = {
                     "description": "安装渠道",
                 },
                 "command": {"type": "string", "description": "安装命令"},
+                "auto": {
+                    "type": "boolean",
+                    "description": "是否允许自动执行 `command`；默认 false。需显式设为 true，或设环境变量 AWAM_AUTO_INSTALL=1，否则 install.command 永不被自动执行",
+                },
             },
         },
         "launcher": {

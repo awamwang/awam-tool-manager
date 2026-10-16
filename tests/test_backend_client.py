@@ -696,6 +696,20 @@ def _fake_install_factory(calls, returncode: int = 0, stderr: bytes = b""):
     return factory
 
 
+def _authorize_install(monkeypatch):
+    """显式授权自动执行 install.command（环境变量通道）
+
+    P0 之后 install.command 默认不被执行；断言「安装逻辑本身」的用例
+    必须先授权，否则测到的是门禁而不是安装流程。
+    """
+    monkeypatch.setenv(BackendClient.INSTALL_ENV_VAR, "1")
+
+
+def _revoke_install_authorization(monkeypatch):
+    """确保环境里没有任何授权（用例间隔离：外部环境可能设了这个变量）"""
+    monkeypatch.delenv(BackendClient.INSTALL_ENV_VAR, raising=False)
+
+
 class _FakeStdioContext:
     """假装 stdio_client(params)：不进真实子进程，__aenter__ 给出两个流"""
 
@@ -822,6 +836,7 @@ def test_ensure_installed_ignores_malformed_install_config(monkeypatch):
 
 def test_ensure_installed_installs_once_then_short_circuits(monkeypatch):
     """装一次：安装后目标出现在 PATH 上；之后再调用直接短路，不重复装"""
+    _authorize_install(monkeypatch)
     state = {"which": None}
     monkeypatch.setattr(shutil, "which", lambda name: state["which"])
     calls = []
@@ -850,6 +865,7 @@ def test_ensure_installed_installs_once_then_short_circuits(monkeypatch):
 
 def test_ensure_installed_does_not_retry_after_failure(monkeypatch):
     """安装失败后不重复锤 npm；重试路径是重启服务或改配置触发重建"""
+    _authorize_install(monkeypatch)
     monkeypatch.setattr(shutil, "which", lambda name: None)
     calls = []
     monkeypatch.setattr(
@@ -878,6 +894,7 @@ def test_ensure_installed_does_not_retry_after_failure(monkeypatch):
 
 def test_ensure_installed_reports_when_command_ok_but_target_missing(monkeypatch):
     """安装退出码 0 但目标仍不在 PATH：如实报告，不谎报成功"""
+    _authorize_install(monkeypatch)
     monkeypatch.setattr(shutil, "which", lambda name: None)
     calls = []
     monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_install_factory(calls))
@@ -896,6 +913,7 @@ def test_ensure_installed_reports_when_command_ok_but_target_missing(monkeypatch
 
 def test_ensure_installed_times_out_and_kills_process(monkeypatch):
     """安装超时：杀进程、报错，不会无限等下去"""
+    _authorize_install(monkeypatch)
     monkeypatch.setattr(shutil, "which", lambda name: None)
     procs = []
 
@@ -925,6 +943,7 @@ def test_ensure_installed_times_out_and_kills_process(monkeypatch):
 
 def test_start_installs_missing_dependency_before_spawn(monkeypatch):
     """A6：start() 在 spawn 之前先自装缺失依赖；装完继续走正常启动流程"""
+    _authorize_install(monkeypatch)
     monkeypatch.setattr(shutil, "which", lambda name: None)
     calls = []
     monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_install_factory(calls))
@@ -985,6 +1004,7 @@ def test_get_client_rebuilds_when_only_install_changed():
 
 def test_ensure_all_installed_warms_every_mcp_tool(monkeypatch):
     """预热遍历所有 MCP 工具：只装不启；无 install 的不阻塞；app 类不参与"""
+    _authorize_install(monkeypatch)
     monkeypatch.setattr(shutil, "which", lambda name: None)
     calls = []
     monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_install_factory(calls))
@@ -1014,6 +1034,325 @@ def test_ensure_all_installed_warms_every_mcp_tool(monkeypatch):
 
     by_id = {d["tool_id"]: d for d in result["details"]}
     assert by_id["mcp2"]["available"] is False  # 没配 install：不阻塞，如实报告
+
+
+# ---------------------------------------------------------------------------
+# P0：install.command 执行门禁（默认拒绝 + 授权 + 命令白名单）
+#
+# 背景（架构评审 ARC-P0-01）：install.command 写在**进版本库**的
+# data/tools/*.json 里，旧逻辑让它在「服务启动预热」和「start_backend」
+# 两条路径上被无条件 create_subprocess_shell 执行——来源不可控、无任何
+# destructive/allowDestructive 门禁，与「launch_tool 只返回命令不执行」
+# 的取舍正好相反，是最小权限倒置。
+#
+# 修复后的三段式门禁，本组用例逐段钉住：
+#   ① 未显式授权（AWAM_AUTO_INSTALL / install.auto=true）→ 一条都不执行；
+#   ② 授权了还要命令形态落在白名单内（无 shell 元字符 + 前缀合法）；
+#   ③ 被拦下时 start() 返回带 errorType 的结构化失败，而不是 spawn 后
+#      丢一个「命令不存在」的原生错误把真实原因盖掉。
+# ---------------------------------------------------------------------------
+
+
+def test_install_gate_default_denies_execution(monkeypatch):
+    """默认未授权：依赖缺失也一条安装命令都不执行"""
+    _revoke_install_authorization(monkeypatch)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    calls = []
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_install_factory(calls))
+
+    client = BackendClient(
+        "x",
+        {"command": "cmd.exe", "args": ["/c", "foo"]},
+        {"method": "npm", "command": "npm i -g foo"},
+    )
+    result = asyncio.run(client.ensure_installed())
+
+    assert result["installBlocked"] == "unauthorized"
+    assert result["available"] is False
+    assert result["installed"] is False
+    # success 仍为 True：这是策略性拒绝，不是执行失败
+    assert result["success"] is True
+    assert calls == [], "未授权时绝不允许执行 install.command"
+
+
+def test_install_gate_unauthorized_message_names_the_switch(monkeypatch):
+    """拒绝原因必须可操作：告诉调用方怎么开授权，而不是只说「不允许」"""
+    _revoke_install_authorization(monkeypatch)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_install_factory([]))
+
+    client = BackendClient(
+        "x", {"command": "cmd.exe", "args": ["/c", "foo"]}, {"command": "npm i -g foo"}
+    )
+    result = asyncio.run(client.ensure_installed())
+
+    assert BackendClient.INSTALL_ENV_VAR in result["note"]
+    assert "install.auto" in result["note"]
+
+
+def test_install_gate_env_var_authorizes(monkeypatch):
+    """部署者设 AWAM_AUTO_INSTALL=1：恢复自动安装"""
+    _authorize_install(monkeypatch)
+    state = {"which": None}
+    monkeypatch.setattr(shutil, "which", lambda name: state["which"])
+    calls = []
+
+    async def factory(command, **kwargs):
+        calls.append(command)
+        state["which"] = "C:\\bin\\foo"
+        return FakeInstallProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", factory)
+
+    client = BackendClient(
+        "x", {"command": "cmd.exe", "args": ["/c", "foo"]}, {"command": "npm i -g foo"}
+    )
+    result = asyncio.run(client.ensure_installed())
+
+    assert result["installed"] is True
+    assert "installBlocked" not in result
+    assert calls == ["npm i -g foo"]
+
+
+def test_install_gate_entry_opt_in_authorizes(monkeypatch):
+    """条目自己声明 install.auto=true：逐工具 opt-in，无需全局开环境变量"""
+    _revoke_install_authorization(monkeypatch)
+    state = {"which": None}
+    monkeypatch.setattr(shutil, "which", lambda name: state["which"])
+    calls = []
+
+    async def factory(command, **kwargs):
+        calls.append(command)
+        state["which"] = "C:\\bin\\foo"
+        return FakeInstallProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", factory)
+
+    client = BackendClient(
+        "x",
+        {"command": "cmd.exe", "args": ["/c", "foo"]},
+        {"command": "npm i -g foo", "auto": True},
+    )
+    result = asyncio.run(client.ensure_installed())
+
+    assert result["installed"] is True
+    assert calls == ["npm i -g foo"]
+
+
+def test_install_gate_falsy_env_values_do_not_authorize(monkeypatch):
+    """环境变量的假值（0/false/off/空/乱写）一律不授权"""
+    for raw in ("", "   ", "0", "false", "off", "no", "1x", "true;"):
+        monkeypatch.setenv(BackendClient.INSTALL_ENV_VAR, raw)
+        monkeypatch.setattr(shutil, "which", lambda name: None)
+        calls = []
+        monkeypatch.setattr(
+            asyncio, "create_subprocess_shell", _fake_install_factory(calls)
+        )
+        client = BackendClient(
+            "x", {"command": "cmd.exe", "args": ["/c", "foo"]}, {"command": "npm i -g foo"}
+        )
+        result = asyncio.run(client.ensure_installed())
+        assert result["installBlocked"] == "unauthorized", f"{raw!r} 不应构成授权"
+        assert calls == []
+
+
+def test_install_gate_auto_false_is_not_opt_in(monkeypatch):
+    """install.auto 必须是严格的 true；字符串 "true"/1 都不算（schema 也校 boolean）"""
+    _revoke_install_authorization(monkeypatch)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    for auto in ("true", 1, "yes"):
+        calls = []
+        monkeypatch.setattr(
+            asyncio, "create_subprocess_shell", _fake_install_factory(calls)
+        )
+        client = BackendClient(
+            "x",
+            {"command": "cmd.exe", "args": ["/c", "foo"]},
+            {"command": "npm i -g foo", "auto": auto},
+        )
+        result = asyncio.run(client.ensure_installed())
+        assert result["installBlocked"] == "unauthorized", f"auto={auto!r} 不应构成授权"
+        assert calls == []
+
+
+def test_install_gate_rejects_shell_metacharacters(monkeypatch):
+    """授权也拦不住 shell 串联：&& / ; / $( ) / 反引号 一律拒绝"""
+    _authorize_install(monkeypatch)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    for command in (
+        "npm i -g foo && calc",
+        "npm i -g foo; calc",
+        "npm i -g foo | calc",
+        "npm i -g $(calc)",
+        "npm i -g foo `calc`",
+        "npm i -g foo > out.txt",
+        'npm i -g foo "x',
+    ):
+        calls = []
+        monkeypatch.setattr(
+            asyncio, "create_subprocess_shell", _fake_install_factory(calls)
+        )
+        client = BackendClient(
+            "x", {"command": "cmd.exe", "args": ["/c", "foo"]}, {"command": command}
+        )
+        result = asyncio.run(client.ensure_installed())
+        assert result["installBlocked"] == "not_allowed", f"{command!r} 应被拒绝"
+        assert calls == [], f"{command!r} 不应被执行"
+
+
+def test_install_gate_rejects_unknown_prefix(monkeypatch):
+    """前缀不在白名单内：powershell/choco/裸前缀 等一律拒绝"""
+    _authorize_install(monkeypatch)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    for command in (
+        "powershell -c Install-Package foo",
+        "choco install foo -y",
+        "npm i -g",  # 前缀合法但没跟包名：什么都不装，没有放行理由
+        "notacommand install foo",
+        "npm",  # 只有一个词
+    ):
+        calls = []
+        monkeypatch.setattr(
+            asyncio, "create_subprocess_shell", _fake_install_factory(calls)
+        )
+        client = BackendClient(
+            "x", {"command": "cmd.exe", "args": ["/c", "foo"]}, {"command": command}
+        )
+        result = asyncio.run(client.ensure_installed())
+        assert result["installBlocked"] == "not_allowed", f"{command!r} 应被拒绝"
+        assert "白名单" in result["error"]
+        assert calls == []
+
+
+def test_install_gate_allows_whitelisted_commands(monkeypatch):
+    """白名单内的安装形式必须放行——门禁不能把 A6 的自装能力一刀切掉"""
+    _authorize_install(monkeypatch)
+    state = {"which": None}
+    monkeypatch.setattr(shutil, "which", lambda name: state["which"])
+    calls = []
+
+    async def factory(command, **kwargs):
+        calls.append(command)
+        state["which"] = "C:\\bin\\foo"
+        return FakeInstallProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", factory)
+
+    for prefix in BackendClient.INSTALL_COMMAND_ALLOWLIST:
+        command = " ".join(prefix) + " some-package"
+        allowed, reason = BackendClient._install_command_allowed(command)
+        assert allowed, f"{command!r} 应放行（{reason}）"
+
+        calls.clear()
+        state["which"] = None  # 每个命令都从「未安装」状态开始验
+        client = BackendClient(
+            "x", {"command": "cmd.exe", "args": ["/c", "foo"]}, {"command": command}
+        )
+        result = asyncio.run(client.ensure_installed())
+        assert result["installed"] is True, command
+        assert calls == [command]
+
+
+def test_install_gate_case_insensitive_prefix(monkeypatch):
+    """命令大小写不敏感：NPM I -G / Winget Install 都应放行"""
+    assert BackendClient._install_command_allowed("NPM I -G foo")[0] is True
+    assert BackendClient._install_command_allowed("Winget Install --id Foo")[0] is True
+    assert BackendClient._install_command_allowed("winget INSTALL foo")[0] is True
+
+
+def test_install_gate_does_not_trigger_when_target_available(monkeypatch):
+    """目标已在 PATH：既不走门禁也不执行安装（与修复前一致）"""
+    _revoke_install_authorization(monkeypatch)
+    monkeypatch.setattr(shutil, "which", lambda name: f"C:\\bin\\{name}")
+    calls = []
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_install_factory(calls))
+
+    client = BackendClient(
+        "x",
+        {"command": "cmd.exe", "args": ["/c", "foo"]},
+        {"command": "npm i -g foo && evil"},
+    )
+    result = asyncio.run(client.ensure_installed())
+
+    assert result == {"success": True, "available": True, "installed": False}
+    assert calls == []
+
+
+def test_start_backend_blocked_returns_structured_failure(monkeypatch):
+    """P0：start() 被门禁拦下时返回 install_required，不 spawn、不掩盖原因"""
+    _revoke_install_authorization(monkeypatch)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    calls = []
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_install_factory(calls))
+
+    tracker = []
+    monkeypatch.setattr(backend_client, "stdio_client", lambda params: _FakeStdioContext(tracker))
+    monkeypatch.setattr(backend_client, "ClientSession", lambda r, w: _FakeSession())
+
+    client = BackendClient(
+        "x",
+        {"command": "cmd.exe", "args": ["/c", "foo"], "timeout": 5},
+        {"command": "npm i -g foo"},
+    )
+    result = asyncio.run(client.start())
+
+    assert result["success"] is False
+    assert result["errorType"] == "install_required"
+    assert result["status"] == "install_required"
+    assert BackendClient.INSTALL_ENV_VAR in result["message"]
+    assert calls == []
+    assert tracker == [], "被拦下时不允许 spawn 子进程"
+    assert client.status == BackendClient.STATUS_STOPPED
+
+
+def test_start_backend_not_allowed_returns_structured_failure(monkeypatch):
+    """授权了但命令不合规：返回 install_not_allowed，同样不 spawn"""
+    _authorize_install(monkeypatch)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    calls = []
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_install_factory(calls))
+
+    tracker = []
+    monkeypatch.setattr(backend_client, "stdio_client", lambda params: _FakeStdioContext(tracker))
+    monkeypatch.setattr(backend_client, "ClientSession", lambda r, w: _FakeSession())
+
+    client = BackendClient(
+        "x",
+        {"command": "cmd.exe", "args": ["/c", "foo"], "timeout": 5},
+        {"command": "npm i -g foo && calc"},
+    )
+    result = asyncio.run(client.start())
+
+    assert result["success"] is False
+    assert result["errorType"] == "install_not_allowed"
+    assert calls == []
+    assert tracker == []
+
+
+def test_prewarm_blocked_reports_missing_without_executing(monkeypatch):
+    """启动预热未授权时退化为纯检测：一条安装命令都不执行，但缺谁要说明白"""
+    _revoke_install_authorization(monkeypatch)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    calls = []
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_install_factory(calls))
+
+    store = FakeStore({
+        "mcp1": {
+            "id": "mcp1",
+            "kind": "mcp",
+            "connection": {"type": "stdio", "command": "cmd.exe", "args": ["/c", "tool-a"]},
+            "install": {"command": "npm i -g a"},
+        },
+        "app1": {"id": "app1", "kind": "app"},
+    })
+    manager = BackendManager(store)
+    result = asyncio.run(manager.ensure_all_installed())
+
+    assert result["blocked"] == 1
+    assert result["installed"] == 0
+    assert calls == [], "预热阶段未授权时不允许执行任何安装命令"
+    by_id = {d["tool_id"]: d for d in result["details"]}
+    assert by_id["mcp1"]["installBlocked"] == "unauthorized"
 
 
 # ---------------------------------------------------------------------------
@@ -1081,6 +1420,7 @@ def _fake_shell_dispatch(prefix: str, returncode: int = 0, log: list | None = No
 
 def test_ensure_installed_returns_installing_when_lock_held(monkeypatch):
     """A7：别人正持锁安装时，本请求不干等，快速返回 installing"""
+    _authorize_install(monkeypatch)
     monkeypatch.setattr(BackendClient, "INSTALL_LOCK_TIMEOUT", 0.2)
     monkeypatch.setattr(shutil, "which", lambda name: None)
 
@@ -1115,6 +1455,7 @@ def test_ensure_installed_returns_installing_when_lock_held(monkeypatch):
 
 def test_cancelled_install_does_not_poison_retry(monkeypatch):
     """A7：安装被取消（调用方断开/网关超时）时不标记 attempted，重试还能再装"""
+    _authorize_install(monkeypatch)
     monkeypatch.setattr(shutil, "which", lambda name: None)
 
     class _CancelOnFirst:

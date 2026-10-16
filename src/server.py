@@ -41,7 +41,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from store import JsonStore
 from runtime_paths import get_runtime_dir, migrate_legacy_runtime
 from registry import ToolRegistry
-from backend_client import BackendManager, ensure_npm_bin_on_path
+from backend_client import BackendClient, BackendManager, ensure_npm_bin_on_path
 from launcher_client import LauncherError, LauncherManager
 from schema import schema_backend_available
 
@@ -896,9 +896,9 @@ awam-tool-manager 是一个统一的工具管理器，聚合各种 MCP 工具和
 
 
 async def _prewarm_backends():
-    """启动预热：补 PATH + 后台为各后端装好缺失的依赖，不阻塞协议服务就绪
+    """启动预热：补 PATH + 后台检测各后端依赖，不阻塞协议服务就绪
 
-    依赖自装（BackendClient.ensure_installed）已保证「start_backend 时缺
+    依赖自装（BackendClient.ensure_installed）保证「start_backend 时缺
     什么装什么」，但安装是重操作（npm i -g 可达数十秒），第一次调用就要
     现场等。这里在服务启动时后台预热一遍，把安装成本提前到启动阶段。
 
@@ -906,8 +906,13 @@ async def _prewarm_backends():
     的环境启动本服务（实测 toolport 传入的 PATH 不含 npm 全局 bin），不补
     的话 which 会把已装好的包误判成缺失，白跑一次数十秒的安装。
 
-    只装不启、异常全吞：预热失败不能拖垮服务本体——最坏情况退化为
-    「首次 start_backend 时现场装」，与没有预热时完全一致。
+    只检不启、异常全吞：预热失败不能拖垮服务本体——最坏情况退化为
+    「首次 start_backend 时按需处理」，与没有预热时完全一致。
+
+    **P0 之后预热默认不执行安装**：install.command 来自进版本库的数据文件，
+    旧逻辑让它在服务启动时被无条件执行（无门禁）。现在默认只做检测，
+    把「谁缺依赖、缺什么」如实写进启动日志；要恢复启动时自动安装，由
+    部署者显式设 `AWAM_AUTO_INSTALL=1`（或逐条目配 `install.auto=true`）。
     """
     try:
         await ensure_npm_bin_on_path()
@@ -916,6 +921,17 @@ async def _prewarm_backends():
             log(
                 f"启动预热：已自动安装 {result['installed']} 个后端依赖"
                 f"（共 {result['total']} 个 MCP 工具，其余已就绪）"
+            )
+        elif result.get("blocked"):
+            missing = [
+                d["tool_id"]
+                for d in result.get("details", [])
+                if d.get("installBlocked")
+            ]
+            log(
+                f"启动预热：{len(missing)} 个 MCP 工具依赖缺失但未授权自动安装"
+                f"（{', '.join(missing)}）——本次不执行任何安装命令；"
+                f"如需启动时自动安装，设环境变量 {BackendClient.INSTALL_ENV_VAR}=1"
             )
         elif result.get("total"):
             log(f"启动预热：{result['total']} 个 MCP 工具依赖均已就绪")

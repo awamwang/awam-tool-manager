@@ -10,7 +10,7 @@
 pip install -r requirements.txt
 ```
 
-> `requirements.txt` 锁定 `mcp>=1.9.0,<2.0.0`。
+> `requirements.txt` 锁定 `mcp>=1.29.0,<2.0.0`。
 > mcp 2.x 移除了本项目使用的低层装饰器 API（`@app.list_tools()` 等），升级会导致无法启动。
 
 ### 运行 MCP Server
