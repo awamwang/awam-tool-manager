@@ -131,7 +131,8 @@ CallToolResult 透传；生产环境 pyenv 3.12 即 1.29.0）。
   授权之后还要过一道命令白名单：不含 shell 元字符（`&&` `;` `|` `$()` 等），
   且前缀属于 `npm i -g` / `winget install` / `pip install` 等受支持形式，
   否则返回 `install_not_allowed`。未授权时 `start_backend` 返回
-  `install_required`（**不 spawn 子进程**），服务启动预热则退化为纯检测，
+  `install_required`（**不 spawn 子进程**；payload 的 `status` 为状态机值
+  `error`，错误分类只看 `errorType`，二者分离），服务启动预热则退化为纯检测，
   只在 stderr 报告「谁缺依赖、缺什么」，不执行任何外部命令。
 
 > 想恢复「启动即自动装」的旧行为：在 MCP 客户端配置的 `env` 里加

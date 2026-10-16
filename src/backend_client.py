@@ -790,7 +790,11 @@ class BackendClient:
                     self._log("warning", message)
                     return {
                         "success": False,
-                        "status": error_type,
+                        # Q1（P1-03）：status 曾误用 errorType 值（一个字段
+                        # 承载两套语义，客户端按 status 判断后端状态会看到
+                        # 不存在的取值）。恢复为状态机会话值——本次启动以
+                        # 错误收场；错误分类只由 errorType 表达。
+                        "status": "error",
                         "errorType": error_type,
                         "message": message,
                     }

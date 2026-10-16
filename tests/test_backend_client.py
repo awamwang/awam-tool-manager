@@ -1298,7 +1298,8 @@ def test_start_backend_blocked_returns_structured_failure(monkeypatch):
 
     assert result["success"] is False
     assert result["errorType"] == "install_required"
-    assert result["status"] == "install_required"
+    # Q1（P1-03）：status 恢复状态机值；错误分类只看 errorType
+    assert result["status"] == "error"
     assert BackendClient.INSTALL_ENV_VAR in result["message"]
     assert calls == []
     assert tracker == [], "被拦下时不允许 spawn 子进程"
