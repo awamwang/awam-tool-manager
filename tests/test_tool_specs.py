@@ -15,13 +15,25 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 import server  # noqa: E402
+import tool_specs  # noqa: E402
 from tool_specs import SERVER_TOOL_SPECS, build_mcp_tools  # noqa: E402
 
 GOLDEN_PATH = ROOT / "tests" / "golden" / "tools_list.json"
+
+# MCP 协议 hints 全集。这里**独立手写**而不从 tool_specs  import：两边各自
+# 持一份，任一边漂移都会让下面的断言变红。
+PROTOCOL_ANNOTATION_KEYS = {
+    "readOnlyHint",
+    "destructiveHint",
+    "idempotentHint",
+    "openWorldHint",
+}
 
 
 def _fields(tool):
@@ -67,3 +79,67 @@ def test_spec_names_three_way_consistency():
         f"list_tools() 与手写清单不一致：多出 {listed_names - EXPECTED_TOOL_NAMES}，"
         f"缺少 {EXPECTED_TOOL_NAMES - listed_names}"
     )
+
+
+def test_every_spec_is_complete():
+    """spec 完整性：handler 可调用、inputSchema 结构合法、annotations 键合法。
+
+    本期明确**不加入参运行时校验**（缺 tool_id → not_found 是既有行为），
+    这里只做结构守卫：schema 是可机检数据，坏结构在搬迁时就会暴露。
+    """
+    for spec in SERVER_TOOL_SPECS:
+        assert callable(spec.handler), f"{spec.name} 缺 handler"
+
+        schema = spec.input_schema
+        assert schema["type"] == "object", f"{spec.name} 的 inputSchema type 不是 object"
+        properties = schema.get("properties", {})
+        for prop_name, prop in properties.items():
+            assert "type" in prop, f"{spec.name} 的参数 {prop_name} 缺 type"
+        required = schema.get("required", [])
+        assert set(required) <= set(properties), (
+            f"{spec.name} 的 required 含 properties 里不存在的参数: "
+            f"{set(required) - set(properties)}"
+        )
+
+        if spec.annotations:
+            illegal = set(spec.annotations) - PROTOCOL_ANNOTATION_KEYS
+            assert not illegal, f"{spec.name} 的 annotations 含非法键: {illegal}"
+
+
+def test_validate_specs_rejects_duplicate_names(monkeypatch):
+    """NE-3/U5：spec 表重名必须 import 期快速失败（字典索引会静默丢工具）"""
+    spec = SERVER_TOOL_SPECS[0]
+    monkeypatch.setattr(tool_specs, "SERVER_TOOL_SPECS", (spec, spec))
+    with pytest.raises(RuntimeError, match="重复"):
+        tool_specs.validate_specs()
+
+
+def test_validate_specs_rejects_missing_handler(monkeypatch):
+    """NE-3/U5：新增工具忘写 handler，服务必须起不来（有意的快速失败）"""
+    broken = SERVER_TOOL_SPECS[0].__class__(
+        name="__broken__",
+        description="缺 handler 的坏 spec",
+        input_schema={"type": "object", "properties": {}},
+    )
+    monkeypatch.setattr(tool_specs, "SERVER_TOOL_SPECS", (broken,))
+    with pytest.raises(RuntimeError, match="handler"):
+        tool_specs.validate_specs()
+
+
+def test_validate_specs_rejects_illegal_annotation_key(monkeypatch):
+    """NE-3/U5：annotations 键拼错必须 import 期炸，而不是运行期才暴露"""
+    broken = SERVER_TOOL_SPECS[0].__class__(
+        name="__broken__",
+        description="注解键非法的坏 spec",
+        input_schema={"type": "object", "properties": {}},
+        annotations={"readOnlyHints": True},  # 正确的键是 readOnlyHint
+        handler=_noop_handler,
+    )
+    monkeypatch.setattr(tool_specs, "SERVER_TOOL_SPECS", (broken,))
+    with pytest.raises(RuntimeError, match="annotations"):
+        tool_specs.validate_specs()
+
+
+async def _noop_handler(arguments: dict, ctx) -> dict:
+    """仅供坏 spec 占位的空 handler"""
+    return {"success": True}
