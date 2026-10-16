@@ -25,11 +25,6 @@ try:  # mcp >=1.9 起才有 ReadResourceContents，老版本退回纯文本返�
 except ImportError:  # pragma: no cover
     ReadResourceContents = None
 
-try:  # Tool annotations 同样是 1.9 才引入的能力
-    from mcp.types import ToolAnnotations
-except ImportError:  # pragma: no cover
-    ToolAnnotations = None
-
 try:  # prompts/get 的返回类型：2025-06-18 之后要求 GetPromptResult
     from mcp.types import GetPromptResult
 except ImportError:  # pragma: no cover
@@ -91,31 +86,6 @@ _TOOL_CONTEXT = ToolContext(
     store=store,
     log=log,
 )
-
-
-# MCP Tool annotations：把数据里的 `readOnly` / `destructive`（见 docs/format.md）
-# 语义映射到协议层 hints，客户端可据此决定是否要二次确认。
-# 只有能静态确定的才标：`call_backend_tool` 转发到任意后端子工具，
-# 其副作用取决于运行时的 tool_name，因此只标 openWorldHint 而不断言只读/破坏性。
-TOOL_ANNOTATION_HINTS: dict[str, dict[str, bool]] = {
-    "search_tools": {"readOnlyHint": True, "destructiveHint": False},
-    "list_tools": {"readOnlyHint": True, "destructiveHint": False},
-    "get_tool_info": {"readOnlyHint": True, "destructiveHint": False},
-    "launch_tool": {"readOnlyHint": True, "destructiveHint": False},
-    "list_backend_tools": {"readOnlyHint": True, "destructiveHint": False},
-    "get_backend_status": {"readOnlyHint": True, "destructiveHint": False},
-    "get_backend_logs": {"readOnlyHint": True, "destructiveHint": False},
-    "start_backend": {"idempotentHint": True},
-    "stop_backend": {"idempotentHint": True},
-    "sync_backend_tools": {"idempotentHint": True},
-    # 启动器：列/同步是只读或幂等；执行动作会真的跑起来，只标 openWorld
-    "list_launcher_actions": {"readOnlyHint": True, "destructiveHint": False},
-    "sync_launcher_actions": {"idempotentHint": True},
-    "run_launcher_action": {"openWorldHint": True},
-    "set_backend_log_level": {},
-    # 转发到后端 MCP，属于"与外部世界交互"但静态无法判定副作用
-    "call_backend_tool": {"openWorldHint": True},
-}
 
 
 @app.list_tools()
@@ -182,17 +152,15 @@ async def call_tool(name: str, arguments: dict) -> CallToolResult:
 
 async def dispatch_tool(name: str, arguments: dict) -> str:
     """按工具名分发，返回 JSON 文本"""
-    # P1-04 M03 迁移期脚手架：已搬迁到 tool_specs 的工具走「查表 → handler →
-    # 统一序列化」；未搬迁的继续走下方旧 if/elif。M04 删除本脚手架与全链。
+    # P1-04：查表分发，未命中即 unknown_tool（与旧 if/elif 全链落空等价，
+    # 错误消息与 errorType 逐字一致）。handler 返回载荷对象（dict），
+    # 序列化统一在这里做一处（NE-1：default=str 由「5 个工具有」统一为
+    # 「15 个都有」——可达输入上的 no-op，方向是更不容易失败）。
     spec = get_spec(name)
-    if spec is not None and spec.handler is not None:
-        payload = await spec.handler(arguments, _TOOL_CONTEXT)
-        return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
-
-    # M03 末批：15 个分支已全部搬迁进 tool_specs，仅剩未知工具兜底；
-    # M04 收薄时并入查表分支。
-    fail(f"未知工具: {name}", error_type="unknown_tool", toolName=name)
-    return ""  # fail 必定抛错，不会执行到这里
+    if spec is None:
+        fail(f"未知工具: {name}", error_type="unknown_tool", toolName=name)
+    payload = await spec.handler(arguments, _TOOL_CONTEXT)
+    return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 
 
 # ============ Resources（资源） ============

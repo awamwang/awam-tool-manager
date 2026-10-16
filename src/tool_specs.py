@@ -721,3 +721,8 @@ def validate_specs() -> None:
 _SPECS_BY_NAME: dict[str, ServerToolSpec] = {
     spec.name: spec for spec in SERVER_TOOL_SPECS
 }
+
+# import 期自检（NE-3）：spec 表自身损坏（重名 / 空 handler / 非法注解键）时
+# 快速失败，而不是带病运行。对合法输入零差异；M03 迁移期曾容忍 handler=None
+# （脚手架回落旧分支），脚手架删除后（M04）起强制完整。
+validate_specs()
