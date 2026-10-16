@@ -7,6 +7,7 @@
 > **后续修订（2026-10-17）**：HEAD 已推进至 `4dc8b31`（P0 修复）与 `4edead9`（chore）。
 > **ARC-P0-01 已由 `4dc8b31` 修复**——install 自装命令执行加授权门禁（`AWAM_AUTO_INSTALL=1` 或条目 `install.auto=true`）与命令白名单，未授权时预热退化为纯检测、`start_backend` 返回 `install_required` 且不 spawn 子进程。该条**保留 P0 定级留档**（定级反映修复前的风险），其余 17 条维持原定级。
 > 本报告其余正文为 `c40d80d` 基线的静态评审结论，未逐条重锚至 `4edead9`；引用 `server.py` 行号者注意 P0 修复后已漂移（另见 §3.1 的 driver 漂移项）。
+> **二次修订（2026-10-17，P1-04 重构 M00–M08 落地后）**：`server.py` 1020 → 464 行，新增 `src/errors.py` / `src/tool_specs.py`，正文全部 `server.py` 行号再次失效。**重锚不逐条改写正文**——新增 **§0「P1-04 重构后的基线声明与锚点映射」**：含旧→新锚点映射表、P1-04 对各发现项的影响（ARC-P1-04 已修复、ARC-P1-05 维持、TOP-5 第 4 位已完成）、评级口径说明。引用行号前请先查 §0.1。
 > 评审范围：分层与职责、依赖方向、单一真相源、可扩展性、并发与生命周期、错误语义、进程资源管理、安全边界、数据存储、可测性与可观测性
 > 方法：静态阅读全部 `src/` 源码、`tests/`、`data/`、`scripts/` 与全部文档；逐条到代码核实主持人在文档中发现的可疑漂移；**未运行任何测试或程序**。
 > 去重说明：`docs/code-review.md` 中标记「✅ 已修复」的 D1–D26 / A1–A13 **不重复列举**，仅在 §3 漂移表内以「历史已修复但文档未同步」一笔带过。
@@ -16,6 +17,55 @@
 > - §3.1 只列 **复核 HEAD `c40d80d` 后仍存在**的漂移；
 > - P0/P1/P2/P3 各条已按 HEAD 重核证据行号，无实质结论变化。
 > 证据纪律：本报告严格区分「已确认事实（附 file:line）」与「推断/建议」。凡无 file:line 支撑者，一律标注为「推断」。
+
+---
+
+## 0. P1-04 重构后的基线声明与锚点映射（2026-10-17，任务 #8）
+
+**本报告正文的全部 file:line 引用均基于评审时点代码**（`server.py` 1020 行版本，HEAD `c40d80d`~`4edead9`）。2026-10-17 的 **P1-04 声明式注册表重构**（commits `ee252eb`–`a2a8079`，M00–M08 全量回归 192 passed）已改变引用地图：`server.py` 降至 **464 行**，新增 `src/errors.py`（35 行）与 `src/tool_specs.py`（728 行）。按下表换算行号；**不逐条改写正文**（正文是评审时点的历史记录，按「定级留档」原则保留）。
+
+### 0.1 锚点映射表（旧 → 新，新锚点截至 HEAD `a2a8079`）
+
+| 本报告引用（旧，`server.py`） | P1-04 后位置 |
+|---|---|
+| `:41` `import JsonStore` | `server.py:36`（未动） |
+| `:57-58` manager 实例化 | `server.py:67-68`（未动） |
+| `:73-91` `TOOL_ANNOTATION_HINTS` | **已删除**；annotations 逐条内联至 `tool_specs.py:351-657` `SERVER_TOOL_SPECS` |
+| `:100-105` `SHARED_OUTPUT_SCHEMA` | `tool_specs.py:79-91`（含 outputSchema↔structuredContent 约束注释原文） |
+| `:108-126` `_needs_destructive_confirm` | `tool_specs.py:102-120` |
+| `:132-136` `call_tool` 的 `except ToolError` | `server.py:130-137`（该函数逐字未动） |
+| `:147-151` `ensure_success` / `fail` | `errors.py:31` / `errors.py:24`；`server.py:45` re-export（同一对象） |
+| `:158-431` 15 个 `Tool(...)` 字面量 | `tool_specs.py:351-657` `SERVER_TOOL_SPECS`（15 条 spec） |
+| `:171`/`:185` `kind` 的 driver 文案 | `tool_specs.py:365`/`:381`（NE-5：原文保留，本期不许修，见 §3.1 第 20 条） |
+| `:205-206` `launch_tool` 描述 | `tool_specs.py:407` |
+| `:303-324` `get_backend_logs` Tool 定义 | `tool_specs.py:516-537` |
+| `:489-493` structuredContent 返回 | `server.py:146-150`（逐字未动） |
+| `:500-717` `dispatch_tool` if/elif 链 | `server.py:153-163` 查表分发 + `tool_specs.py:123-347` 15 个 handler |
+| `:501` `arguments.get("keyword","")` | `tool_specs.py:124` |
+| `:577-580` `launch_tool` 分支 | `tool_specs.py:203-206` |
+| `:591` `call_backend_tool` destructive 门禁 | `tool_specs.py:224-232` |
+| `:622` `start_backend` 包装 | `tool_specs.py:254-258` |
+| `:674` `launcher_error` | `tool_specs.py:310` |
+| `:677` `store.load_launcher_catalog` | `tool_specs.py:313` |
+| `:696` `run_launcher_action` 条目级判定 | `tool_specs.py:329-336` |
+| `:890` `unknown_prompt` | `server.py:334`（未动） |
+| `:914` `ensure_all_installed` 调用 | `server.py:363`（未动） |
+| `:954-996` `main()` stdio 段 | `server.py:442-453`（未动） |
+| `:978`/`:980` 预热/恢复任务创建 | `server.py:438`/`:440`（未动） |
+
+### 0.2 P1-04 对本报告发现项的影响
+
+| 发现项 | P1-04 后状态 |
+|---|---|
+| **ARC-P1-04**（`server.py` 三个平行维护点 / 真相源并行） | ✅ **已修复**。真相源收敛为 `tool_specs.py` 单条 `ServerToolSpec` 记录（annotations 与工具名同生共死）；一致性由 golden 五字段比对 + 三方名字守卫 + `validate_specs()` import 期自检**强制保证**。新增对外工具的维护点从 9 处降为 1 文件 2 代码块。**子项「inputSchema 运行期参数校验」仍未做**——本期设计决策（缺参走 not_found 是既有行为，只加结构守卫），该子项维持原状 |
+| 「成功/错误包装在每个分支各自重写」（ARC-P1-04 证据） | ✅ **已修复**。序列化收敛到 `server.py:163` 一处 |
+| **ARC-P1-05**（launcher 只有条目级破坏性） | **维持原判**。`run_launcher_action` 仍只判条目级 `destructive`（`tool_specs.py:329`）；P1-04 按行为等价硬约束原样保留，门禁粒度未扩未缩 |
+| TOP-5 第 4 位「server.py 声明式工具注册表」 | ✅ **已完成**（即 P1-04 本体，M00–M08） |
+| 其余 P0/P1/P2/P3 条目 | 结论不变；证据行号按 §0.1 换算 |
+
+### 0.3 评级口径
+
+分维度评级与 ARC-P0-01 一样按「定级留档」原则描述评审时点。若按 P1-04 后状态重估受影响维度：「单一真相源」C → 工具清单面已收敛（9 处 → 1 处 spec + 1 处 SKILL.md 手写副本，后者有漂移守卫），但「可执行配置进版本库」「errorType 契约只落实 1 处」（ARC-P1-03，P1-03 立项中）等根因仍在；「可扩展性（server.py）」C+ → 新增工具成本已从 ~5 处代码 + 4 处文档降为 1 文件 2 代码块。完整重评待 P1-03 落地后一并做。
 
 ---
 
@@ -395,6 +445,8 @@ stateDiagram-v2
 | 9 | `TASKS.md:28`（「12 个」计数）、`:247`（两层结构表） | 两处手写清单 |
 
 **合计：4 处代码/测试 + 4~5 处文档，至少 9 个改动点，且 1/2/3 靠字符串名对齐、无编译期保证。**
+
+> **修订（2026-10-17，P1-04 后）**：本表为评审时点快照。P1-04 重构后，「新增一个对外工具」的标准动作已变为 **1 个文件、2 个相邻代码块**：`src/tool_specs.py` 加 1 条 `ServerToolSpec` + 1 个 `async def _handle_xxx`。原第 1/2/3 项（Tool 定义 / annotations 表 / dispatch 分支）合并为 spec 单条记录；第 4 项 `EXPECTED_TOOL_NAMES` 仍手写但由三方名字守卫测试自动比对（漏改即红，不再静默）；第 5 项分发用例由 `test_dispatch_equivalence.py` 可达性守卫覆盖；第 6 项 SKILL.md 工具表新增漂移守卫（`test_docs_sync.py`）；第 7/8/9 项文档仍需手写（format.md 字段表不涉及对外工具层）。详见 §0.2 与 `docs/architecture_incremental_p1-04_2026-10-17.md`。
 
 ### 5.2 新增一个 **kind**（参照 launcher 的落地范围）
 
