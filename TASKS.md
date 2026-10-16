@@ -65,6 +65,30 @@
 - [x] `connection` 配置热更新：后端空闲时按磁盘最新配置重建，无需重启 MCP Server
 - [x] `lastSynced` 写真实 UTC 时间戳（此前是字面量 `"now"`）
 
+### 连接生命周期与状态机（2026-10-16 批次，A7–A11）
+- [x] **A7** - 5 处 `asyncio.wait_for` 改 `anyio.fail_after`（同一任务内取消，不撕裂
+      作用域栈）；`ensure_npm_bin_on_path()` 在 npm 全局 bin 不在 PATH 时自动解析
+      `npm prefix -g` 并注入；安装锁等待加超时（`start_backend` 不再被别人的
+      `npm i -g` 无限期堵住）
+- [x] **A8** - 后端连接生命周期收拢进独占任务 `_connection_loop`：`stdio_client` /
+      `ClientSession` 的 `async with` 进出都在同一任务内闭合（anyio `CancelScope`
+      绑定进入它的任务，跨任务进出必崩）；子进程 spawn 一律 `stdin=DEVNULL`，
+      不再继承 server 的 stdio 管道（npm 子进程阻塞读 stdin 是此前启动超时的真因）
+- [x] **A9** - 心跳探测 `session.ping()` → `send_ping()`（mcp 1.x 唯一存在的心跳 API，
+      `ping` 是 TS SDK 的名字，此前启动 30s 后必 `AttributeError` 被清理）；
+      补契约测试（探测方法必须真实存在于 `mcp.ClientSession`）+ 假 session 改用
+      真实 SDK 表面白名单
+- [x] **A10** - 期望状态持久化 + 跨 server 世代自愈：`start_backend` 成功把意图写入
+      `backend_desired_state.json`（原子写、损坏按空处理），每个新 server 世代启动时
+      后台任务据意图自动拉起，`stop_backend` 清意图、工具删除清过期记录
+      （网关周期性整池回收 → 进程内状态清零，是「每次都得重新初始化」的根因）
+- [x] **A11** - 启动状态机的取消安全：`CancelledError` 继承 `BaseException`，
+      原 `except Exception` 接不住 → 取消落在 `starting` 之后状态永久卡死无自愈；
+      补 `except BaseException` 兜底（状态落地 stopped + 收尸连接/心跳，取消继续上抛不吞）
+- [x] 依赖下限经实测从 `mcp>=1.30.0` 改回 `>=1.29.0`（1.29 已具备
+      structuredContent / outputSchema / CallToolResult 透传，生产 pyenv 3.12 即 1.29.0，
+      原 1.30 下限建立在错误前提上）
+
 ### 语义一致性
 - [x] `search_tools` 匹配范围覆盖 `id`（此前搜不到 ID 里带关键词的工具）
 - [x] `docs/format.md` 明确「两层数据 + 一层对外契约」，补齐 `install` / `actions` / `capabilities`
@@ -82,9 +106,10 @@
 
 ### 测试覆盖
 - [x] `tests/test_registry.py` - store / registry 基础路径
-- [x] `tests/test_backend_client.py`（37 用例）- 稳定性、P2 修复、BackendManager 池管理、依赖自装
+- [x] `tests/test_backend_client.py`（56 用例）- 稳定性、P2 修复、BackendManager 池管理、依赖自装、
+      连接生命周期、期望状态持久化、启动状态机取消安全
 - [x] `tests/test_store.py`（8 用例）- 容错、原子写、时间戳
-- [x] `tests/test_server_dispatch.py`（23 用例）- 12 条分发路径、错误载荷、资源/提示定义、启动预热
+- [x] `tests/test_server_dispatch.py`（24 用例）- 12 条分发路径、错误载荷、资源/提示定义、启动预热
 - [x] `tests/test_registry_policy.py`（14 用例）- 搜索语义、schema 校验、annotations、门禁
 - [x] `tests/test_protocol_roundtrip.py`（9 用例）- **真实 MCP 会话**：isError 映射、
   resources/read、prompts/get、annotations 下发、structuredContent / outputSchema（不 mock SDK）
@@ -95,7 +120,7 @@
 - [x] **A3 并发限流（方案 2：单后端串行 + 超限报 busy）** - `BackendClient._call_lock` +
       `BackendBusyError` → `errorType=backend_busy`（不排队）；并发两个 `call_tool`
       一个成功、一个 busy 的回归已钉住
-- [x] **A5 structuredContent / outputSchema（mcp>=1.30）** - `call_tool` 返回带
+- [x] **A5 structuredContent / outputSchema**（依赖下限经 A9 实测后为 `mcp>=1.29`） - `call_tool` 返回带
       `structuredContent` 的 `CallToolResult`，`list_tools` 给每个工具挂统一 `outputSchema`
       （`SHARED_OUTPUT_SCHEMA`）；`test_protocol_roundtrip.py` 验证客户端真实收到
       structuredContent 且 outputSchema 校验通过（无 `Output validation error`）
@@ -104,15 +129,35 @@
       限时 `INSTALL_TIMEOUT` 安装一次 → 复检，幂等）+ `start()` spawn 前前置调用 +
       服务启动时 `BackendManager.ensure_all_installed()` 后台预热（只装不启、异常全吞）；
       安装失败不阻断启动（spawn 原生错误照旧）；已用临时探针工具实测全链路
-- [x] 合计 **106 passed**（7 个文件）；真实后端子进程启停 + 调用回归通过
+- [x] **A11 回归** - `test_start_cancelled_does_not_strand_starting_status`：先在旧代码复现
+      FAILED、修复后 passed（红绿双向验证）
+- [x] 修掉 flaky：`test_tools_cache_respects_ttl_and_force_refresh` 依赖 `time.time()`
+      相邻两次返回不同值（Windows 刻度约 15ms，可能同值 → `cache_age=0.0` 误判命中），
+      改为显式回拨 `_tools_cache_time`，不再依赖时钟精度（10 连跑确定性通过）
+- [x] 合计 **126 passed**（7 个文件）；真实后端子进程启停 + 调用回归通过
 
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
 - [x] Everything Search MCP（`kind=mcp`，已实测连接、调用、启停跑通）
+- [x] **Toolport 集成** - 已注册为 Toolport 的后端（registry `source: manual`，default profile），
+      daemon 真实链路实测：启停、状态、子工具列表、路由调用全通
+- [x] **WorkBuddy 直连 MCP** - `~/.workbuddy/mcp.json` 新增 `awam-tool-manager` 条目
+      （pyenv 3.12.0 `python.exe` + `src/server.py`）；实测 12 个工具就位、
+      A10 在新实例上 4 秒内自动恢复后端、`search_files` 端到端返回真实索引结果
 
 ### 其他
 - [x] Git 仓库初始化，代码版本管理
 - [x] .gitignore 配置（测试脚本、缓存文件排除）
+
+### 已知边界（非缺陷，记录备查）
+- 真正的「后端永不重启」需要外部 supervisor（后端生命周期移出网关控制的进程），
+  当前只能做到「跨网关回收自愈」（A10），列为架构演进
+- 硬杀 server 会孤儿化后端子进程（下一代自动恢复会另起一个，stdio 无端口冲突可共存）
+- `data/backend-tools/*.json` 是自动生成的缓存却受 git 跟踪，多实例在跑时 `lastSynced`
+  会被反复改写（**待定**：要不要 gitignore 需权衡——`tests/test_docs_sync.py` 对该目录
+  `glob("*.json")` 做参数化，目录为空时用例会静默消失，等于丢失这条真实数据校验）
+- 上游 `everything-search-mcp` 返回体 `path` 为空、`isFile`/`isFolder` 恒 false
+  （全路径塞在 `name` 里）——属上游包自身的数据整形，转发层原样透传；消费方以 `fullPath` 为准
 
 ---
 
@@ -128,7 +173,6 @@
 - [ ] 工具自动发现：检测本机已安装哪些可作为 MCP 后端接入的工具
 - [ ] 工具标签分类和筛选优化（`kind` / `tags` 之外的维度）
 - [ ] 工具帮助文档查看（--help 输出）
-- [x] 由 `src/schema.py` 反向生成 `docs/format.md`（彻底消除文档/数据双真相源）
 
 ### P2 - 生态扩展
 - [ ] 接入 Scoop（写 CLI 适配器）
@@ -136,7 +180,6 @@
 - [ ] 接入 uTools（效率启动器）
 - [ ] 接入 Quicker
 - [ ] 接入 PowerToys
-- [ ] 与 Toolport 集成（注册为 Toolport 的后端）
 
 ### P3 - 高级功能
 - [ ] 智能路由：根据用户意图自动选择从哪个安装器安装
@@ -225,7 +268,8 @@ awam-tool-manager/
 ├── TASKS.md                    # 本文件（任务清单）
 ├── README.md                   # 项目说明
 ├── SKILL.md                    # 技能说明
-├── requirements.txt            # 依赖（mcp>=1.30.0,<2.0.0）
+├── requirements.txt            # 依赖（mcp>=1.29.0,<2.0.0；A9 实测后从 1.30 改回 1.29）
+├── backend_desired_state.json  # 运行时生成：后端启动意图（A10 跨世代自愈用，已 gitignore）
 ├── docs/
 │   ├── format.md               # 数据格式规范
 │   ├── architecture.md         # 架构说明

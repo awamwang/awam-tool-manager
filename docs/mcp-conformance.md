@@ -4,7 +4,10 @@
 
 校验基准：
 - MCP 规范确的能力清单（Tools / Resources / Prompts / Logging / Completion）
-- 实测 SDK 版本 `mcp 1.30.0`（`requirements.txt` 锁定 `<2.0.0`）
+- 实测 SDK 版本：开发 venv `mcp 1.30.0` / 生产 pyenv 3.12 `mcp 1.29.0`
+  （`requirements.txt` 锁定 `>=1.29.0,<2.0.0`；下限曾在 A5 提到 1.30，A9 实测
+  1.29 已具备全部所需能力后改回 1.29——本文涉 1.30 的表述指**实测时的观察环境**，
+  非依赖下限）
 - 所有"SDK 实际行为"结论均来自阅读 SDK 源码 `mcp/server/lowlevel/server.py` + 本地实跑
 
 ---
@@ -144,8 +147,10 @@ return CallToolResult(
 为 bool，`additionalProperties=true`），启用 MCP 2025-06-18 推荐的 `outputSchema` +
 `structuredContent` 组合，便于客户端按 schema 消费。
 
-**依赖下限**：`requirements.txt` 已从 `>=1.9.0` 提到 `>=1.30.0`（仍锁 `<2.0.0`，
-2.x 会移除 1.x 低层装饰器）。协议回环测试已验证：挂了 `outputSchema` 的成功调用
+**依赖下限**：`requirements.txt` 已从 `>=1.9.0` 提到 `>=1.30.0`，**A9 实测后改回
+`>=1.29.0`**（仍锁 `<2.0.0`，2.x 会移除 1.x 低层装饰器）——实测 1.29 已具备
+`structuredContent` / `outputSchema` / `CallToolResult` 透传，且生产环境即 1.29.0，
+原 1.30 下限建立在错误前提上。协议回环测试已验证：挂了 `outputSchema` 的成功调用
 确实返回 `structuredContent`，且未被 SDK 的 outputSchema 校验拒掉（`Output validation error`）。
 
 ### 2.3 `resources/read` 返回值类型错误 ❌（已修复）
@@ -264,7 +269,8 @@ AttributeError: 'Server' object has no attribute 'list_tools'
 ```
 
 原先 `requirements.txt` 写 `mcp>=1.0.0`（无上界）→ 全新环境必然安装 2.x → Server 无法启动。
-现已收紧为 `mcp>=1.9.0,<2.0.0`，安装到 1.30.0 后 `import server` 正常。
+现已收紧为 `mcp>=1.29.0,<2.0.0`（A5 曾提到 1.30，A9 实测后改回 1.29），
+安装到 1.30.0 / 1.29.0 后 `import server` 均正常。
 
 ---
 
@@ -282,7 +288,7 @@ AttributeError: 'Server' object has no attribute 'list_tools'
 | ✅ 已完成 | 工具条目 schema 校验（数据格式不再是纸面标准） | code-review A1 |
 | ✅ 已完成 | `resources/read` 参数归一化（`AnyUrl` 不等于 str） | code-review D25 |
 | ✅ 已完成 | `prompts/get` 返回 `GetPromptResult` | code-review D26 |
-| ✅ 已完成 | 依赖下限提到 `>=1.30` 并启用 `structuredContent` + `outputSchema` | 2.2 |
+| ✅ 已完成 | 依赖下限 `>=1.30`（A9 实测后改回 `>=1.29`），启用 `structuredContent` + `outputSchema` | 2.2 |
 | P2 | 同步后端工具时保留 `title` / `annotations` / `outputSchema` | 3.3 |
 | P3 | 工具集动态化时补 `notifications/tools/list_changed` | 1.2 |
 | P3 | 考虑接入标准 logging capability | 1.3 |
