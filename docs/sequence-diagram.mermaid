@@ -1,0 +1,44 @@
+sequenceDiagram
+    participant C as MCP Client
+    participant SDK as mcp Server (server.app)
+    participant LST as server.list_tools
+    participant TS as tool_specs
+    participant CT as server.call_tool
+    participant DT as server.dispatch_tool
+    participant H as _handle_call_backend_tool
+    participant BM as ctx.backend_manager
+
+    Note over C,BM: tools/list：定义由注册表单一来源产出
+    C->>SDK: tools/list
+    SDK->>LST: list_tools()
+    LST->>TS: build_mcp_tools()
+    Note over TS: 逐条 ServerToolSpec 构造 Tool<br/>annotations / outputSchema 在此统一挂载
+    TS-->>LST: list[Tool]
+    LST-->>SDK: tools
+    SDK-->>C: tools
+
+    Note over C,BM: tools/call（成功路径）：查表分发，handler 只依赖注入的 ctx
+    C->>SDK: tools/call call_backend_tool
+    SDK->>CT: call_tool(name, arguments)
+    CT->>DT: dispatch_tool(name, arguments)
+    DT->>TS: get_spec(name)
+    TS-->>DT: ServerToolSpec
+    DT->>H: handler(arguments, _TOOL_CONTEXT)
+    H->>H: _needs_destructive_confirm(ctx.registry.get_tool(...), tool_name)
+    H->>BM: ctx.backend_manager.call_backend_tool(tool_id, tool_name, args)
+    BM-->>H: dict（success / result）
+    H-->>DT: payload dict
+    DT-->>CT: JSON text（统一 json.dumps）
+    CT-->>SDK: CallToolResult(content + structuredContent)
+    SDK-->>C: result
+
+    Note over C,BM: tools/call（失败路径）：业务错误仍以异常冒泡给 SDK
+    C->>SDK: tools/call ghost_tool
+    SDK->>CT: call_tool("ghost_tool", {})
+    CT->>DT: dispatch_tool("ghost_tool", {})
+    DT->>TS: get_spec("ghost_tool")
+    TS-->>DT: None
+    DT->>DT: fail(unknown_tool) → raise ToolError
+    DT-->>CT: ToolError
+    CT-->>SDK: raise（不做二次包装）
+    SDK-->>C: isError=true

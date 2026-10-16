@@ -1,0 +1,60 @@
+classDiagram
+    direction LR
+
+    class ToolError {
+        <<exception>>
+    }
+
+    class errors_module {
+        <<module src/errors.py>>
+        +fail(error: str, error_type: str, **extra) None
+        +ensure_success(res: dict) dict
+    }
+
+    class ToolContext {
+        <<dataclass, frozen>>
+        +ToolRegistry registry
+        +BackendManager backend_manager
+        +LauncherManager launcher_manager
+        +JsonStore store
+        +Callable~str, None~ log
+    }
+
+    class ServerToolSpec {
+        <<dataclass, frozen>>
+        +str name
+        +str description
+        +dict input_schema
+        +dict|None annotations
+        +dict|None output_schema
+        +Callable handler
+    }
+
+    class tool_specs_module {
+        <<module src/tool_specs.py>>
+        +tuple~ServerToolSpec~ SERVER_TOOL_SPECS
+        +dict SHARED_OUTPUT_SCHEMA
+        +build_mcp_tools() list~Tool~
+        +get_spec(name: str) ServerToolSpec|None
+        +validate_specs() None
+    }
+
+    class server_module {
+        <<module src/server.py>>
+        +Server app
+        +ToolContext _TOOL_CONTEXT
+        +list_tools() list~Tool~
+        +call_tool(name, arguments) CallToolResult
+        +dispatch_tool(name, arguments) str
+        +_prewarm_backends()
+        +_restore_backends()
+        +main()
+    }
+
+    errors_module ..> ToolError : raises
+    tool_specs_module *-- ServerToolSpec : holds 15
+    tool_specs_module ..> ToolContext : receives via param
+    ServerToolSpec ..> ToolContext : handler(arguments, ctx)
+    server_module --> tool_specs_module : imports
+    server_module --> errors_module : imports + re-exports
+    server_module *-- ToolContext : builds at import
