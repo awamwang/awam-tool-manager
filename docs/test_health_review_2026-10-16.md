@@ -463,6 +463,11 @@ grep -l "^def test_|^async def test_" test_*.py   # NONE have test_ functions
 - **文档计数仍未跟上**：`TASKS.md:165` 仍写「168 passed（9 个文件）」，而同文件 `:190` 已写「168 → 183 passed」——**同一文件内自相矛盾**；`architecture.md:88` 仍写「9 个文件，168 个用例」。
 - P1-04（声明式注册表）实施后，回归判据以上表 183 为基线；受影响用例约 42 条集中在 `test_server_dispatch.py` / `test_protocol_roundtrip.py` / `test_registry_policy.py` / `test_launcher_client.py`（这 4 个是仅有的 `import server` 的文件），断言一律不改。
 
+**P1-04 golden 归一化判据（已独立实测复核，非采信转述）**：M00 golden 为 `tests/golden/tools_list.json`（提交 `5f06756`），15 条，字段恰为 `{name, description, inputSchema, annotations, outputSchema}`。
+- 实测：`ToolAnnotations.model_dump()` 会把未设置的 hint 键输出为 `null`（如 `search_tools` → `{'title': None, 'readOnlyHint': True, 'destructiveHint': False, 'idempotentHint': None, 'openWorldHint': None}`），而 golden 存的是**紧凑形态**（`{'readOnlyHint': True, 'destructiveHint': False}`，全 15 条无一含 null 键）。
+- 实测：当前 HEAD 的 15 个工具中 **14 个**的 raw dump 含 null 键 → 朴素 `==` 会产生**恰好 14 条假红**（唯一匹配的是 `set_backend_log_level`，其 annotations 是 `None` 而非 `{}`，与 golden 一致）。
+- **判定规则**：比对 annotations 必须施加 `exclude_none=True` 归一化；只有紧凑形态下的键值差异才算真实回归。null 键增减 = mcp 小版本字段集/序列化形态差异，不算回归；**反向**——若有人为让测试绿而给 golden 补 null 键，属把版本差异固化进基线，应打回。
+
 ```bash
 PY="/c/Users/Administrator/.pyenv/pyenv-win/versions/3.12.0/python.exe"
 cd /g/Projects/19AI/skills/awam-tool-manager

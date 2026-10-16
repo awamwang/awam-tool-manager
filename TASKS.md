@@ -162,8 +162,13 @@
       自动迁移（本机实测 4 文件平移）；conftest autouse fixture 把用例隔离到
       tmp 目录，`test_docs_sync`/`test_registry` 两处「把数据集当断言」改为
       合成数据/自包含
-- [x] 合计 **168 passed**（9 个文件，`c40d80d` 时点签署；P0 修复后为 183，见下节）；
-      真实后端子进程启停 + 调用回归通过
+- [x] 合计 **168 passed**（`c40d80d` 时点签署，9 个贡献用例的文件；P0 修复后为 183，见下节）；
+     真实后端子进程启停 + 调用回归通过
+
+> 文件数口径：`tests/` 物理上有 10 个 `test_*.py`，其中
+> `tests/test_e2e_install_gate.py`（随 P0 修复提交）**collect 0 条用例**——
+> 一次性手工脚本，须 `python tests/test_e2e_install_gate.py` 单独跑。
+> 故「9 个文件」指贡献 pytest 用例的文件；规范写法「9 个用例文件 + 1 个手工 E2E 脚本」。
 
 ### 架构评审与 P0 修复（2026-10-16 深夜 评审 / 2026-10-17 修复）
 

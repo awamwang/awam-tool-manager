@@ -436,7 +436,9 @@ stateDiagram-v2
 - **已确认事实**：全部结论均给出 `file:line`，可复核。核心代码 `src/{server,backend_client,launcher_client,registry,store,schema,runtime_paths}.py` **逐行通读**。
 - **推断项**：凡标注「推断」者（ARC-P1-01 的语义冲突定性、ARC-P1-05 的可用性影响、ARC-P2-03/P2-07 的工程流程与多实例后果、ARC-P2-05 的协议灰区），均为基于已确认事实的**架构判断**，未通过运行验证。
 - **未做（本人，评审时点）**：未运行测试、未启动服务、未执行任何后端。测试规模与「真实子进程」结论由 software-qa-engineer **实测确认**：HEAD `c40d80d` 为 **168 passed / 9 文件**（历史提交 `8afc317` 为 158/8，差额来自新增 `test_runtime_paths.py`，另含两处 parametrize 展开）；「真实后端子进程启停 + 调用回归」确系**人工验证**——套件内所有 `stdio_client`/`create_subprocess_shell` 均为替身（详见 ARC-P3-02）。
-- **测试基线复核（2026-10-17，本人实测）**：HEAD `4edead9`（含 P0 修复 `4dc8b31`）为 **183 passed / 9 文件**，解释器 `pyenv 3.12.0`。该基线是 P1-04 声明式注册表重构（`docs/architecture_incremental_p1-04_2026-10-17.md`）「183 条旧断言一律不动」硬约束的对照基准。
+- **测试基线复核（2026-10-17，本人实测）**：HEAD `4edead9`（含 P0 修复 `4dc8b31`）为 **183 passed / 9 个贡献用例的文件**，解释器 `pyenv 3.12.0`。该基线是 P1-04 声明式注册表重构（`docs/architecture_incremental_p1-04_2026-10-17.md`）「183 条旧断言一律不动」硬约束的对照基准。
+  - **文件数口径（QA 2026-10-17 补充确认）**：`tests/` 物理上有 **10 个** `test_*.py`，其中 `tests/test_e2e_install_gate.py`（142 行，随 `4dc8b31` 提交）**collect 0 条用例**——它是「一次性手工脚本，非 pytest 用例」，须手工 `python tests/test_e2e_install_gate.py` 运行。故「9 个文件」仅在「贡献 pytest 用例的文件」口径下成立，规范写法为「9 个用例文件 + 1 个手工 E2E 脚本」。
+  - **对 ARC-P3-02（无真实端到端）的部分修正**：`test_e2e_install_gate.py` 用**真实 `stdio_client` 子进程 + 真实 MCP 会话**验了 P0 门禁两个场景，说明该盲区已「有人验过」；但它**不进 183、无 CI 护栏、且会往 `data/tools/` 写探针条目**（`finally` 里删），故盲区只是收窄而非消除，「无真实后端子进程回归护栏」的结论**维持不变**。
 - **与既有评审去重**：`docs/code-review.md` 中 D1–D26 / A1–A13 全部「✅ 已修复」，本报告不重复；仅在 §3 以「文档未同步」形式提及。
 - **工具清单计数口径**：`server.py` 中 `Tool(` 字面量 15 个（`grep -c` = 15），与 `tests/conftest.py:32-48` 的 `EXPECTED_TOOL_NAMES`（15）一致，可交叉印证。
 
