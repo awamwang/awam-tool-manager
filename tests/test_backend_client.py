@@ -1850,8 +1850,8 @@ async def _ok_sync(self, tool_id):
 
 def test_start_persists_desired_state(tmp_path, monkeypatch):
     """A10：start 成功必须把启动意图落盘，否则新世代无从恢复"""
-    state_file = tmp_path / "desired.json"
-    monkeypatch.setattr(backend_client, "DESIRED_STATE_FILE", state_file)
+    state_dir = tmp_path / "desired"
+    monkeypatch.setattr(backend_client, "DESIRED_STATE_DIR", state_dir)
     monkeypatch.setattr(BackendClient, "start", _ok_start)
     monkeypatch.setattr(BackendManager, "sync_tools_catalog", _ok_sync)
 
@@ -1861,14 +1861,14 @@ def test_start_persists_desired_state(tmp_path, monkeypatch):
 
     result = asyncio.run(run())
     assert result["success"] is True
-    state = json.loads(state_file.read_text(encoding="utf-8"))
-    assert state["mcp1"]["desired"] is True
+    entry = json.loads((state_dir / "mcp1.json").read_text(encoding="utf-8"))
+    assert entry["desired"] is True
 
 
 def test_failed_start_does_not_persist(tmp_path, monkeypatch):
     """A10：启动失败不写意图——否则每个新世代都会去拉一个注定失败的后端"""
-    state_file = tmp_path / "desired.json"
-    monkeypatch.setattr(backend_client, "DESIRED_STATE_FILE", state_file)
+    state_dir = tmp_path / "desired"
+    monkeypatch.setattr(backend_client, "DESIRED_STATE_DIR", state_dir)
     monkeypatch.setattr(BackendClient, "start", _fail_start)
 
     async def run():
@@ -1877,16 +1877,19 @@ def test_failed_start_does_not_persist(tmp_path, monkeypatch):
 
     result = asyncio.run(run())
     assert result["success"] is False
-    assert not state_file.exists(), "失败启动不应留下意图文件"
+    assert not (state_dir / "mcp1.json").exists(), "失败启动不应留下意图文件"
 
 
 def test_stop_clears_desired_state(tmp_path, monkeypatch):
     """A10：stop 成功清除意图——用户明确说不要了，恢复时不再拉起"""
-    state_file = tmp_path / "desired.json"
-    monkeypatch.setattr(backend_client, "DESIRED_STATE_FILE", state_file)
-    state_file.write_text(
-        json.dumps({"mcp1": {"desired": True}, "other": {"desired": True}}),
-        encoding="utf-8",
+    state_dir = tmp_path / "desired"
+    monkeypatch.setattr(backend_client, "DESIRED_STATE_DIR", state_dir)
+    state_dir.mkdir()
+    (state_dir / "mcp1.json").write_text(
+        json.dumps({"desired": True}), encoding="utf-8"
+    )
+    (state_dir / "other.json").write_text(
+        json.dumps({"desired": True}), encoding="utf-8"
     )
     monkeypatch.setattr(BackendClient, "stop", _ok_stop)
 
@@ -1896,16 +1899,18 @@ def test_stop_clears_desired_state(tmp_path, monkeypatch):
 
     result = asyncio.run(run())
     assert result["success"] is True
-    state = json.loads(state_file.read_text(encoding="utf-8"))
-    assert "mcp1" not in state
-    assert "other" in state, "只清目标，不碰其他工具的意图"
+    assert not (state_dir / "mcp1.json").exists()
+    assert (state_dir / "other.json").exists(), "只清目标，不碰其他工具的意图"
 
 
 def test_restore_starts_desired_backends(tmp_path, monkeypatch):
     """A10：全新世代（新 manager，内存无状态）启动时自动拉起 desired 后端"""
-    state_file = tmp_path / "desired.json"
-    monkeypatch.setattr(backend_client, "DESIRED_STATE_FILE", state_file)
-    state_file.write_text(json.dumps({"mcp1": {"desired": True}}), encoding="utf-8")
+    state_dir = tmp_path / "desired"
+    monkeypatch.setattr(backend_client, "DESIRED_STATE_DIR", state_dir)
+    state_dir.mkdir()
+    (state_dir / "mcp1.json").write_text(
+        json.dumps({"desired": True}), encoding="utf-8"
+    )
     monkeypatch.setattr(BackendClient, "start", _ok_start)
     monkeypatch.setattr(BackendManager, "sync_tools_catalog", _ok_sync)
 
@@ -1922,9 +1927,12 @@ def test_restore_starts_desired_backends(tmp_path, monkeypatch):
 
 def test_restore_skips_already_running(tmp_path, monkeypatch):
     """A10：同代内已 running 的后端不重复启动"""
-    state_file = tmp_path / "desired.json"
-    monkeypatch.setattr(backend_client, "DESIRED_STATE_FILE", state_file)
-    state_file.write_text(json.dumps({"mcp1": {"desired": True}}), encoding="utf-8")
+    state_dir = tmp_path / "desired"
+    monkeypatch.setattr(backend_client, "DESIRED_STATE_DIR", state_dir)
+    state_dir.mkdir()
+    (state_dir / "mcp1.json").write_text(
+        json.dumps({"desired": True}), encoding="utf-8"
+    )
     started = []
 
     async def _counting_start(self):
@@ -1949,9 +1957,12 @@ def test_restore_skips_already_running(tmp_path, monkeypatch):
 
 def test_restore_cleans_stale_entries(tmp_path, monkeypatch):
     """A10：工具已删除时清掉过期意图，避免每个新世代都白跑一次"""
-    state_file = tmp_path / "desired.json"
-    monkeypatch.setattr(backend_client, "DESIRED_STATE_FILE", state_file)
-    state_file.write_text(json.dumps({"gone": {"desired": True}}), encoding="utf-8")
+    state_dir = tmp_path / "desired"
+    monkeypatch.setattr(backend_client, "DESIRED_STATE_DIR", state_dir)
+    state_dir.mkdir()
+    (state_dir / "gone.json").write_text(
+        json.dumps({"desired": True}), encoding="utf-8"
+    )
 
     async def run():
         # store 里没有 "gone"：工具已删或不再是 mcp 类型
@@ -1960,15 +1971,89 @@ def test_restore_cleans_stale_entries(tmp_path, monkeypatch):
 
     result = asyncio.run(run())
     assert result == {}
-    state = json.loads(state_file.read_text(encoding="utf-8"))
-    assert "gone" not in state, "过期意图应被清除"
+    assert not (state_dir / "gone.json").exists(), "过期意图应被清除"
 
 
 def test_desired_state_corrupt_file_treated_as_empty(tmp_path, monkeypatch):
     """A10：意图文件损坏按空处理——恢复是尽力而为，不能阻断服务启动"""
-    state_file = tmp_path / "desired.json"
-    monkeypatch.setattr(backend_client, "DESIRED_STATE_FILE", state_file)
-    state_file.write_text("{ 半个 json", encoding="utf-8")
+    state_dir = tmp_path / "desired"
+    monkeypatch.setattr(backend_client, "DESIRED_STATE_DIR", state_dir)
+    state_dir.mkdir()
+    (state_dir / "bad.json").write_text("{ 半个 json", encoding="utf-8")
 
     manager = BackendManager(FakeStore({}))
     assert manager._load_desired_state() == {}
+
+
+def test_two_instances_do_not_lose_each_others_updates(tmp_path, monkeypatch):
+    """ARC-P1-02：两个实例（共享运行时目录）各写各的意图，互不覆盖。
+
+    旧单文件实现走「读全表 → 写全表」：A `_set_desired(x)` 与 B
+    `_set_desired(y)` 交错时，后写者用自己的旧快照覆盖对方（lost update）。
+    每工具一文件后两个条目都应存活。
+    """
+    state_dir = tmp_path / "desired"
+    monkeypatch.setattr(backend_client, "DESIRED_STATE_DIR", state_dir)
+
+    store = FakeStore({})
+    instance_a = BackendManager(store)  # 两个 manager = 两个 server 实例
+    instance_b = BackendManager(store)
+
+    instance_a._set_desired("mcp1", True)
+    instance_b._set_desired("mcp2", True)
+
+    # 新世代同时看到两个意图（旧实现这里会只剩最后写的那个）
+    assert set(BackendManager(store)._load_desired_state()) == {"mcp1", "mcp2"}
+    assert (state_dir / "mcp1.json").exists()
+    assert (state_dir / "mcp2.json").exists()
+
+
+def test_set_desired_false_only_removes_own_entry(tmp_path, monkeypatch):
+    """ARC-P1-02：清除意图只删自己的文件；tool_id 编码可往返（含 `/`）"""
+    state_dir = tmp_path / "desired"
+    monkeypatch.setattr(backend_client, "DESIRED_STATE_DIR", state_dir)
+
+    manager = BackendManager(FakeStore({}))
+    manager._set_desired("mcp1", True)
+    manager._set_desired("weird/id", True)  # 编码为 weird%2Fid.json，防路径逃逸
+    manager._set_desired("mcp1", False)
+
+    state = manager._load_desired_state()
+    assert set(state) == {"weird/id"}, "只删目标条目，且编码能 unquote 还原"
+
+
+def test_legacy_single_file_migrates_to_per_tool_files(tmp_path, monkeypatch):
+    """ARC-P1-02：旧单文件自动迁移为每工具文件，成功后旧文件消失"""
+    runtime_dir = tmp_path / "runtime"
+    state_dir = runtime_dir / "desired"
+    monkeypatch.setattr(backend_client, "DESIRED_STATE_DIR", state_dir)
+    runtime_dir.mkdir()
+    (runtime_dir / "backend_desired_state.json").write_text(
+        json.dumps({
+            "mcp1": {"desired": True, "updatedAt": "2026-10-16T00:00:00Z"},
+            "stale": {"desired": False},
+        }),
+        encoding="utf-8",
+    )
+
+    state = BackendManager(FakeStore({}))._load_desired_state()
+
+    assert set(state) == {"mcp1"}, "只迁移 desired=true 的条目"
+    assert (state_dir / "mcp1.json").exists()
+    assert not (
+        runtime_dir / "backend_desired_state.json"
+    ).exists(), "迁移成功后旧文件应删除"
+
+
+def test_corrupt_per_tool_file_is_skipped_not_fatal(tmp_path, monkeypatch):
+    """ARC-P1-02：单个工具的状态文件损坏 → 跳过该条，其他工具照常"""
+    state_dir = tmp_path / "desired"
+    monkeypatch.setattr(backend_client, "DESIRED_STATE_DIR", state_dir)
+    state_dir.mkdir()
+    (state_dir / "bad.json").write_text("{ 半个 json", encoding="utf-8")
+    (state_dir / "good.json").write_text(
+        json.dumps({"desired": True}), encoding="utf-8"
+    )
+
+    state = BackendManager(FakeStore({}))._load_desired_state()
+    assert set(state) == {"good"}

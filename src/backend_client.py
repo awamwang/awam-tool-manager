@@ -17,6 +17,7 @@ import shutil
 import sys
 import tempfile
 import time
+import urllib.parse
 from collections import deque
 from pathlib import Path
 
@@ -25,11 +26,11 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from errors import ErrorType
-from runtime_paths import get_runtime_dir
+from runtime_paths import LEGACY_ROOT_FILE, get_runtime_dir
 from store import JsonStore
 
 
-# 期望状态持久化文件：记录「用户明确 start_backend 成功的后端」。
+# 期望状态存储：记录「用户明确 start_backend 成功的后端」。
 #
 # 为什么需要它（2026-10-16 实测）：toolport 网关会**周期性整池回收**它拉起的
 # 所有 server 进程（实测约每几分钟一批，回收时关 stdin → 本服务优雅退出 →
@@ -42,9 +43,19 @@ from store import JsonStore
 # 这是**运行时状态**（谁被明确 start 过），不是源码，放仓库里只能靠
 # .gitignore 兜着，还是散落在根目录。见 runtime_paths.py 的分工说明。
 #
-# 仍是模块级常量：测试靠 monkeypatch.setattr 换掉它来隔离，改成函数会让
-# 7 处用例都要改；而它只在 import 期求值一次，生产环境够用。
-DESIRED_STATE_FILE = get_runtime_dir() / "backend_desired_state.json"
+# 为什么是「每工具一个文件」而不是一张表（ARC-P1-02，2026-10-17）：
+# 单文件时代 `_set_desired()` 走「读全表 → 改内存 dict → 写全表」，全程无
+# 跨进程锁。WorkBuddy 直连与 toolport 托管并行跑多个 server 实例是常态，
+# 实例 A `start_backend(x)` 与实例 B `stop_backend(y)` 交错时，B 的写入会被
+# A 的旧快照覆盖（lost update），意图文件与实际不符、下代恢复行为错误。
+# 现在每个 tool_id 独占一个 `desired/<encoded>.json`，任何路径都只原子写 /
+# 删除自己的文件，不再读全表写全表，竞态面彻底消除。
+# 旧版单文件 `backend_desired_state.json` 会在加载时自动迁移，见
+# `_migrate_legacy_desired_state()`。
+#
+# 仍是模块级常量：测试靠 monkeypatch.setattr 换掉 `DESIRED_STATE_DIR` 来
+# 隔离；而它只在 import 期求值一次，生产环境够用。
+DESIRED_STATE_DIR = get_runtime_dir() / "desired"
 
 
 def _warn(msg: str) -> None:
@@ -60,6 +71,15 @@ def _utc_now_iso() -> str:
         .isoformat()
         .replace("+00:00", "Z")
     )
+
+
+def _desired_file_name(tool_id: str) -> str:
+    """tool_id → 每工具状态文件名。
+
+    用 urllib 百分号编码，防止 `/`、`..` 等把路径带出 `desired/` 目录；
+    编码是单射的，不同 tool_id 不会撞名。读取侧 unquote 还原。
+    """
+    return f"{urllib.parse.quote(tool_id, safe='')}.json"
 
 
 def install_auto_authorized_by_env() -> bool:
@@ -1188,47 +1208,96 @@ class BackendManager:
         return [t["id"] for t in tools if t.get("kind") == "mcp"]
 
     # ---- 期望状态持久化（跨 server 世代的后端自愈，A10）----
+    #
+    # ARC-P1-02：每工具一个文件、只写自身键。不要再引入「读全表 → 写全表」
+    # 的整表操作——那正是跨实例 lost update 的来源。
 
     def _load_desired_state(self) -> dict:
-        """读取期望状态表；文件不存在 / 损坏都按空处理——恢复是尽力而为，
-        绝不能因为状态文件的问题阻断服务启动。"""
-        try:
-            with open(DESIRED_STATE_FILE, encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            return {}
-        return data if isinstance(data, dict) else {}
+        """读取全部期望状态：{tool_id: entry}。
 
-    def _save_desired_state(self, state: dict) -> None:
-        """原子写：本服务随时可能被网关 kill，截断写会留下半个 JSON。
-        与 store.save_json 同样的临时文件 + os.replace 套路。"""
-        DESIRED_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        先做旧单文件迁移；目录不存在 / 单文件损坏一律跳过——恢复是尽力而为，
+        绝不能因为状态文件的问题阻断服务启动。
+        """
+        state: dict = {}
+        self._migrate_legacy_desired_state()
+        if not DESIRED_STATE_DIR.is_dir():
+            return state
+        for path in DESIRED_STATE_DIR.glob("*.json"):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    entry = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                continue  # 单个工具的状态坏了不影响其他工具
+            if isinstance(entry, dict) and entry.get("desired"):
+                state[urllib.parse.unquote(path.stem)] = entry
+        return state
+
+    def _write_desired_entry(self, path: Path, entry: dict) -> None:
+        """单文件原子写：本服务随时可能被网关 kill，截断写会留下半个 JSON。
+        与 store.save_json 同样的临时文件 + fsync + os.replace 套路。"""
+        path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_path = tempfile.mkstemp(
-            dir=str(DESIRED_STATE_FILE.parent),
+            dir=str(path.parent),
             prefix=".desired.",
             suffix=".tmp",
         )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(state, f, ensure_ascii=False, indent=2)
+                json.dump(entry, f, ensure_ascii=False, indent=2)
                 f.flush()
                 os.fsync(f.fileno())
-            os.replace(tmp_path, DESIRED_STATE_FILE)
+            os.replace(tmp_path, path)
         except BaseException:
             with contextlib.suppress(OSError):
                 os.unlink(tmp_path)
             raise
 
-    def _set_desired(self, tool_id: str, desired: bool) -> None:
-        """记录/清除某个后端的启动意图。写失败只警告不抛出——
-        意图持久化是增强，不能让它把正常的 start/stop 拖失败。"""
-        state = self._load_desired_state()
-        if desired:
-            state[tool_id] = {"desired": True, "updatedAt": _utc_now_iso()}
-        else:
-            state.pop(tool_id, None)
+    def _migrate_legacy_desired_state(self) -> None:
+        """旧版单文件 `backend_desired_state.json` → 每工具文件（ARC-P1-02）。
+
+        尽力而为：解析失败 / 写入失败都保留旧文件并警告，不阻断启动。
+        只在「每工具文件不存在」时写——迁移期间可能有新版实例在并发写
+        同一目录，绝不覆盖新实例已落盘的状态。全部写成功后删除旧文件；
+        部分失败时旧文件保留，下次加载会跳过已写的、重试其余的（幂等）。
+        """
+        legacy = DESIRED_STATE_DIR.parent / LEGACY_ROOT_FILE
+        if not legacy.exists():
+            return
         try:
-            self._save_desired_state(state)
+            with open(legacy, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            _warn(f"旧期望状态文件无法解析，保留原样不阻断启动: {e}")
+            return
+        if not isinstance(data, dict):
+            _warn("旧期望状态文件格式异常，保留原样不阻断启动")
+            return
+        try:
+            for tool_id, entry in data.items():
+                if not (isinstance(entry, dict) and entry.get("desired")):
+                    continue
+                target = DESIRED_STATE_DIR / _desired_file_name(str(tool_id))
+                if target.exists():
+                    continue
+                self._write_desired_entry(target, entry)
+            legacy.unlink(missing_ok=True)
+        except OSError as e:
+            _warn(f"旧期望状态迁移失败（保留旧文件，不影响启动）: {e}")
+
+    def _set_desired(self, tool_id: str, desired: bool) -> None:
+        """记录/清除某个后端的启动意图——只动自己的文件，不读不写其他工具。
+
+        写失败只警告不抛出——意图持久化是增强，不能让它把正常的 start/stop
+        拖失败。
+        """
+        target = DESIRED_STATE_DIR / _desired_file_name(tool_id)
+        try:
+            if desired:
+                self._write_desired_entry(
+                    target, {"desired": True, "updatedAt": _utc_now_iso()}
+                )
+            else:
+                target.unlink(missing_ok=True)
         except OSError as e:
             _warn(f"期望状态写入失败（不影响本次操作）: {e}")
 

@@ -100,7 +100,8 @@ awam-tool-manager/
 │   └── winget-mcp.json
 ├── launcher-actions/               # 启动器动作清单缓存
 │   └── quicker.json
-└── backend_desired_state.json      # 后端启动意图（A10 跨世代自愈用）
+└── desired/                        # 后端启动意图（每工具一个文件，A10 跨世代自愈用）
+    └── <urlencoded-tool_id>.json
 ```
 
 > 根目录下的 `test_*.py`、`test_output.txt` 是调试期临时脚本，已被 `.gitignore` 排除。
@@ -333,8 +334,10 @@ toolport 网关会**周期性整池回收**它拉起的 server 进程（2026-10-
 状态清零——stdio MCP server 的生命周期归网关管，进程内状态注定随进程消亡，
 用户视角就是「启动后保不住，每次都得重新初始化」。对策：
 
-- `start_backend` 成功 → 把启动意图写入运行时目录的
-  `backend_desired_state.json`（原子写；文件损坏按空处理，绝不阻断启动）；
+- `start_backend` 成功 → 把启动意图写入运行时目录的 `desired/{tool_id}.json`
+  （每工具一个文件、只写自身键，避免多实例「读全表 → 写全表」的 lost update；
+  单文件原子写；单文件损坏跳过该条，绝不阻断启动。旧版单文件
+  `backend_desired_state.json` 加载时自动迁移）；
 - 每个新 server 世代启动时，`_restore_backends()` 后台任务据意图自动拉起
   desired=running 的后端——用户跨网关回收也能随时查到 running；
 - `stop_backend` 成功 → 清除意图（用户明确说不要了，下代不再拉起）；

@@ -15,10 +15,10 @@ from pathlib import Path
 import pytest
 
 # 运行时目录必须在 import 任何 src 模块**之前**定死：
-# `backend_client.DESIRED_STATE_FILE` 是 import 期求值的模块常量，晚一步设置
-# 就会指向真实的 %LOCALAPPDATA%\.awam-tool-manager——那会让测试读写用户真实
-# 运行时数据，而且因为不在仓库里，git status 根本看不出来。
-# conftest 由 pytest 最先加载，这里设置对后续所有 import 生效。
+# `backend_client.DESIRED_STATE_DIR`（及其旧单文件迁移源路径）是 import 期
+# 求值的模块常量，晚一步设置就会指向真实的 %LOCALAPPDATA%\.awam-tool-manager
+# ——那会让测试读写用户真实运行时数据，而且因为不在仓库里，git status 根本
+# 看不出来。conftest 由 pytest 最先加载，这里设置对后续所有 import 生效。
 _RUNTIME_ISOLATION_DIR = tempfile.mkdtemp(prefix="awam-runtime-")
 os.environ.setdefault("AWAM_RUNTIME_DIR", _RUNTIME_ISOLATION_DIR)
 

@@ -51,7 +51,7 @@ awam-tool-manager/
 %LOCALAPPDATA%/.awam-tool-manager/
 ├── backend-tools/        # 后端 MCP 子工具缓存（自动生成）
 ├── launcher-actions/     # 启动器动作清单缓存（自动生成）
-└── backend_desired_state.json  # 后端启动意图（A10 跨世代自愈用）
+└── desired/              # 后端启动意图（每工具一个文件，A10 跨世代自愈用）
 ```
 
 > 早期版本曾有 `data/launchers/`（启动器配置）与 `src/adapters/`（启动器适配器），
@@ -158,7 +158,7 @@ CallToolResult 透传；生产环境 pyenv 3.12 即 1.29.0）。
 > 坏掉的 JSON 会被跳过并打印 stderr 告警，不会导致整个服务不可用。
 
 > **后端状态跨进程自愈（A10）**：`start_backend` 成功会把启动意图落盘（运行时目录的
-> `backend_desired_state.json`）。上游网关（toolport）会周期性整池回收它拉起的 MCP server 进程，回收后新进程内存状态清零——
+> `desired/{tool_id}.json`，每工具一个文件）。上游网关（toolport）会周期性整池回收它拉起的 MCP server 进程，回收后新进程内存状态清零——
 > 有了意图落盘，每个新进程启动时会**自动恢复**上次启动过的后端，用户任何时刻查状态都是 running；
 > `stop_backend` 会清除意图。若后端业务依赖本机应用（如 everything-search-mcp 依赖 Everything
 > 桌面程序的 IPC），业务成败取决于该应用是否运行，与连接管理无关。
