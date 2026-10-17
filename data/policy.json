@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "tools": {
+    "deny": [],
+    "allow": null
+  },
+  "destructive": {
+    "mode": "require_confirm"
+  },
+  "audit": {
+    "destructive": true
+  }
+}

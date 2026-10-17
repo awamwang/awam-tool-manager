@@ -1,9 +1,17 @@
-"""破坏性门禁判定（ARC-P1-05 Phase 1，方案 A）。
+"""破坏性门禁判定与部署策略（ARC-P1-05 Phase 1 方案 A，Phase 2 方案 C）。
 
-唯一入口 `decide_destructive(kind, tool, sub_op, args)`——两个执行类
+唯一判定入口 `decide_destructive(kind, tool, sub_op, args)`——两个执行类
 handler（`call_backend_tool` / `run_launcher_action`）只调它，不再各自
-维护判定逻辑。为 Phase 2（方案 C）留位：届时 policy 文件只是在
-本函数外围增加策略层，判定产物（Decision）不变。
+维护判定逻辑。Phase 2 起策略（`data/policy.json`）参与判定：
+
+- `check_call(name)`：`dispatch_tool` 前置的工具级策略（deny 名单优先于
+  allow 白名单）；命中即拒绝（permission_denied），完全不进 handler；
+- `destructive.mode`：`deny` = 命中破坏性判定直接拒绝，**不读客户端
+  `allowDestructive`**（策略赢，H1 修复）；`require_confirm` = 现行为
+  （默认）；`allow` = 部署者声明信任，跳过确认；
+- 审计：每次破坏性判定产出结构化行（stderr + `<runtime>/audit.log`，
+  append-only、不轮转），字段 ts/tool/kind/sub_op/decision/rule_hit/
+  client_declared/policy_version/policy_mode。
 
 判定表（默认全部保持接入前行为，未配置新字段时逐字等价）：
 
@@ -28,7 +36,76 @@ from __future__ import annotations
 import datetime
 import fnmatch
 import json
+import os
 import sys
+from pathlib import Path
+
+from runtime_paths import get_runtime_dir
+from schema import validate_policy
+
+# 部署策略（ARC-P1-05 Phase 2，方案 C）：仓库 `data/policy.json` 为默认
+# （随部署分发、可评审），`AWAM_POLICY_FILE` 环境变量可覆盖（机私策略）。
+POLICY_ENV_VAR = "AWAM_POLICY_FILE"
+DEFAULT_POLICY_PATH = Path(__file__).parent.parent / "data" / "policy.json"
+
+# 无策略文件时的语义 = 全部现状（零配置零变更）：
+# 不做 deny/白名单、破坏性走 require_confirm（需客户端显式确认）、审计落盘开。
+DEFAULT_POLICY: dict = {
+    "version": 1,
+    "tools": {"deny": [], "allow": None},
+    "destructive": {"mode": "require_confirm"},
+    "audit": {"destructive": True},
+}
+
+# 破坏性判定审计的落盘位置（append-only、不轮转；Phase 1 起另有 stderr 行）
+AUDIT_LOG = get_runtime_dir() / "audit.log"
+
+
+class PolicyError(RuntimeError):
+    """策略文件不可用（读不了 / JSON 坏了 / schema 校验失败）。
+
+    `load_policy()` 在 import 期调用并让异常上抛——坏策略不能带病运行
+    （照 P1-04 `validate_specs()` 的快速失败先例）：策略判错等于安全约束
+    静默失效，早炸远好过晚炸。
+    """
+
+
+def resolve_policy_path() -> Path:
+    """策略文件路径：`AWAM_POLICY_FILE` 覆盖优先，否则仓库默认文件"""
+    override = os.environ.get(POLICY_ENV_VAR, "").strip()
+    return Path(override) if override else DEFAULT_POLICY_PATH
+
+
+def load_policy(path: str | Path | None = None) -> dict:
+    """加载并校验策略。文件不存在 → 返回默认策略（零配置零变更）。
+
+    Raises:
+        PolicyError: 文件不可读 / JSON 解析失败 / schema 校验失败。
+    """
+    policy_path = Path(path) if path is not None else resolve_policy_path()
+    if not policy_path.exists():
+        # 深拷贝默认值：调用方改返回值不得污染模块级默认
+        return json.loads(json.dumps(DEFAULT_POLICY))
+    try:
+        with open(policy_path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PolicyError(
+            f"策略文件不可读或不是合法 JSON（{policy_path}）: {exc}"
+        ) from exc
+    error = validate_policy(data)
+    if error:
+        raise PolicyError(f"策略文件校验失败（{policy_path}）: {error}")
+    return data
+
+
+# import 期加载：坏策略快速失败（策略判错 = 安全约束静默失效，不能带病运行）
+_POLICY: dict = load_policy()
+
+
+def get_policy() -> dict:
+    """当前生效的策略（测试可用 monkeypatch 替换模块级 `_POLICY`）"""
+    return _POLICY
 
 # 判定命中时的规则标识（审计 rule_hit 字段的合法取值）。
 RULE_NOT_DESTRUCTIVE = "not_destructive"
@@ -43,8 +120,8 @@ RULE_UNKNOWN_KIND = "unknown_kind"
 def _utc_now_iso() -> str:
     """UTC ISO 时间戳（与 data/ 及审计日志同风格，Z 结尾）。
 
-    不 import backend_client 的同名函数：policy 保持零项目内依赖，
-    Phase 2 扩展（策略加载/审计落盘）时也不该被 backend 的 mcp 依赖拖累。
+    不 import backend_client 的同名函数：policy 只依赖 runtime_paths /
+    schema 这类轻模块，不被 backend 的 mcp 依赖拖累。
     """
     return (
         datetime.datetime.now(datetime.timezone.utc)

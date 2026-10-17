@@ -325,6 +325,116 @@ def validate_launcher_catalog(data: Any) -> str | None:
     return _validate_with_schema(data, LAUNCHER_ACTIONS_SCHEMA)
 
 
+# ---- 部署策略（ARC-P1-05 Phase 2，方案 C）----
+#
+# 与 data/tools 的容错取向相反：策略文件的未知字段**一律拒绝**
+# （additionalProperties: false）。工具条目里一个拼错的扩展字段只是没被用上，
+# 策略里一个拼错的 `deny`/`mode` 却会静默地让安全约束失效——坏策略必须
+# 快速失败（policy.load_policy 在 import 期调用本校验）。
+
+POLICY_SCHEMA: dict[str, Any] = {
+    "title": "Policy",
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["version"],
+    "properties": {
+        "version": {
+            "type": "integer",
+            "const": 1,
+            "description": "策略格式版本（当前固定为 1）",
+        },
+        "tools": {
+            "type": "object",
+            "additionalProperties": False,
+            "description": "工具级策略：`deny` 名单优先于 `allow` 白名单",
+            "properties": {
+                "deny": {
+                    "type": ["array", "null"],
+                    "items": {"type": "string"},
+                    "description": "禁止调用的对外工具名列表（deny 优先于 allow）",
+                },
+                "allow": {
+                    "type": ["array", "null"],
+                    "items": {"type": "string"},
+                    "description": (
+                        "对外工具白名单；`null` 表示不启用（默认），非 null 时"
+                        "不在名单内的工具一律拒绝"
+                    ),
+                },
+            },
+        },
+        "destructive": {
+            "type": "object",
+            "additionalProperties": False,
+            "description": "破坏性门禁策略",
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": ["deny", "require_confirm", "allow"],
+                    "description": (
+                        "`deny`：任何命中破坏性判定的调用直接拒绝（网关只读部署），"
+                        "不读客户端 `allowDestructive`；`require_confirm`：现行为"
+                        "（默认，需客户端显式确认）；`allow`：部署者声明本机信任，"
+                        "跳过确认（须显式写）"
+                    ),
+                },
+            },
+        },
+        "audit": {
+            "type": "object",
+            "additionalProperties": False,
+            "description": "审计策略",
+            "properties": {
+                "destructive": {
+                    "type": "boolean",
+                    "description": (
+                        "是否把每行破坏性判定审计追加到运行时目录的 audit.log"
+                        "（append-only、不轮转；默认 true）"
+                    ),
+                },
+            },
+        },
+    },
+}
+
+
+def _policy_basic_checks(data: Any) -> str | None:
+    """不依赖 jsonschema 的最小校验：策略判错等于安全形同虚设，必须兜底"""
+    if not isinstance(data, dict):
+        return f"顶层不是对象（实际为 {type(data).__name__}）"
+    if data.get("version") != 1:
+        return f"version 必须为 1（实际为 {data.get('version')!r}）"
+    tools = data.get("tools") or {}
+    if not isinstance(tools, dict):
+        return "tools 必须是对象"
+    for key in ("deny", "allow"):
+        value = tools.get(key)
+        if value is not None and not (
+            isinstance(value, list) and all(isinstance(v, str) for v in value)
+        ):
+            return f"tools.{key} 必须是字符串数组或 null"
+    destructive = data.get("destructive") or {}
+    if not isinstance(destructive, dict):
+        return "destructive 必须是对象"
+    mode = destructive.get("mode", "require_confirm")
+    if mode not in ("deny", "require_confirm", "allow"):
+        return f"destructive.mode 取值非法: {mode!r}（应为 deny / require_confirm / allow）"
+    audit = data.get("audit") or {}
+    if not isinstance(audit, dict):
+        return "audit 必须是对象"
+    if not isinstance(audit.get("destructive", True), bool):
+        return "audit.destructive 必须是布尔值"
+    return None
+
+
+def validate_policy(data: Any) -> str | None:
+    """校验部署策略文件（`data/policy.json`），返回错误描述；合法则返回 None"""
+    error = _policy_basic_checks(data)
+    if error:
+        return error
+    return _validate_with_schema(data, POLICY_SCHEMA)
+
+
 def schema_backend_available() -> bool:
     """jsonschema 是否已安装（用于启动日志里说清楚校验强度）"""
     return jsonschema is not None
