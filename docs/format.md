@@ -216,6 +216,9 @@
 | `get_backend_logs` | `tool_id`(必填)、`level`、`limit` | 查看后端日志 |
 | `set_backend_log_level` | `tool_id`、`level`(必填) | 设置日志级别 |
 | `sync_backend_tools` | `tool_id`(必填) | 同步子工具目录 |
+| `sync_launcher_actions` | `tool_id`(必填) | 手动同步启动器动作清单 |
+| `list_launcher_actions` | `tool_id`(必填)、`keyword`、`limit`、`refresh` | 列出/搜索启动器动作（缓存超过 5 分钟自动重扫） |
+| `run_launcher_action` | `tool_id`(必填)、`action_id`/`action_name`(至少一个)、`param`、`wait`、`allowDestructive` | 执行启动器动作（条目或目标标记 `destructive` 时需 `allowDestructive=true`） |
 
 ### Resources
 

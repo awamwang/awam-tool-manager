@@ -1,6 +1,6 @@
 # awam-tool-manager 架构文档
 
-> 本文基于**当前代码实际状态**整理（截至 2026-10-15，commit `65d108c` + 本次协议合规修复）。
+> 本文基于**当前代码实际状态**整理（截至 2026-10-17，HEAD `fce1b4b` 后：含 P0 install 门禁 `4dc8b31`、P1-04 声明式注册表重构 `ee252eb`–`a2a8079`、P1-03 errorType 契约补齐 `7f66d32`–`fce1b4b`）。文中行数与行号均为**易腐数字**，精确值以 `wc -l src/*.py` / 源码为准。
 >
 > 历史包袱说明：仓库文档早期描述的「三层架构」含 `data/launchers/`（启动器配置）与
 > `src/adapters/`（启动器适配器）。这两层已在重构中移除（`3f5257a` / `bf78c2b` / `77ed097`），
@@ -63,7 +63,7 @@ awam-tool-manager/
 ├── SKILL.md                  # 技能声明（对外契约）
 ├── README.md                 # 项目说明
 ├── TASKS.md                  # 任务清单
-├── requirements.txt          # mcp>=1.29.0,<2.0.0, pytest>=7.0.0
+├── requirements.txt          # mcp>=1.29.0,<2.0.0, jsonschema>=4.0.0(可选), pytest>=7.0.0
 ├── docs/
 │   ├── format.md             # 数据格式规范
 │   ├── architecture.md       # 本文档
@@ -118,7 +118,7 @@ awam-tool-manager/
   "id": "everything",            // 必填，与文件名一致，全局唯一
   "name": "Everything",          // 技术名
   "displayName": "Everything 文件搜索",
-  "kind": "app",                 // app | mcp（决定 get_tool_info 走哪个分支）
+  "kind": "app",                 // app | mcp | launcher（决定 get_tool_info 走哪个分支）
   "status": "installed",
   "description": "...",
   "version": "1.4.1",
@@ -220,12 +220,12 @@ awam-tool-manager/
 | `store.py` | 194 | JSON 文件的读写与目录遍历，读有容错、写走原子替换，无缓存 | 标准库 |
 | `runtime_paths.py` | 93 | 运行时目录解析（`%LOCALAPPDATA%\.awam-tool-manager`，`AWAM_RUNTIME_DIR` 可覆盖）+ 旧路径数据一次性迁移 | 标准库 |
 | `schema.py` | 321 | 两层数据的 JSON Schema 与校验（`jsonschema` 可选，缺失时降级）；**同时是 `docs/format.md` 字段表的唯一生成源** | `jsonschema`(可选) |
-| `registry.py` | 140 | 工具查询语义（列表 / 搜索含 `id` / 详情 / 启动信息），加载时过滤不合规条目 | `store`、`schema` |
-| `backend_client.py` | 1416 | 后端 MCP 子进程的连接管理、调用转发、缓存、心跳、日志、**install 执行门禁（P0）** | `mcp`、`store`、`runtime_paths` |
+| `registry.py` | 141 | 工具查询语义（列表 / 搜索含 `id` / 详情 / 启动信息），加载时过滤不合规条目 | `store`、`schema` |
+| `backend_client.py` | 1481 | 后端 MCP 子进程的连接管理、调用转发、缓存、心跳、日志、**install 执行门禁（P0）** | `mcp`、`store`、`runtime_paths` |
 | `launcher_client.py` | 405 | 启动器适配器（非 MCP，Quicker）：动作清单解析/搜索、一次性外部命令调用 | `store` |
-| `errors.py` | 35 | 业务错误出口：`ToolError` / `fail` / `ensure_success`（P1-04 从 server.py 原样搬出——tool_specs 的 handlers 要用，留在 server.py 会形成循环 import；server 命名空间继续 re-export） | 标准库 |
-| `tool_specs.py` | 728 | 对外 MCP 工具声明式注册表（SSOT）：15 条 `ServerToolSpec`（name/description/inputSchema/annotations/handler 同条记录）+ 15 个 handler + `build_mcp_tools()` / `get_spec()` / `validate_specs()`（import 期自检：重名/空 handler/非法注解键快速失败） | `mcp`、`errors`、`launcher_client` |
-| `server.py` | 464 | MCP 协议入口：协议装配 + 查表薄分发（`dispatch_tool` 约 10 行）+ Resources/Prompts + 生命周期（启动预热/状态恢复），启动时后台检测依赖 + 恢复期望状态 | `mcp`、`store`、`registry`、`backend_client`、`launcher_client`、`schema`、`errors`、`tool_specs` |
+| `errors.py` | 86 | 业务错误出口：`ErrorType` 常量枚举 + `ToolError` / `fail` / `ensure_success`（P1-04 从 server.py 原样搬出——tool_specs 的 handlers 要用，留在 server.py 会形成循环 import；server 命名空间继续 re-export；P1-03 补齐枚举至 16 种） | 标准库 |
+| `tool_specs.py` | 730 | 对外 MCP 工具声明式注册表（SSOT）：15 条 `ServerToolSpec`（name/description/inputSchema/annotations/handler 同条记录）+ 15 个 handler + `build_mcp_tools()` / `get_spec()` / `validate_specs()`（import 期自检：重名/空 handler/非法注解键快速失败） | `mcp`、`errors`、`launcher_client` |
+| `server.py` | 464 | MCP 协议入口：协议装配 + 查表薄分发（`dispatch_tool` 约 10 行）+ Resources/Prompts + 生命周期（启动预热/状态恢复），启动时后台检测依赖 + 恢复期望状态 | `mcp`、`store`、`registry`、`backend_client`、`runtime_paths`、`launcher_client`、`schema`、`errors`、`tool_specs` |
 | `scripts/generate_format_doc.py` | 148 | 读 `schema.py` 渲染字段表并就地替换 `docs/format.md` 的生成区块；`--check` 做漂移检查 | 标准库、`schema` |
 
 ### 5.3 后端路由调用链
@@ -407,8 +407,9 @@ python src/server.py
   → 注册 MCP handlers
   → 打印已加载工具数量到 stderr
   → 创建后台任务 _prewarm_backends()：为各后端装好缺失的依赖（只装不启，异常全吞）
+  → 创建后台任务 _restore_backends()：按期望状态文件恢复上次运行过的后端（A10 跨世代自愈，异常全吞）
   → stdio_server() → app.run() 事件循环
-  → finally: 取消预热任务 → backend_manager.close_all()
+  → finally: 取消预热/恢复任务 → backend_manager.close_all()
 ```
 
 ### 7.2 关键设计点

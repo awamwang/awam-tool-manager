@@ -5,10 +5,19 @@
 > 审核范围：`src/`（4 个模块）、`data/`（3 个 JSON）、`tests/`、依赖声明
 >
 > **行号基线声明（2026-10-17，NE-4 清理）**：本报告全部 `file:line` 仅在基准 commit `65d108c` 上有效（彼时 `server.py` 为 **581 行**）。此后仓库历经 A13/A14（`server.py` 增至约 1020 行）、P0 修复 `4dc8b31`、**P1-04 声明式注册表重构** `ee252eb`–`a2a8079`（`server.py` 1020 → **464 行**，`TOOL_ANNOTATION_HINTS` 删除、15 个 `Tool(...)` 字面量与 if/elif 分发链搬入 `src/tool_specs.py`）与 P1-03 errorType 补齐 `7f66d32`–`fce1b4b`。受影响的 6 处 `server.py:NNN` 引用（`:83`、`:109`、`:243-390`、`:386-387`、`:395`、`:520-543`）**对当前 HEAD 全部失效**，按「历史留档」体例**不改写正文**——本报告是 `65d108c` 时点的审核记录。P1-04 重构后的位置换算见 [`architecture_review_2026-10-16.md`](architecture_review_2026-10-16.md) §0.1（该表基线为 1020 行版本，与本报告的 581 行基线不同，勿直接套用）。
+>
+> **阅读指引（2026-10-17，信息架构修订）**：本报告 = **问题清单（§1–§7：按严重级别 P0→P3 + 架构层面，按 D/A 编号）** + **更新记录（§0：按时间倒序的过程留档）**。
+> - **当前未修复项：无**——D1–D26、A1–A13 全部标记 ✅ 已修复（各条保留一句结论 + 关键 commit/测试）。
+> - 查找某问题：按编号到 §3–§7 检索；§0 更新记录中的早期「待修」描述可能已被后续轮次覆盖，**一律以 §1–§7 的条目状态为准**。
+> - 本文问题清单**之外**的新发现（文档漂移、信息架构、单一真相源等）见 [`architecture_review_2026-10-16.md`](architecture_review_2026-10-16.md)（含 §0 基线声明与 §3.1 漂移复核状态）。
 
 ---
 
-## 0. 第十次更新：P0 修复 —— `install.command` 执行门禁（最新）
+## 0. 更新记录（倒序，最新在前）
+
+> 本节按时间**倒序**记录每次审核/修复轮次，保留当时的结论与证据。**当前问题状态以下文 §1–§7 的 D/A 条为准**（见卷首「阅读指引」）——早期轮次的「待修」描述可能已被后续轮次覆盖。
+
+### 0.1 第十次更新：P0 修复 —— `install.command` 执行门禁（最新）
 
 > 本轮不是代码缺陷复扫，而是对**架构评审结论 ARC-P0-01** 的定向修复。
 > 完整背景见 [`architecture_review-2026-10-16.md`](architecture_review-2026-10-16.md)。
@@ -47,7 +56,7 @@
 
 ---
 
-## 0. 第九次更新：A6 —— 后端依赖自动安装 + 启动预热
+### 0.2 第九次更新：A6 —— 后端依赖自动安装 + 启动预热
 
 **起因（用户实测反馈）**：`everything-search-mcp` 经 toolport 调用 `start_backend` 总是超时。
 逐阶段计时定位到耗时全在 `npx -y` 的 registry 往返（9–26s 波动），与后端 initialize 无关；
@@ -75,7 +84,7 @@
 
 ---
 
-## 0. 第八次更新：structuredContent / outputSchema 启用
+### 0.3 第八次更新：structuredContent / outputSchema 启用
 
 最后一项可选增强落地：把 `mcp` 依赖下限从 `>=1.9.0` 提到 `>=1.30.0`（structuredContent /
 outputSchema 是 1.30 起稳定的能力），并真正用上它们：
@@ -93,7 +102,7 @@ outputSchema 输出校验确实通过，未出现 `Output validation error`。�
 
 ---
 
-## 0. 第七次更新：A4 —— 文档改由 schema 反向生成
+### 0.4 第七次更新：A4 —— 文档改由 schema 反向生成
 
 A4 此前只是"部分改善"：字段分叉补回文档后，靠"记得同步两边"的约定维系，
 时间一长必然再漂。**现在收口为单向依赖**：
@@ -109,7 +118,7 @@ A4 此前只是"部分改善"：字段分叉补回文档后，靠"记得同步�
 
 ---
 
-## 0.0 第六次更新：协议层回环测试发现两个潜伏缺陷
+### 0.5 第六次更新：协议层回环测试发现两个潜伏缺陷
 
 补 `tests/test_protocol_roundtrip.py`（用真实 MCP 会话驱动 server，不 mock SDK）时，
 **又抓出两个此前完全没有暴露的缺陷** —— 它们和 D23 是同一类：能力从未被真正调用过，
@@ -125,7 +134,7 @@ A4 此前只是"部分改善"：字段分叉补回文档后，靠"记得同步�
 
 ---
 
-## 0.0 第五次更新：语义一致性与合规
+### 0.6 第五次更新：语义一致性与合规
 
 | 编号 | 问题 | 处理方式 |
 |---|---|---|
@@ -139,7 +148,7 @@ A4 此前只是"部分改善"：字段分叉补回文档后，靠"记得同步�
 
 ---
 
-## 0.0 第四次更新：P2 已修复（2026-10-15 深夜）
+### 0.7 第四次更新：P2 已修复（2026-10-15 深夜）
 
 修复了全部 7 项 P2，并补了 `test_store.py` / `test_server_dispatch.py` 两个测试文件（测试总数 13 → 41 passed）。
 
@@ -155,7 +164,7 @@ A4 此前只是"部分改善"：字段分叉补回文档后，靠"记得同步�
 
 ---
 
-## 0.0.0 第三次更新：P1 已修复（2026-10-15 晚）
+### 0.8 第三次更新：P1 已修复（2026-10-15 晚）
 
 按第二批计划修复了全部 4 项 P1，并补了首个 backend_client 单元测试文件（13 passed）。
 
@@ -174,11 +183,11 @@ A4 此前只是"部分改善"：字段分叉补回文档后，靠"记得同步�
 
 ---
 
-## 0.0.0.0 第二次更新：P0 已修复 + 协议一致性专项（2026-10-15 晚）
+### 0.9 第二次更新：P0 已修复 + 协议一致性专项（2026-10-15 晚）
 
 按审核结论执行了首轮修复，并在做 MCP 协议一致性对比时**新发现一个 P0 级缺陷**。
 
-### 0.1 本轮已修复
+#### 0.9.1 本轮已修复
 
 | 编号 | 问题 | 处理方式 |
 |---|---|---|
@@ -189,7 +198,7 @@ A4 此前只是"部分改善"：字段分叉补回文档后，靠"记得同步�
 | D20 | 文件中部 import | 合并到顶部 |
 | — | 参数命名不统一 | `mcp_tool_id` / `launcher_id` 全部统一为 `tool_id` |
 
-### 0.2 新发现：D23（P0）`read_resource` 返回值类型错误
+#### 0.9.2 新发现：D23（P0）`read_resource` 返回值类型错误
 
 做协议对比时读 SDK 源码发现：`mcp/server/lowlevel/server.py` 对 `Iterable` 类型的返回值执行
 
@@ -201,14 +210,14 @@ contents_list = [create_content(item.content, item.mime_type) for item in conten
 因此**任何一次 resources/read 都会 `AttributeError`**。
 因为该能力从未被实际调用过，这个缺陷一直潜伏。已修复为返回 `ReadResourceContents`。
 
-### 0.3 协议层面最重要的一条结论
+#### 0.9.3 协议层面最重要的一条结论
 
 **mcp 1.x 的 `call_tool` handler 返回值被 SDK 硬编码为 `isError=False`**，
 handler 内部无法修改。也就是说：本项目原先所有 `{"success": false, ...}` 的返回，
 **在 MCP 协议层都被标记为"调用成功"**。唯一让客户端感知失败的途径是抛异常。
 已据此重构错误处理，详见 [`mcp-conformance.md`](mcp-conformance.md)。
 
-### 0.4 第三轮修复后的剩余问题
+#### 0.9.4 第三轮修复后的剩余问题
 
 P0 与 P1 已全部关闭。剩余有效待办为 P2 的 D9–D15、P3 的 D17/D18/D19/D21/D22，清单见下。
 其中 D12/D13（JSON 容错与原子写）建议优先，它们会让单个坏文件拖垮整个服务。
@@ -637,6 +646,12 @@ SDK 对 Iterable 执行 `[create_content(item.content, item.mime_type) for item 
 **修复**：返回 `[ReadResourceContents(content=text, mime_type="application/json")]`，
 并对 mcp <1.9（无该类）降级为 deprecated 的 str 形式。实测 `awam://tools` 读取正常。
 
+### D24. ✅ 已修复 —— 业务失败未映射为 MCP 协议的 `isError`
+
+详见 [`mcp-conformance.md §2.1`](mcp-conformance.md#21-严重问题iserror-从未置位-已修复)。
+核心结论：SDK 恒把 handler 的返回值标为 `isError=False`，只有抛异常才能置 `True`。
+已引入 `ToolError` / `fail()` / `ensure_success()` 完成转换。
+
 ### D25. ✅ 已修复 —— `read_resource` 用 `AnyUrl` 直接与字符串比较（协议回环测试发现）
 
 **位置**：`src/server.py` `read_resource`
@@ -663,12 +678,6 @@ GetPromptResult"）→ **prompts/get 全部失败**。
 
 **修复**：`GetPromptResult` 存在时返回 `GetPromptResult(description=..., messages=[...])`，
 老版本 SDK 退回裸列表（与 `ReadResourceContents` 同样的兼容写法）。
-
-### D24. ✅ 已修复 —— 业务失败未映射为 MCP 协议的 `isError`
-
-详见 [`mcp-conformance.md §2.1`](mcp-conformance.md#21-严重问题iserror-从未置位-已修复)。
-核心结论：SDK 恒把 handler 的返回值标为 `isError=False`，只有抛异常才能置 `True`。
-已引入 `ToolError` / `fail()` / `ensure_success()` 完成转换。
 
 ---
 

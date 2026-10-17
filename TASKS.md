@@ -25,7 +25,7 @@
 - [x] MCP Server 入口（server.py）：stdio 模式
 - [x] 日志系统（输出到 stderr，不污染协议通道）
 
-### 对外 MCP 工具（12 个）
+### 对外 MCP 工具（15 个）
 - [x] `search_tools` - 搜索工具（关键词 + kind 筛选）
 - [x] `list_tools` - 列出所有工具
 - [x] `get_tool_info` - 查看工具详情
@@ -354,7 +354,7 @@
 
 字段要点：
 
-- `kind`：`app`（普通应用）/ `mcp`（MCP 工具），决定是否可建立后端连接、决定 `get_tool_info` 的返回形状
+- `kind`：`app`（普通应用）/ `mcp`（MCP 工具）/ `launcher`（启动器，非 MCP），决定是否可建立后端连接、决定 `get_tool_info` 的返回形状
 - `launch`：仅 `kind=app` 有意义，`launch_tool` 据此返回启动命令
 - `connection`：仅 `kind=mcp` 有意义，`BackendClient` 据此拉起子进程；目前只支持 `stdio`
 - `install`：仅 `kind=mcp` 有意义，`start_backend` 检测到启动命令缺失时会自动执行一次 `install.command`
