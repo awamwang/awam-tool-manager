@@ -92,6 +92,49 @@ def test_decision_table_rows():
         assert decision["audit"]["rule_hit"] == want_rule, (kind, tool, sub_op)
 
 
+def test_default_mode_rejection_messages_are_verbatim():
+    """默认（require_confirm）路径的四类拒绝文案逐字冻结。
+
+    Phase 2 把拒绝文案拆成「主体 + 指令尾」以便 deny 模式换管理员话术，
+    但默认路径必须与 Phase 1 逐字相同——这里用字面字符串钉死（QA 已验证
+    mcp 侧 64/64 逐字相同，改这两段时别破坏默认路径）。
+    """
+    cases = [
+        (
+            "mcp",
+            _MCP_DESTRUCTIVE,
+            {"tool_name": "nuke"},
+            "目标工具 'boom' 的子工具 'nuke' 被判定为 destructive，"
+            "需显式传 allowDestructive=true 才会转发调用",
+        ),
+        (
+            "mcp",
+            _MCP_LISTED,
+            {"tool_name": "nuke"},
+            "目标工具 'boom' 的子工具 'nuke' 被判定为 destructive，"
+            "需显式传 allowDestructive=true 才会转发调用",
+        ),
+        (
+            "launcher",
+            _LAUNCHER_DESTRUCTIVE,
+            {"action_id": "a"},
+            "启动器 'quicker' 被标记为 destructive（未配置 destructiveActions），"
+            "动作 'a' 需显式传 allowDestructive=true 才会执行",
+        ),
+        (
+            "launcher",
+            {**_LAUNCHER_DESTRUCTIVE, "destructiveActions": ["*delete*"]},
+            {"action_id": "delete-all"},
+            "启动器 'quicker' 的动作 'delete-all' 命中 destructiveActions"
+            "（匹配值: 'delete-all'），需显式传 allowDestructive=true 才会执行",
+        ),
+    ]
+    for kind, tool, sub_op, expected in cases:
+        decision = _decide(kind, tool, sub_op)
+        assert decision["blocked"] is True
+        assert decision["reason"] == expected, f"{kind}: 默认路径文案被改动"
+
+
 # ---- 2. glob 匹配 ----
 
 

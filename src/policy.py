@@ -149,52 +149,64 @@ def _match_any(patterns, values) -> str | None:
     return None
 
 
-def _decide_mcp(tool: dict | None, sub_op: dict) -> tuple[bool, str, str]:
-    """mcp 判定表。返回 (是否命中破坏性判定, rule_hit, 人类可读理由)。"""
+def _decide_mcp(
+    tool: dict | None, sub_op: dict
+) -> tuple[bool, str, str, str]:
+    """mcp 判定表。返回 (是否命中, rule_hit, 主体描述, 指令尾)。
+
+    `主体描述 + 指令尾` 拼起来即默认（require_confirm / allow）路径的拒绝
+    文案——逐字保持 Phase 1 原文。策略 deny 模式只换指令尾（管理员话术，
+    不提 `allowDestructive`——那正是 deny 模式要忽略的输入，提了就是
+    「可执行但无效」的建议）。
+    """
     tool_name = sub_op.get("tool_name") or ""
     tool_id = (tool or {}).get("id") or ""
     if not tool or not tool.get("destructive"):
-        return False, RULE_NOT_DESTRUCTIVE, "目标工具未标记 destructive，放行"
+        return False, RULE_NOT_DESTRUCTIVE, "目标工具未标记 destructive，放行", ""
     listed = tool.get("destructiveTools")
+    subject = (
+        f"目标工具 '{tool_id}' 的子工具 '{tool_name}' 被判定为 destructive"
+    )
+    tail = "，需显式传 allowDestructive=true 才会转发调用"
     if listed is None:
         # 旧语义：条目标了 destructive 又没给子工具清单 → 整个后端都拦
-        return (
-            True,
-            RULE_ENTRY_LEVEL,
-            f"目标工具 '{tool_id}' 的子工具 '{tool_name}' 被判定为 destructive，"
-            f"需显式传 allowDestructive=true 才会转发调用",
-        )
+        return True, RULE_ENTRY_LEVEL, subject, tail
     if tool_name in listed:
-        return (
-            True,
-            RULE_DESTRUCTIVE_TOOLS_MATCH,
-            f"目标工具 '{tool_id}' 的子工具 '{tool_name}' 被判定为 destructive，"
-            f"需显式传 allowDestructive=true 才会转发调用",
-        )
+        return True, RULE_DESTRUCTIVE_TOOLS_MATCH, subject, tail
     return (
         False,
         RULE_DESTRUCTIVE_TOOLS_MISS,
         f"子工具 '{tool_name}' 不在 destructiveTools 清单内，放行",
+        "",
     )
 
 
-def _decide_launcher(tool: dict | None, sub_op: dict) -> tuple[bool, str, str]:
-    """launcher 判定表。返回 (是否命中破坏性判定, rule_hit, 人类可读理由)。"""
+def _decide_launcher(
+    tool: dict | None, sub_op: dict
+) -> tuple[bool, str, str, str]:
+    """launcher 判定表。返回 (是否命中, rule_hit, 主体描述, 指令尾)。
+
+    两段拼接即默认路径拒绝文案（逐字保持 Phase 1 原文）；注意两个分支的
+    指令尾前导逗号不同——entry_level 的原文在「动作 'X'」后直接接「需…」，
+    match 分支则带「，」——拼接时保持原样，别统一。
+    """
     action_id = sub_op.get("action_id") or ""
     action_name = sub_op.get("action_name") or ""
     action_type = sub_op.get("action_type") or ""
     label = action_id or action_name or "未知动作"
     tool_id = (tool or {}).get("id") or ""
     if not tool or not tool.get("destructive"):
-        return False, RULE_NOT_DESTRUCTIVE, "启动器未标记 destructive，放行"
+        return False, RULE_NOT_DESTRUCTIVE, "启动器未标记 destructive，放行", ""
     patterns = tool.get("destructiveActions")
     if patterns is None:
         # 旧语义：只标了条目级 destructive、没有动作清单 → 所有动作都要确认
+        # 注意指令尾的前导空格：「动作 'X' 需显式传…」——原文如此，逐字保持
         return (
             True,
             RULE_ENTRY_LEVEL,
             f"启动器 '{tool_id}' 被标记为 destructive（未配置 destructiveActions），"
-            f"动作 '{label}' 需显式传 allowDestructive=true 才会执行",
+            f"动作 '{label}'",
+            " 需显式传 allowDestructive=true 才会执行",
         )
     hit = _match_any(patterns, (action_id, action_name, action_type))
     if hit is not None:
@@ -202,12 +214,14 @@ def _decide_launcher(tool: dict | None, sub_op: dict) -> tuple[bool, str, str]:
             True,
             RULE_DESTRUCTIVE_ACTIONS_MATCH,
             f"启动器 '{tool_id}' 的动作 '{label}' 命中 destructiveActions"
-            f"（匹配值: '{hit}'），需显式传 allowDestructive=true 才会执行",
+            f"（匹配值: '{hit}'）",
+            "，需显式传 allowDestructive=true 才会执行",
         )
     return (
         False,
         RULE_DESTRUCTIVE_ACTIONS_MISS,
         f"启动器 '{tool_id}' 的动作 '{label}' 未命中 destructiveActions，放行",
+        "",
     )
 
 
@@ -313,11 +327,11 @@ def decide_destructive(
         - `reason`：拒绝时直接作为 ToolError 文案（带上具体子操作）。
     """
     if kind == "mcp":
-        required, rule_hit, reason = _decide_mcp(tool, sub_op)
+        required, rule_hit, subject, tail = _decide_mcp(tool, sub_op)
         sub_op_label = sub_op.get("tool_name") or ""
         audit_action = "call_backend_tool"
     elif kind == "launcher":
-        required, rule_hit, reason = _decide_launcher(tool, sub_op)
+        required, rule_hit, subject, tail = _decide_launcher(tool, sub_op)
         sub_op_label = (
             sub_op.get("action_id")
             or sub_op.get("action_name")
@@ -325,14 +339,16 @@ def decide_destructive(
         )
         audit_action = "run_launcher_action"
     else:
-        required, rule_hit = False, RULE_UNKNOWN_KIND
-        reason = f"未知 kind '{kind}'，放行"
+        required, rule_hit, tail = False, RULE_UNKNOWN_KIND, ""
+        subject = f"未知 kind '{kind}'，放行"
         sub_op_label = ""
         audit_action = kind
 
     policy = get_policy()
     mode = (policy.get("destructive") or {}).get("mode") or "require_confirm"
     client_declared = bool(args.get("allowDestructive"))
+
+    reason = f"{subject}{tail}"
 
     blocked = False
     if required:
@@ -341,9 +357,15 @@ def decide_destructive(
             # handler 不再打「已确认」日志、响应不挂 warning）
             required = False
         elif mode == "deny":
-            # 策略赢（H1 修复）：命中即拒绝，不读客户端 allowDestructive
+            # 策略赢（H1 修复）：命中即拒绝，不读客户端 allowDestructive。
+            # 文案同样不能再建议 allowDestructive——那是本模式忽略的输入，
+            # 客户端照做只会再被拒一次；改用与 check_call deny 名单一致的
+            # 管理员话术（QA #24）。
             blocked = True
-            reason = f"部署策略 destructive.mode=deny，拒绝该破坏性操作；{reason}"
+            reason = (
+                f"部署策略 destructive.mode=deny，拒绝该破坏性操作；{subject}，"
+                f"客户端无法自行解除，需管理员调整策略"
+            )
         elif not client_declared:
             blocked = True
     decision = "block" if blocked else ("confirm" if required else "allow")

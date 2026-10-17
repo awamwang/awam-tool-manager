@@ -194,6 +194,43 @@ def test_deny_mode_overrides_client_allowdestructive(monkeypatch):
         "策略拒绝必须是 permission_denied（客户端无解），不是 destructive_blocked"
     )
     assert "deny" in payload["error"]
+    # 文案不得再建议 allowDestructive——那是 deny 模式要忽略的输入，
+    # 客户端照做只会再被拒一次（QA #24）；应给管理员话术
+    assert "allowDestructive" not in payload["error"]
+    assert "需管理员调整策略" in payload["error"]
+
+
+def test_deny_mode_launcher_message_offers_no_self_service(monkeypatch):
+    """deny 模式的 launcher 拒绝文案同样不提 allowDestructive（QA #24）"""
+    _set_policy(
+        monkeypatch, destructive={"mode": "deny"}, tools={"deny": [], "allow": None}
+    )
+    monkeypatch.setattr(
+        server.registry,
+        "get_tool",
+        lambda tool_id: {
+            "id": tool_id,
+            "kind": "launcher",
+            "destructive": True,
+            "destructiveActions": ["*卸载*"],
+        },
+    )
+
+    async def should_not_run(*args, **kwargs):  # pragma: no cover
+        raise AssertionError("策略 deny 下不得执行动作")
+
+    monkeypatch.setattr(server.launcher_manager, "run_action", should_not_run)
+
+    with pytest.raises(server.ToolError) as exc:
+        server_run(
+            "run_launcher_action",
+            {"tool_id": "quicker", "action_id": "x", "action_name": "卸载微信"},
+        )
+    payload = json.loads(str(exc.value))
+    assert payload["errorType"] == "permission_denied"
+    assert "allowDestructive" not in payload["error"]
+    assert "需管理员调整策略" in payload["error"]
+    assert "卸载微信" in payload["error"], "仍应带上命中的具体动作"
 
 
 # ---- 5. 三种 mode 的行为 ----
