@@ -36,7 +36,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 from store import JsonStore
 from runtime_paths import get_runtime_dir, migrate_legacy_runtime
 from registry import ToolRegistry
-from backend_client import BackendClient, BackendManager, ensure_npm_bin_on_path
+# 注意：`ensure_npm_bin_on_path` 已从这里移除——启动预热不再无条件探测 npm
+# 全局 bin（#28 续，见 `_prewarm_backends` 内注释）。它现在只由
+# `BackendClient.ensure_installed()` 的慢路径调用，server 不再需要这个名字。
+from backend_client import BackendClient, BackendManager
 from launcher_client import LauncherManager
 from schema import schema_backend_available
 # P1-04：业务错误三件套搬到 errors.py（tool_specs 的 handlers 要用，留在
@@ -353,9 +356,10 @@ async def _prewarm_backends():
     什么装什么」，但安装是重操作（npm i -g 可达数十秒），第一次调用就要
     现场等。这里在服务启动时后台预热一遍，把安装成本提前到启动阶段。
 
-    预热前先做 PATH 自愈（ensure_npm_bin_on_path）：上游网关可能用裁剪过
-    的环境启动本服务（实测 toolport 传入的 PATH 不含 npm 全局 bin），不补
-    的话 which 会把已装好的包误判成缺失，白跑一次数十秒的安装。
+    这里**不再**无条件做 PATH 自愈（`ensure_npm_bin_on_path`）：该自愈已
+    下放到 `BackendClient.ensure_installed()` 的慢路径（#28 续），「需要补」
+    与「补得起」现在是同一个判断，预热阶段再补一遍是纯浪费。详见函数体内
+    try 块开头的注释（含残余风险评估）。
 
     只检不启、异常全吞：预热失败不能拖垮服务本体——最坏情况退化为
     「首次 start_backend 时按需处理」，与没有预热时完全一致。
@@ -366,7 +370,25 @@ async def _prewarm_backends():
     部署者显式设 `AWAM_AUTO_INSTALL=1`（或逐条目配 `install.auto=true`）。
     """
     try:
-        await ensure_npm_bin_on_path()
+        # ── 这里**不再**无条件 `await ensure_npm_bin_on_path()`（#28 续）────
+        # 旧逻辑在预热前先补一遍 npm 全局 bin，理由是「上游网关可能用裁剪过
+        # 的环境启动本服务（实测 toolport 传入的 PATH 不含 npm 全局 bin），
+        # 不补的话 which 会把已装好的包误判成缺失」。这个理由在 #28 之后已经
+        # 过期：PATH 自愈下放到了 `BackendClient.ensure_installed()` 的慢路径
+        # ——先按当前 PATH 判一次，没判到才补 npm 全局 bin，补完再判一次。
+        # 于是「需要补」与「补得起」变成同一个判断：
+        #   - 启动命令已在 PATH 上 → 它本来就解析得到，补不补都不影响 spawn；
+        #   - 启动命令不在 PATH 上 → 慢路径会补，判定结果与旧逻辑一致。
+        # 实测（e2e 场景③，真实 PATH）：预热这条无条件调用是本进程**唯一**
+        # 真正用到的 npm 探测，去掉后 `npm prefix -g` 由 1 次降到 0 次，
+        # 场景③ 全链路再省 ≈1.8s（冷机该命令实测可达 6.5s）。
+        #
+        # **残余风险（已评估，接受）**：启动命令在 PATH 上、但后端**运行时**
+        # 还需要 npm 全局 bin 里的**其他**命令时，PATH 不再被提前补齐。为什么
+        # 可接受：这些后端本身是 npm 全局安装的 CLI，它要调用的兄弟命令都在
+        # **自己的包内**（node_modules/.bin 或包内相对路径），不依赖 PATH 里
+        # 的兄弟 bin；真正需要 PATH 解析的是「启动命令自己」，而那正是慢路径
+        # 覆盖的部分。
         result = await backend_manager.ensure_all_installed()
         if result.get("installed"):
             log(

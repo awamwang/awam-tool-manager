@@ -15,6 +15,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+# backend_client 直接 import：本文件其它 src import 带的 noqa 标记在这里不加，
+# 因为 E402 在本仓 ruff 配置里未启用，加了反而多一条 RUF100。
+# （注意：别在注释里写出完整的 noqa 指令字面量，ruff 会把注释里的它当成
+#   directive，报 "Invalid noqa directive" 警告。）
+import backend_client
 import server  # noqa: E402
 from server import ToolError, dispatch_tool, list_tools, read_resource  # noqa: E402
 
@@ -332,13 +337,9 @@ def test_call_tool_returns_structured_result():
 def test_prewarm_logs_install_summary(monkeypatch, capsys):
     """预热装了什么要在启动日志里说清楚"""
 
-    async def fake_ensure_npm_bin():
-        return None
-
     async def fake_ensure_all_installed():
         return {"success": True, "total": 3, "available": 2, "installed": 1, "details": []}
 
-    monkeypatch.setattr(server, "ensure_npm_bin_on_path", fake_ensure_npm_bin)
     monkeypatch.setattr(
         server.backend_manager, "ensure_all_installed", fake_ensure_all_installed
     )
@@ -352,13 +353,9 @@ def test_prewarm_logs_install_summary(monkeypatch, capsys):
 def test_prewarm_logs_when_everything_ready(monkeypatch, capsys):
     """全部就绪时也留一行日志，避免「静默成功」无法确认预热跑过"""
 
-    async def fake_ensure_npm_bin():
-        return None
-
     async def fake_ensure_all_installed():
         return {"success": True, "total": 2, "available": 2, "installed": 0, "details": []}
 
-    monkeypatch.setattr(server, "ensure_npm_bin_on_path", fake_ensure_npm_bin)
     monkeypatch.setattr(
         server.backend_manager, "ensure_all_installed", fake_ensure_all_installed
     )
@@ -369,9 +366,6 @@ def test_prewarm_logs_when_everything_ready(monkeypatch, capsys):
 
 def test_prewarm_blocked_logs_missing_and_switch(monkeypatch, capsys):
     """P0：未授权时预热不安装，但必须把「缺谁 + 怎么开」写进启动日志"""
-
-    async def fake_ensure_npm_bin():
-        return None
 
     async def fake_ensure_all_installed():
         return {
@@ -386,7 +380,6 @@ def test_prewarm_blocked_logs_missing_and_switch(monkeypatch, capsys):
             ],
         }
 
-    monkeypatch.setattr(server, "ensure_npm_bin_on_path", fake_ensure_npm_bin)
     monkeypatch.setattr(
         server.backend_manager, "ensure_all_installed", fake_ensure_all_installed
     )
@@ -402,13 +395,9 @@ def test_prewarm_blocked_logs_missing_and_switch(monkeypatch, capsys):
 def test_prewarm_swallows_failures(monkeypatch, capsys):
     """预热异常必须被吞掉：服务照常就绪，退化为首次调用时按需安装"""
 
-    async def fake_ensure_npm_bin():
-        return None
-
     async def boom():
         raise RuntimeError("模拟预热炸了")
 
-    monkeypatch.setattr(server, "ensure_npm_bin_on_path", fake_ensure_npm_bin)
     monkeypatch.setattr(server.backend_manager, "ensure_all_installed", boom)
     run(server._prewarm_backends())  # 不抛异常即通过
 
@@ -417,23 +406,37 @@ def test_prewarm_swallows_failures(monkeypatch, capsys):
     assert "不影响服务" in err
 
 
-def test_prewarm_patches_path_before_installing(monkeypatch):
-    """A7：预热必须先补 PATH 再判断依赖——网关裁剪 PATH 时不补就会
-    把已装好的包误判成缺失，白跑一次数十秒的安装"""
-    order = []
+def test_prewarm_does_not_probe_npm_unconditionally(monkeypatch):
+    """#28 续：预热**不再**无条件补 PATH——自愈已下放到 ensure_installed 慢路径
 
-    async def fake_ensure_npm_bin():
-        order.append("path")
+    原用例是 `test_prewarm_patches_path_before_installing`（A7：必须先补 PATH
+    再判断依赖，断言 `order == ["path", "install"]`）。那条契约在 #28 之后被
+    取代：PATH 自愈改由 `BackendClient.ensure_installed()` 在「当前 PATH 判不
+    到」时才做，预热不再替所有条目预付这次 `npm prefix -g`（实测 1.8s，冷机
+    可达 6.5s）。
+
+    这里**反向钉住新契约**：预热一次都不该碰 PATH 自愈。反向而不是删掉，是
+    因为「预热里又加回一次无条件自愈」是很容易悄悄回来的性能退化，而它不会
+    让任何功能断言变红——只有这种计数断言抓得住。
+    """
+    probes: list[str] = []
+    order: list[str] = []
+
+    async def spy_ensure_npm_bin():
+        probes.append("path")
         return None
 
     async def fake_ensure_all_installed():
         order.append("install")
         return {"success": True, "total": 1, "available": 1, "installed": 0, "details": []}
 
-    monkeypatch.setattr(server, "ensure_npm_bin_on_path", fake_ensure_npm_bin)
+    # 钉在 backend_client 命名空间：ensure_installed 的慢路径调的是模块全局，
+    # 预热若哪天又加回无条件自愈，拿到的就是这个 spy，必然变红。
+    monkeypatch.setattr(backend_client, "ensure_npm_bin_on_path", spy_ensure_npm_bin)
     monkeypatch.setattr(
         server.backend_manager, "ensure_all_installed", fake_ensure_all_installed
     )
     run(server._prewarm_backends())
 
-    assert order == ["path", "install"]
+    assert order == ["install"], f"预热没走完依赖检测：{order}"
+    assert probes == [], f"预热又在做无条件 PATH 自愈了（性能退化）：{probes}"
