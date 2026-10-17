@@ -4,7 +4,10 @@
 建议的三类测试落地：
 
 1. **枚举完整性**：`ErrorType` 常量枚举的值集合 == `SKILL.md`「错误处理
-   约定」声明的集合——把「文档 vs 代码」的漂移变成显红，而非静默；
+   约定」与 `docs/format.md`「错误返回约定」两份文档各自声明的集合
+   （各 16 种，任何一份漂移即红）——把「文档 vs 代码」的漂移变成显红，
+   而非静默。format.md 的枚举段是手写区（不在生成区块，
+   `test_docs_sync` 的生成块校验管不到），必须由本守卫单独看住；
 2. **A 层站点守卫**：清点单 §3.1 的 14 个客户端可达失败站点（经
    `ensure_success()` 转 `ToolError` 进协议）逐个真实触发，断言载荷带
    合法 `errorType`（合法集 = `ErrorType.all()`，含 `backend_installing`）
@@ -35,6 +38,7 @@ from errors import ErrorType, ToolError  # noqa: E402
 from launcher_client import LauncherError  # noqa: E402
 
 SKILL_PATH = ROOT / "SKILL.md"
+FORMAT_PATH = ROOT / "docs" / "format.md"
 TESTS_DIR = Path(__file__).parent
 
 
@@ -83,24 +87,38 @@ def _manager_with_client(client: BackendClient) -> BackendManager:
     return manager
 
 
-# ---- 1. 枚举完整性：代码 == SKILL.md 声明 ----
+# ---- 1. 枚举完整性：代码 == SKILL.md + docs/format.md 声明 ----
 
 
-def _skill_declared_error_types() -> set:
-    """解析 SKILL.md「错误处理约定」的 errorType 取值段"""
-    text = SKILL_PATH.read_text(encoding="utf-8")
-    segment = text.split("`errorType` 取值：", 1)[1].split("。", 1)[0]
+def _declared_error_types(doc_path: Path) -> set:
+    """解析文档中 errorType 枚举段（反引号包裹、`/` 分隔、可跨行）。
+
+    两份文档的锚点体例相同：以「`errorType`（取值）：「开头，列表以
+    句号（SKILL.md）或空行（format.md）收尾。
+    """
+    text = doc_path.read_text(encoding="utf-8")
+    head = text.split("`errorType`", 1)[1].split("：", 1)[1]
+    segment = re.split(r"。|\n\s*\n", head, maxsplit=1)[0]
     return set(re.findall(r"`([a-z_]+)`", segment))
 
 
-def test_error_type_enum_matches_skill_doc():
-    """ErrorType 值集合必须与 SKILL.md 声明的集合一致（16 种）"""
-    declared = _skill_declared_error_types()
-    assert len(declared) == 16, f"SKILL.md 声明了 {len(declared)} 种，预期 16"
-    assert declared == set(ErrorType.all()), (
-        f"文档与代码漂移：文档多出 {declared - set(ErrorType.all())}，"
-        f"代码多出 {set(ErrorType.all()) - declared}"
+def _assert_doc_enum_matches(doc_path: Path) -> None:
+    """单份文档的枚举 == ErrorType.all()；报错指明是哪份文档漂移"""
+    declared = _declared_error_types(doc_path)
+    legal = set(ErrorType.all())
+    label = doc_path.name
+    assert declared, f"{label} 解析不到任何 errorType 取值，解析器可能错了"
+    assert declared == legal, (
+        f"{label} 的 errorType 枚举与 ErrorType.all() 不一致："
+        f"{label} 多出 {sorted(declared - legal)}，"
+        f"缺少 {sorted(legal - declared)}"
     )
+
+
+def test_error_type_enum_matches_docs():
+    """代码枚举必须与两份文档（SKILL.md 契约 + format.md 规范）各自一致"""
+    _assert_doc_enum_matches(SKILL_PATH)
+    _assert_doc_enum_matches(FORMAT_PATH)
 
 
 # ---- 2. A 层 14 站点守卫：失败必带合法 errorType ----
