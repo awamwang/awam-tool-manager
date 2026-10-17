@@ -315,6 +315,84 @@ def test_run_action_blocked_without_confirmation():
     assert payload["errorType"] == "destructive_blocked"
 
 
+def _patch_launcher_gate(monkeypatch, **entry_extra):
+    """把 registry.get_tool 打成一个带指定门禁字段的启动器条目"""
+    import server  # noqa: PLC0415
+
+    monkeypatch.setattr(
+        server.registry,
+        "get_tool",
+        lambda tool_id: {
+            "id": tool_id,
+            "kind": "launcher",
+            "destructive": True,
+            **entry_extra,
+        },
+    )
+    return server
+
+
+def test_run_action_with_destructive_actions_allows_unlisted(monkeypatch):
+    """ARC-P1-05：配了 destructiveActions 后，未命中的动作直接执行"""
+    server = _patch_launcher_gate(monkeypatch, destructiveActions=["*卸载*"])
+    calls = []
+
+    async def fake_run(tool_id, action_id=None, action_name=None, param=None, wait=None):
+        calls.append((tool_id, action_id))
+        return {"success": True, "message": "已执行"}
+
+    monkeypatch.setattr(server.launcher_manager, "run_action", fake_run)
+
+    text = asyncio.run(
+        server.dispatch_tool(
+            "run_launcher_action", {"tool_id": "quicker", "action_id": "open-browser"}
+        )
+    )
+    payload = json.loads(text)
+    assert payload["success"] is True
+    assert calls == [("quicker", "open-browser")]
+
+
+def test_run_action_with_destructive_actions_blocks_match(monkeypatch):
+    """ARC-P1-05：配了 destructiveActions 后，命中动作仍拦；确认后才执行"""
+    server = _patch_launcher_gate(monkeypatch, destructiveActions=["*卸载*"])
+    calls = []
+
+    async def fake_run(tool_id, action_id=None, action_name=None, param=None, wait=None):
+        calls.append((tool_id, action_id))
+        return {"success": True, "message": "已执行"}
+
+    monkeypatch.setattr(server.launcher_manager, "run_action", fake_run)
+
+    # 动作名命中 glob（大小写/中文通配）→ 未确认拒绝
+    with pytest.raises(server.ToolError) as exc:
+        asyncio.run(
+            server.dispatch_tool(
+                "run_launcher_action",
+                {"tool_id": "quicker", "action_id": "x", "action_name": "卸载微信"},
+            )
+        )
+    payload = json.loads(str(exc.value))
+    assert payload["errorType"] == "destructive_blocked"
+    assert "卸载微信" in payload["error"], "拒绝消息应带上命中的具体动作"
+    assert calls == [], "未确认的命中动作不得执行"
+
+    # 显式确认后可执行
+    text = asyncio.run(
+        server.dispatch_tool(
+            "run_launcher_action",
+            {
+                "tool_id": "quicker",
+                "action_id": "x",
+                "action_name": "卸载微信",
+                "allowDestructive": True,
+            },
+        )
+    )
+    assert json.loads(text)["success"] is True
+    assert calls == [("quicker", "x")]
+
+
 def test_list_actions_needs_no_confirmation():
     """列/搜是只读的，不该被 destructive 门禁拦"""
     import server  # noqa: PLC0415

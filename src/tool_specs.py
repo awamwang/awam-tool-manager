@@ -27,6 +27,7 @@ except ImportError:  # pragma: no cover
 
 from errors import ErrorType, ToolError, fail, ensure_success  # noqa: F401（handler 侧经本模块转手）
 from launcher_client import LauncherError
+from policy import decide_destructive
 
 if TYPE_CHECKING:  # 运行期零耦合：handler 只从 ctx 取 manager，不 import 它们
     from backend_client import BackendManager
@@ -99,25 +100,26 @@ SHARED_OUTPUT_SCHEMA: dict = {
 # 必报 NameError，第一批测试即红）。
 
 
-def _needs_destructive_confirm(tool: dict | None, sub_tool: str) -> bool:
-    """判断转发到 `sub_tool` 是否需要 `allowDestructive` 显式确认。
+def _lookup_action_type(
+    ctx: ToolContext, tool_id: str, action_id: str | None, action_name: str | None
+) -> str:
+    """从动作清单缓存里取动作的 `type`（id 优先，其次 name）；找不到返回空串。
 
-    A12（2026-10-16）：破坏性实际属于「子工具」，不是「整个后端」。
-    接入 winget-mcp 时实测——它同时提供纯查询 `find-winget-packages` 与
-    会装软件的 `install-winget-package`，而条目级 `destructive=true` 一刀切，
-    导致连查询都被拦（错误信息还笼统地指向整个后端）。
-
-    规则：
-    - 条目未标 `destructive` → 不拦（保持既有行为）
-    - 标了 `destructive` 且未配 `destructiveTools` → 整后端都拦（旧语义，不回退）
-    - 标了 `destructive` 且配了 `destructiveTools` → 只拦清单内的子工具
+    `type` 只用于 `destructiveActions` 的 glob 匹配；动作清单是 partial 时
+    （只有 ID、没有名称/类型）返回空串，匹配自然落空——附录 A 的既定语义：
+    宁可漏拦（未命中）也不误放，部署者需按实际清单核对模式。
+    缓存缺失 / 损坏不应影响门禁主流程，吞掉异常按空处理。
     """
-    if not tool or not tool.get("destructive"):
-        return False
-    listed = tool.get("destructiveTools")
-    if listed is None:
-        return True
-    return sub_tool in listed
+    try:
+        catalog = ctx.store.load_launcher_catalog(tool_id) or {}
+    except Exception:  # noqa: BLE001 —— 缓存问题不阻断门禁
+        return ""
+    for action in catalog.get("actions") or []:
+        if action_id and action.get("id") == action_id:
+            return action.get("type") or ""
+        if action_name and action.get("name") == action_name:
+            return action.get("type") or ""
+    return ""
 
 
 async def _handle_search_tools(arguments: dict, ctx: ToolContext) -> dict:
@@ -217,19 +219,21 @@ async def _handle_call_backend_tool(arguments: dict, ctx: ToolContext) -> dict:
     tool_name = arguments.get("tool_name", "")
     backend_args = arguments.get("arguments") or {}
 
-    # A2：数据里的 destructive 之前只是个装饰字段，被无差别转发。
-    # 这里把门禁落到转发前：命中判定的调用必须显式确认，否则默认拒绝
-    # （A12 起判定下放到子工具粒度，见 _needs_destructive_confirm）。
+    # A2/A12 → ARC-P1-05 Phase 1：判定收敛到 policy.decide_destructive
+    # （判定表与审计见 src/policy.py）。mcp 未配置 destructiveTools 时整后端拦，
+    # 与接入前逐字等价；判定只算一次，转发后的 warning 复用同一结果。
     target_tool = ctx.registry.get_tool(tool_id)
-    if _needs_destructive_confirm(target_tool, tool_name):
-        if not arguments.get("allowDestructive"):
-            fail(
-                f"目标工具 '{tool_id}' 的子工具 '{tool_name}' 被判定为 destructive，"
-                f"需显式传 allowDestructive=true 才会转发调用",
-                error_type=ErrorType.DESTRUCTIVE_BLOCKED,
-                toolId=tool_id,
-                toolName=tool_name,
-            )
+    decision = decide_destructive(
+        "mcp", target_tool, {"tool_name": tool_name}, arguments
+    )
+    if decision["blocked"]:
+        fail(
+            decision["reason"],
+            error_type=ErrorType.DESTRUCTIVE_BLOCKED,
+            toolId=tool_id,
+            toolName=tool_name,
+        )
+    if decision["required_confirm"]:
         ctx.log(f"⚠️ 已确认转发到 destructive 工具: {tool_id}/{tool_name}")
 
     ctx.log(f"路由调用: {tool_id}/{tool_name}")
@@ -237,7 +241,7 @@ async def _handle_call_backend_tool(arguments: dict, ctx: ToolContext) -> dict:
         await ctx.backend_manager.call_backend_tool(tool_id, tool_name, backend_args)
     )
     # 与上面的拦截判定保持同源：免确认的子工具不该被标注成 destructive
-    if _needs_destructive_confirm(target_tool, tool_name):
+    if decision["required_confirm"]:
         res["warning"] = f"目标工具 '{tool_id}/{tool_name}' 被判定为 destructive"
     return res
 
@@ -324,22 +328,29 @@ async def _handle_list_launcher_actions(arguments: dict, ctx: ToolContext) -> di
 async def _handle_run_launcher_action(arguments: dict, ctx: ToolContext) -> dict:
     tool_id = arguments.get("tool_id", "")
     target_tool = ctx.registry.get_tool(tool_id)
-    # 执行动作是真的会跑起来（Quicker 动作可以是任何操作），
-    # 与 call_backend_tool 一致：条目标了 destructive 就要显式确认。
-    if target_tool and target_tool.get("destructive"):
-        if not arguments.get("allowDestructive"):
-            fail(
-                f"启动器 '{tool_id}' 被标记为 destructive，"
-                f"需显式传 allowDestructive=true 才会执行动作",
-                error_type=ErrorType.DESTRUCTIVE_BLOCKED,
-                toolId=tool_id,
-            )
+    # 执行动作是真的会跑起来（Quicker 动作可以是任何操作）：
+    # 条目未标 destructive → 放行；配了 destructiveActions → 只拦命中动作
+    # （glob）；未配 → 回退条目级全拦（与接入前逐字等价）。
+    action_id = arguments.get("action_id")
+    action_name = arguments.get("action_name")
+    sub_op = {"action_id": action_id, "action_name": action_name, "action_type": ""}
+    # 动作 type 只服务 glob 匹配；未配置 destructiveActions 时不引入额外 IO
+    if target_tool and target_tool.get("destructiveActions") is not None:
+        sub_op["action_type"] = _lookup_action_type(ctx, tool_id, action_id, action_name)
+    decision = decide_destructive("launcher", target_tool, sub_op, arguments)
+    if decision["blocked"]:
+        fail(
+            decision["reason"],
+            error_type=ErrorType.DESTRUCTIVE_BLOCKED,
+            toolId=tool_id,
+        )
+    if decision["required_confirm"]:
         ctx.log(f"⚠️ 已确认执行 destructive 启动器动作: {tool_id}")
     res = ensure_success(
         await ctx.launcher_manager.run_action(
             tool_id,
-            action_id=arguments.get("action_id"),
-            action_name=arguments.get("action_name"),
+            action_id=action_id,
+            action_name=action_name,
             param=arguments.get("param"),
             wait=arguments.get("wait"),
         )

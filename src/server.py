@@ -44,12 +44,11 @@ from schema import schema_backend_available
 # re-export，`from server import ToolError` 等外部引用拿到的仍是同一个类对象。
 from errors import ErrorType, ToolError, fail, ensure_success
 # P1-04：对外工具声明式注册表——list_tools 的定义源与 dispatch 的查表目标。
-# SHARED_OUTPUT_SCHEMA 已随常量搬到 tool_specs（连注释一起），
-# _needs_destructive_confirm 已随 handler 搬到 tool_specs；两者在这里
-# re-export 保护外部引用。
+# SHARED_OUTPUT_SCHEMA 已随常量搬到 tool_specs（连注释一起），这里 re-export
+# 保护外部引用。ARC-P1-05 Phase 1 起破坏性判定收敛到 policy.decide_destructive
+# （原 _needs_destructive_confirm 已删除，无外部引用）。
 from tool_specs import (
     SHARED_OUTPUT_SCHEMA,  # noqa: F401
-    _needs_destructive_confirm,  # noqa: F401
     ToolContext,
     build_mcp_tools,
     get_spec,
