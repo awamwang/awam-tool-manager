@@ -89,8 +89,16 @@ awam-tool-manager/
 │   └── runtime_paths.py      # 运行时目录解析 + 旧路径迁移
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 13 个用例文件 + 1 个手工 E2E 脚本，208 个用例（含真实 MCP 会话与文档漂移检测）
+└── tests/                    # 14 个用例文件，223 passed（含真实 MCP 会话与文档漂移检测）
+    └── e2e/                  # 真实子进程 / 真实 stdio 端到端层（ARC-P3-02）：6 个用例
+                              # **默认不收集**（起真实子进程、慢、依赖本机解释器），
+                              # 发布 / CI 前须显式跑 `pytest -m e2e -q`；另有
+                              # manual_install_gate.py（依赖本机 npm，手工跑，不进 pytest）
 ```
+
+> **用例数口径（2026-10-17 更新）**：`pytest tests/ -q` = **223 passed**（另有 6 个
+> e2e 用例被 deselect）。223 **不是**全部用例数——真实 e2e 层不进默认收集，
+> 总数应表述为「223（默认）+ 6（e2e，`pytest -m e2e`）= 229」。
 
 运行时数据（**不在仓库**，A14 起）：`%LOCALAPPDATA%\.awam-tool-manager/`
 （环境变量 `AWAM_RUNTIME_DIR` 可覆盖；server 启动时自动从旧路径迁移）

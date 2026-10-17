@@ -19,7 +19,11 @@
 负向证据——被拒之后后端**仍在 running**。若策略层被绕过，后端会被真的停掉，
 状态立刻变 stopped，这条断言就红。
 
-预算 ≤4s（独立进程）。
+**预算 6s（独立进程）——比设计文档原本写的 4s 多 2s，是刻意的取舍**：
+「后端零调用」这条断言只有在后端**真的活着**时才有意义（后端没起来的话，
+计数文件为 0 只是"没得调用"，什么都证明不了）。而把后端真拉起来要一次真实
+握手 ≈2.8s，是省不掉的硬成本。压回 4s 只有一条路——去掉 `start_backend`，
+那时证据就退化成空证据。**证据优先于预算**（2026-10-17 team-lead 裁决）。
 """
 
 import asyncio
@@ -162,7 +166,7 @@ def test_e2e_policy_deny_blocks_before_backend(e2e_repo, e2e_runtime, tmp_path):
         obs, log = asyncio.run(_run(e2e_repo, e2e_runtime, tmp_path))
         tail = log.tail(30)
 
-        print(f"\n[场景⑤] policy deny 端到端耗时 {obs['elapsed']:.2f}s（预算 4s）")
+        print(f"\n[场景⑤] policy deny 端到端耗时 {obs['elapsed']:.2f}s（预算 6s）")
 
         # ── 0) 前置：后端真的起来了（否则「零调用」是空话）────────────
         assert not obs["start_err"], f"start_backend 返回 isError：{obs['start']}\n{tail}"

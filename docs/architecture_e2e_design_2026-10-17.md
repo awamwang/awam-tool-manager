@@ -111,6 +111,17 @@
 - 两者共用新的 `tests/e2e/` stdio helper，消除 `StdioServerParameters` + stderr 采集的重复（`test_e2e_install_gate.py:76-93` 那段）。
 - 手工脚本文件头补一行指路：说明 e2e 框架在哪、哪些场景已自动化、本脚本为何保留。
 
+### 实施结果（2026-10-17，C 期落地）
+
+按本节建议拆分完毕，路径以本节**之后**的为准（上文 §1/§3 对
+`tests/test_e2e_install_gate.py` 的引用是设计时的快照，未回改）：
+
+- 自动化：`tests/e2e/test_e2e_install_gate.py`（未授权那一轮，探针写 tmp 副本）；
+- 手工：`tests/e2e/manual_install_gate.py`（`git mv` 保留历史，**去掉 `test_`
+  前缀**以免被 pytest import；已授权 → npm 真跑那轮；`errorType` 不确定性说明
+  原地保留）；
+- 两者都复用 `tests/e2e/helpers.py`，仓库 `data/` 零触碰。
+
 ---
 
 ## 6. 分阶段实施 + 工作量 + scope 边界

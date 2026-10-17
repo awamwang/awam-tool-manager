@@ -110,7 +110,12 @@ def copy_fixture(dest_dir: Path, name: str) -> Path:
 
 
 def pid_alive(pid: int) -> bool:
-    """进程是否还活着（**无残留子进程**断言的判定手段）。"""
+    """进程是否还活着（**无残留子进程**断言的判定手段）。
+
+    平台实现见 `_pid_alive_*`：Windows 走 `OpenProcess`，**不要换回
+    `tasklist`**（单次 0.7~1.5s，轮询时测量比被测事件还慢，会把「进程已退出」
+    的判定凭空推后 2s——第一版就是这么把场景③ 拖到 11s 的）。
+    """
     if pid <= 0:
         return False
     if os.name == "nt":

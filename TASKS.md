@@ -179,10 +179,34 @@
 - [x] 合计 **168 passed**（`c40d80d` 时点签署，9 个贡献用例的文件；P0 修复后为 183，见下节）；
      真实后端子进程启停 + 调用回归通过
 
-> 文件数口径：`tests/` 物理上有 10 个 `test_*.py`，其中
-> `tests/test_e2e_install_gate.py`（随 P0 修复提交）**collect 0 条用例**——
-> 一次性手工脚本，须 `python tests/test_e2e_install_gate.py` 单独跑。
-> 故「9 个文件」指贡献 pytest 用例的文件；规范写法「9 个用例文件 + 1 个手工 E2E 脚本」。
+> 文件数口径（2026-10-17 更新）：`tests/` 下有 **14 个** `test_*.py`（贡献 pytest
+> 用例），另有 `tests/e2e/` 下的 **6 个** e2e 用例文件——它们**默认不收集**
+> （`pytest.ini` 的 `addopts = -m "not e2e"`），须 `pytest -m e2e` 显式跑。
+> `tests/e2e/manual_install_gate.py`（原 `tests/test_e2e_install_gate.py`，C 期
+> 改名并去掉 `test_` 前缀）是**手工脚本**，依赖本机 npm，不进 pytest。
+
+#### 真实 e2e 用例的跑法（ARC-P3-02，2026-10-17 新增）
+
+**发布 / CI 前必须显式跑一次**：
+
+```
+"C:\Users\Administrator\.pyenv\pyenv-win\versions\3.12.0\python.exe" -m pytest -m e2e -q
+```
+
+- **为什么默认不跑**：这一层起**真实子进程 + 真实 MCP 会话**（起服、拉后端、
+  拆进程），单场景 2~6s、全量约 20~30s，且依赖本机解释器与 mcp SDK；放进默认
+  收集会让日常回归从 6s 变成 30s，还会把本机环境差异带进每次提交。
+  默认排除由 `pytest.ini` 的 `addopts = -m "not e2e"` 实现，命令行的 `-m e2e`
+  会覆盖它。
+- **当前 6 个场景**：① 起服 + `tools/list` ≡ golden、② 只读工具真调、
+  ③ 仓内假后端全链路（含无残留子进程断言）、④ resources / prompts 往返、
+  ⑤ policy deny 端到端（后端零调用）、⑥ install 门禁未授权不执行。
+- **口径**：`pytest tests/ -q` = 223 passed / **6 deselected**；
+  `pytest -m e2e -q` = 6 passed / 223 deselected。说「223」时要带上
+  「另有 6 个 e2e 默认不收集」，否则会被误读成总数。
+- **手工脚本**（不在上面 6 个里）：
+  `"<pyenv 3.12 python>" tests/e2e/manual_install_gate.py`——验「已授权时
+  install.command 真的被提交给 shell」，依赖本机 npm，故保留手工。
 
 ### 架构评审与 P0 修复（2026-10-16 深夜 评审 / 2026-10-17 修复）
 
@@ -212,6 +236,10 @@
       - **真实 stdio 端到端验证**（QA 指出的测试盲区，手工补）：
         `tests/test_e2e_install_gate.py` 用真实子进程 + 真实 MCP 会话跑两轮——
         未授权返回 `install_required` 且 stderr 无「执行安装」；授权后命令确实进 shell。
+        > 2026-10-17（#27 C 期）：该脚本已按设计 §5 **拆分**——「未授权」那轮
+        > 迁进自动化（`tests/e2e/test_e2e_install_gate.py`，探针写 tmp 副本），
+        > 「已授权 → npm 真跑」保留手工并改名 `tests/e2e/manual_install_gate.py`
+        > （去掉 `test_` 前缀，不再被 pytest import）。
 - [x] 顺带清掉的评审漂移：`architecture.md` §5.2 模块表（补 `runtime_paths.py` /
       `launcher_client.py`、行数改「约」并注明易腐）、§5.4 依赖自装描述重写、
       实现索引「12 个工具」→ 15；`README.md:13` `mcp>=1.9.0` → 1.29；
