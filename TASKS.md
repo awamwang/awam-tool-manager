@@ -201,8 +201,8 @@
 - **当前 6 个场景**：① 起服 + `tools/list` ≡ golden、② 只读工具真调、
   ③ 仓内假后端全链路（含无残留子进程断言）、④ resources / prompts 往返、
   ⑤ policy deny 端到端（后端零调用）、⑥ install 门禁未授权不执行。
-- **口径**：`pytest tests/ -q` = 223 passed / **6 deselected**；
-  `pytest -m e2e -q` = 6 passed / 223 deselected。说「223」时要带上
+- **口径**：`pytest tests/ -q` = 227 passed / **6 deselected**；
+  `pytest -m e2e -q` = 6 passed / 227 deselected。说「227」时要带上
   「另有 6 个 e2e 默认不收集」，否则会被误读成总数。
 - **手工脚本**（不在上面 6 个里）：
   `"<pyenv 3.12 python>" tests/e2e/manual_install_gate.py`——验「已授权时
