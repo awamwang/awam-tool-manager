@@ -21,6 +21,8 @@ import inspect
 import json
 import os
 import shutil
+import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -92,6 +94,150 @@ def write_tool_entry(repo_dir: Path, entry: dict) -> Path:
     path = repo_dir / "data" / "tools" / f"{entry['id']}.json"
     path.write_text(json.dumps(entry, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
+
+
+def copy_fixture(dest_dir: Path, name: str) -> Path:
+    """把 `tests/e2e/` 下的**非测试源文件**（假后端等）复制到 tmp。
+
+    为什么复制而不是把仓库路径直接写进条目：被测进程（网关及其拉起的后端）
+    应该只接触 tmp 里的世界。仓库路径一旦进被测进程，任何写回/缓存都会落到
+    仓库里，而 e2e 的价值恰恰是「被测进程真的做过什么」。
+    """
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    target = dest_dir / name
+    shutil.copy2(Path(__file__).parent / name, target)
+    return target
+
+
+def pid_alive(pid: int) -> bool:
+    """进程是否还活着（**无残留子进程**断言的判定手段）。"""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        return _win_pid_alive(pid)
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _win_pid_alive(pid: int) -> bool:
+    """Windows 上的存活判定：`OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`。
+
+    两条被否掉的路，都是实测否决的：
+
+    - `os.kill(pid, 0)`：Windows 没有「0 号信号」语义，CPython 落到
+      TerminateProcess 或直接 ValueError，用作探测是错的；
+    - `tasklist /FI "PID eq <pid>"`：**单次实测 0.7~1.5s**。而「无残留子进程」
+      是要**轮询**的——测量手段比被测事件还慢，会把判定凭空推后 2s（首次
+      实现就是这个坑，场景③ 因此跑到 11s）。
+
+    `ctypes` 是标准库，不引入新依赖；句柄拿到即关，不留泄漏。
+    """
+    import ctypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    handle = ctypes.windll.kernel32.OpenProcess(
+        PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+    )
+    if not handle:
+        return False
+    ctypes.windll.kernel32.CloseHandle(handle)
+    return True
+
+
+DEFAULT_FAKE_TOOL_ID = "_e2e_fake_backend"
+
+
+def fake_backend_entry(
+    fixtures_dir: Path,
+    pid_file: Path,
+    calls_file: Path,
+    tool_id: str = DEFAULT_FAKE_TOOL_ID,
+) -> dict:
+    """假后端条目（写进 **tmp 副本** 的 `data/tools/`，绝不写仓库 `data/`）。
+
+    场景③（全链路）与场景⑤（policy deny）共用同一份条目——同一个被测后端，
+    两条场景才有可比性。
+
+    `command` 用 `sys.executable`（绝对路径）是**防竞态的关键**：
+    `_target_available()` 为真 → `ensure_installed()` 在 `backend_client.py:494`
+    直接短路，根本不进安装 / 持锁路径（设计 §4.2）。
+    """
+    return {
+        "id": tool_id,
+        "name": "AwamE2EFakeBackend",
+        "displayName": "E2E 假后端",
+        "kind": "mcp",
+        "status": "installed",
+        "description": "e2e 探针：仓内最小 FastMCP 假后端，用于验证后端子进程全生命周期",
+        "tags": ["探针", "e2e"],
+        "connection": {
+            "type": "stdio",
+            "command": sys.executable,
+            # launch_detached 把假后端拉成孙进程：无残留断言因此覆盖整棵进程树
+            "args": [
+                str(fixtures_dir / "launch_detached.py"),
+                str(fixtures_dir / "fake_backend.py"),
+                str(pid_file),
+                str(calls_file),
+            ],
+            # mcp 会把它与自己的默认环境合并（PATH 等照旧继承）；
+            # PYTHONUTF8 是防御性的：子进程 stdout 编码不被 locale 带歪
+            # （无它时 Windows 子进程的 sys.stdout 是 cp936，见场景③ 文档）
+            "env": {"PYTHONUTF8": "1"},
+            # 显式超时：真失败时快速红，而不是等默认的 30s
+            "timeout": 20,
+        },
+    }
+
+
+def env_without_npm() -> dict[str, str]:
+    """给网关一个**不含 npm** 的 PATH（e2e 提速用，只影响 npm 解析这一件事）。
+
+    为什么需要：`ensure_installed()` 在判定启动目标是否缺失**之前**会无条件
+    跑一次 `npm prefix -g`（`backend_client.py:493`）。本机实测这条命令
+    **6.5s**，而服务启动预热（`server.py:369`）与 `start_backend` 会各跑一次
+    ——`_npm_bin_dir` 是没有锁的进程级缓存，预热那次还没回来时 start 会再起
+    一个 npm。场景③ 因此实测到 12s，远超 8s 预算。
+
+    裁掉 npm 后这条命令秒级失败（cmd 报「不是内部或外部命令」，rc=1），
+    `ensure_npm_bin_on_path` 静默返回 None——这正是它为「上游用裁剪过的环境
+    启动本服务」准备的路径。被测的**后端生命周期**不受影响：后端以
+    `sys.executable` 绝对路径拉起，不依赖 PATH。
+    """
+    if os.name != "nt":
+        return {}  # POSIX 上 npm prefix 是毫秒级，无需裁剪
+    system_root = os.environ.get("SystemRoot", r"C:\Windows")
+    return {
+        "PATH": os.pathsep.join(
+            [str(Path(system_root) / "System32"), str(Path(system_root))]
+        )
+    }
+
+
+def force_kill_tree(pid: int) -> None:
+    """兜底强杀整棵进程树——**只在用例收尾用，不作为「无残留」的断言手段**。
+
+    断言必须走 `pid_alive()`：先用强杀把现场清干净再来断言，等于自己证明
+    自己。这里的用途只有一个：用例因故提前失败（断言红、超时）时，不让后端
+    进程变成孤儿留在机器上。
+    """
+    if pid <= 0:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(pid)],
+                capture_output=True,
+                timeout=15,
+                check=False,  # 进程可能已经没了：强杀是尽力而为，失败不抛
+            )
+        else:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def build_env(runtime_dir: Path, extra: dict[str, str] | None = None) -> dict[str, str]:
