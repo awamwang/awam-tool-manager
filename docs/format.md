@@ -67,6 +67,7 @@
 | `readOnly` | `boolean` | - | 是否只读（对应 MCP 的 `readOnlyHint`） |
 | `destructive` | `boolean` | - | 是否有破坏性（对应 `destructiveHint`，`call_backend_tool` 会据此拦截） |
 | `destructiveTools` | `array<string>` | - | 子工具级破坏性清单：只有列在这里的后端子工具需要 `allowDestructive` 确认；未配置时回退到条目级 `destructive`（即整个后端的所有调用都要确认） |
+| `destructiveActions` | `array<string>` | - | 启动器动作级破坏性清单（glob，大小写不敏感）：按动作的 id/name/type 匹配，命中才需要 `allowDestructive` 确认；未配置时回退到条目级 `destructive`（即该启动器的所有动作都要确认） |
 | `metadata` | `object` | - | 扩展元数据，键值对自由 |
 | `createdAt` | `string` | - | 创建时间，ISO 8601 |
 | `updatedAt` | `string` | - | 更新时间，ISO 8601 |
@@ -218,7 +219,7 @@
 | `sync_backend_tools` | `tool_id`(必填) | 同步子工具目录 |
 | `sync_launcher_actions` | `tool_id`(必填) | 手动同步启动器动作清单 |
 | `list_launcher_actions` | `tool_id`(必填)、`keyword`、`limit`、`refresh` | 列出/搜索启动器动作（缓存超过 5 分钟自动重扫） |
-| `run_launcher_action` | `tool_id`(必填)、`action_id`/`action_name`(至少一个)、`param`、`wait`、`allowDestructive` | 执行启动器动作（条目或目标标记 `destructive` 时需 `allowDestructive=true`） |
+| `run_launcher_action` | `tool_id`(必填)、`action_id`/`action_name`(至少一个)、`param`、`wait`、`allowDestructive` | 执行启动器动作（条目或目标标记 `destructive` 时需 `allowDestructive=true`；配 `destructiveActions` 时按动作 id/name/type 的 glob 判定，仅命中的动作需确认） |
 
 ### Resources
 

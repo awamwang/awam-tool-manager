@@ -76,7 +76,7 @@ awam-tool-manager/
 | `set_backend_log_level` | `tool_id`、`level`(必填) | 设置后端日志级别（低于该级别的日志不再入队/打印） |
 | `sync_backend_tools` | `tool_id`(必填) | 手动同步子工具目录 |
 | `list_launcher_actions` | `tool_id`(必填)、`keyword`、`limit`、`refresh` | 列出/搜索启动器（Quicker）的动作；返回带 `lastSynced`/`source` |
-| `run_launcher_action` | `tool_id`(必填)、`action_id`、`action_name`、`param`、`wait`、`allowDestructive` | 执行启动器动作；条目标了 `destructive` 时需 `allowDestructive=true` |
+| `run_launcher_action` | `tool_id`(必填)、`action_id`、`action_name`、`param`、`wait`、`allowDestructive` | 执行启动器动作；条目标了 `destructive` 时需 `allowDestructive=true`（配了 `destructiveActions` 时按动作 id/name/type 的 glob 判定，仅命中的动作需确认） |
 | `sync_launcher_actions` | `tool_id`(必填) | 手动同步启动器动作清单 |
 
 > `kind=launcher`（启动器，如 Quicker）不是 MCP：没有长连接，调用是一次性外部命令
@@ -126,8 +126,14 @@ CallToolResult 透传；生产环境 pyenv 3.12 即 1.29.0）。
 ## 安全约定
 
 - 工具条目里的 `readOnly` / `destructive` 会映射到 MCP Tool annotations
-- `call_backend_tool` 转发前会检查目标工具的 `destructive`：
-  为 `true` 时必须显式传 `allowDestructive=true`，否则返回 `destructive_blocked`
+- **破坏性门禁**（`call_backend_tool` 转发前 / `run_launcher_action` 执行前）：
+  条目未标 `destructive` → 不拦；标了之后命中判定才需显式传
+  `allowDestructive=true`，否则返回 `destructive_blocked`。
+  - mcp：配 `destructiveTools` 时只拦清单内的子工具（精确匹配），未配则整个后端都拦；
+  - launcher：配 `destructiveActions`（新增可选字段，glob、大小写不敏感，匹配动作
+    `id`/`name`/`type` 任一）时只拦命中的动作，未配则所有动作都拦。默认不启用——
+    启用该字段等于放宽安全属性（未命中的动作由拦转放），须部署者按实际动作清单
+    核对后显式配置。
 - 不合规的 `data/tools/*.json` 会被跳过并向 stderr 告警，不会让整个服务不可用
 - **`install.command` 默认不被自动执行**（P0 修复）：它写在进版本库的数据文件里、
   且会经 shell 执行，旧逻辑让它在「服务启动预热」和 `start_backend` 两条路径上

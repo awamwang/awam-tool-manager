@@ -166,6 +166,15 @@ TOOL_ENTRY_SCHEMA: dict[str, Any] = {
                 " 确认；未配置时回退到条目级 `destructive`（即整个后端的所有调用都要确认）"
             ),
         },
+        "destructiveActions": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "启动器动作级破坏性清单（glob，大小写不敏感）：按动作的 id/name/type"
+                " 匹配，命中才需要 `allowDestructive` 确认；未配置时回退到条目级"
+                " `destructive`（即该启动器的所有动作都要确认）"
+            ),
+        },
         "metadata": {"type": "object", "description": "扩展元数据，键值对自由"},
         "createdAt": {"type": "string", "description": "创建时间，ISO 8601"},
         "updatedAt": {"type": "string", "description": "更新时间，ISO 8601"},
