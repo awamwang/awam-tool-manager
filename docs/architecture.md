@@ -78,6 +78,7 @@ awam-tool-manager/
 ├── src/
 │   ├── server.py             # MCP Server 入口：协议装配 + 薄分发 + 生命周期
 │   ├── tool_specs.py         # 对外 MCP 工具声明式注册表（SSOT：15 条 spec + handlers）
+│   ├── policy.py             # 破坏性门禁统一判定（decide_destructive + 结构化审计）
 │   ├── errors.py             # 业务错误出口（ToolError / fail / ensure_success）
 │   ├── store.py              # JSON 存储层（tools 走仓库，缓存走运行时目录）
 │   ├── registry.py           # 工具注册中心（含条目校验过滤）
@@ -87,7 +88,7 @@ awam-tool-manager/
 │   └── runtime_paths.py      # 运行时目录解析 + 旧路径迁移
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 11 个用例文件 + 1 个手工 E2E 脚本，191 个用例（含真实 MCP 会话与文档漂移检测）
+└── tests/                    # 13 个用例文件 + 1 个手工 E2E 脚本，208 个用例（含真实 MCP 会话与文档漂移检测）
 ```
 
 运行时数据（**不在仓库**，A14 起）：`%LOCALAPPDATA%\.awam-tool-manager/`
@@ -226,6 +227,7 @@ awam-tool-manager/
 | `launcher_client.py` | 405 | 启动器适配器（非 MCP，Quicker）：动作清单解析/搜索、一次性外部命令调用 | `store` |
 | `errors.py` | 86 | 业务错误出口：`ErrorType` 常量枚举 + `ToolError` / `fail` / `ensure_success`（P1-04 从 server.py 原样搬出——tool_specs 的 handlers 要用，留在 server.py 会形成循环 import；server 命名空间继续 re-export；P1-03 补齐枚举至 16 种） | 标准库 |
 | `tool_specs.py` | 730 | 对外 MCP 工具声明式注册表（SSOT）：15 条 `ServerToolSpec`（name/description/inputSchema/annotations/handler 同条记录）+ 15 个 handler + `build_mcp_tools()` / `get_spec()` / `validate_specs()`（import 期自检：重名/空 handler/非法注解键快速失败） | `mcp`、`errors`、`launcher_client` |
+| `policy.py` | 约 210（易腐，Phase 2 起将增长） | 破坏性门禁统一判定 `decide_destructive(kind, tool, sub_op, args)`：mcp 子工具精确匹配 / launcher 动作级 glob（`destructiveActions`）/ 缺省回退条目级；输出 `Decision`（blocked / required_confirm / reason）并产出结构化审计行（decision / rule_hit / client_declared，Phase 1 落 stderr） | `errors`（经 handler 间接）、标准库 |
 | `server.py` | 464 | MCP 协议入口：协议装配 + 查表薄分发（`dispatch_tool` 约 10 行）+ Resources/Prompts + 生命周期（启动预热/状态恢复），启动时后台检测依赖 + 恢复期望状态 | `mcp`、`store`、`registry`、`backend_client`、`runtime_paths`、`launcher_client`、`schema`、`errors`、`tool_specs` |
 | `scripts/generate_format_doc.py` | 148 | 读 `schema.py` 渲染字段表并就地替换 `docs/format.md` 的生成区块；`--check` 做漂移检查 | 标准库、`schema` |
 
@@ -526,7 +528,7 @@ python src/server.py
 | `server.py` `call_tool` | `tools/call` 入口，含意外异常兜底 |
 | `server.py` `dispatch_tool` | 15 个工具的查表分发（`get_spec` → handler → 统一 `json.dumps`；未命中即 `unknown_tool`） |
 | `launcher_client.py` `LauncherClient` | 启动器（非 MCP）适配器：`_scan_quicker` 解析动作清单、**先 json.loads 再取字符串**才能拿到动作名；`run_action` 走一次性外部命令（`-c<秒> "runaction:<ID>?参数"`），输出按 GBK 解码、失败按文本判定（退出码恒为 0） |
-| `tool_specs.py` `_needs_destructive_confirm` | 子工具级破坏性判定（A12）：条目配了 `destructiveTools` 时只拦清单内的后端子工具，未配则回退条目级 `destructive`；与拦截判定同源，warning 标注不再误加（P1-04 随 handler 搬入 tool_specs.py） |
+| `policy.py` `decide_destructive` | 统一破坏性门禁（ARC-P1-05 Phase 1，取代 `tool_specs.py` 的 `_needs_destructive_confirm`）：mcp 子工具精确匹配（`destructiveTools`）/ launcher 动作级 glob（`destructiveActions`，大小写不敏感，匹配动作 id/name/type）/ 缺省回退条目级；未配置新字段时与旧行为逐字等价（`tests/test_policy_gate.py` 冻结旧逻辑对照锁定）；输出 `Decision` + 结构化审计行（decision / rule_hit / client_declared） |
 | `server.py` `read_resource` | 返回 `Iterable[ReadResourceContents]` |
 | `server.py` `main` | stdio 事件循环 + 启动后台预热任务 `_prewarm_backends()`，`finally` 取消预热并关闭全部后端 |
 | `store.py` `load_json` / `save_json` | JSON 读写：读有容错（坏文件跳过），写走 `mkstemp` + `os.replace` 原子替换 |

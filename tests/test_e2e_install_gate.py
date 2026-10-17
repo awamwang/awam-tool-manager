@@ -117,6 +117,10 @@ async def main() -> int:
         is_error, payload, log = await _call_start_backend(authorized=True)
         print("\n── 场景 2：已授权（AWAM_AUTO_INSTALL=1）──────────")
         print(f"isError      : {is_error}")
+        # errorType 受「预热安装 vs start_backend 竞态」影响：服务启动预热
+        # 持锁安装中时，start 走 A14 返回 backend_installing；安装已结束则是
+        # A11 的 runtime_error——两个取值都合法，故本场景不对该字段断言
+        # （2026-10-17 QA 连跑 4 次实测 3×runtime_error / 1×backend_installing）。
         print(f"errorType    : {payload.get('errorType')}")
         print(f"message      : {payload.get('message')}")
         print(f"stderr 命中  : 执行安装={'执行安装' in log}")

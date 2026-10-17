@@ -106,7 +106,14 @@
 - [x] **A12 子工具级破坏性门禁** - 破坏性实际属于「子工具」而非「整个后端」：
       新增 `destructiveTools` 字段（schema + `docs/format.md` 自动同步），配置后只拦截
       清单内的后端子工具，未配置则回退条目级 `destructive` 语义；拦截判定与
-      warning 标注共用 `_needs_destructive_confirm`，避免免确认调用被误标
+      warning 标注共用同一判定结果（P1-05 起收敛为 `policy.decide_destructive`），
+      避免免确认调用被误标
+- [x] **P1-05 Phase 1 动作级门禁**（2026-10-17）- 破坏性判定收敛到统一入口
+      `policy.decide_destructive`（判定表 + 结构化审计行 decision/rule_hit/client_declared）：
+      `run_launcher_action` 支持 `destructiveActions`（glob，大小写不敏感，匹配动作
+      id/name/type），命中才拦；未配置回退条目级全拦（现语义不回退）；未配置新字段时
+      与旧行为逐字等价（`tests/test_policy_gate.py` 冻结旧逻辑对照锁定）；
+      `data/tools/quicker.json` 不启用该字段（默认行为零变更）
 
 ### 测试覆盖
 - [x] `tests/test_registry.py` - store / registry 基础路径
