@@ -1,0 +1,3891 @@
+{
+ "extractedAt": "2026-10-18T01:50:00+08:00",
+ "source": "C:\\Users\\Administrator\\AppData\\Roaming\\uTools\\plugins",
+ "utoolsVersion": "7.8.0",
+ "mcpEndpoint": "http://127.0.0.1:3501/mcp",
+ "pluginCount": 44,
+ "featureCount": 163,
+ "mcpToolCount": 25,
+ "plugins": [
+  {
+   "asar": "0412829cd76c7a4c3ca082863c96648c.asar",
+   "name": "zwzkgjca",
+   "pluginName": "latex公式编辑&识别",
+   "description": "这款插件是一款方便快捷的latex公式编辑工具，可以轻松编辑公式以及识别图片中的公式。通过该插件，可以快速输入，识别和编辑公式，并支持以多种格式导出。",
+   "version": "2.0.0",
+   "author": "拓之",
+   "homepage": null,
+   "features": [
+    {
+     "code": "main",
+     "explain": "latex公式识别",
+     "keywords": [
+      "latex"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "截图latex",
+     "explain": "截图识别公式",
+     "keywords": [
+      "截图latex",
+      "截图识别公式",
+      "jl"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "latex_ocr",
+     "explain": "latex公式识别",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "img",
+       "label": "OCR_Latex"
+      }
+     ]
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "050d40d1b1d83487228990787e4a257a.asar",
+   "name": "zjvgjfz6",
+   "pluginName": "AI Anywhere",
+   "description": "呼吸般顺畅的AI Agent（支持MCP、SKILL）",
+   "version": "2.13.2",
+   "author": "Komorebi",
+   "homepage": null,
+   "features": [
+    {
+     "code": "Anywhere Settings",
+     "explain": "设置页面",
+     "keywords": [
+      "Anywhere Settings"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "Resume Conversation",
+     "explain": "恢复聊天",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "files",
+       "label": "恢复聊天",
+       "fileType": "file",
+       "match": "/\\.(json)$/i"
+      },
+      {
+       "type": "over",
+       "label": "恢复聊天",
+       "maxLength": 99999999999
+      }
+     ]
+    },
+    {
+     "code": "append_global",
+     "explain": "追问",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "over",
+       "label": "追问",
+       "maxLength": 99999999999
+      },
+      {
+       "type": "img",
+       "label": "追问"
+      },
+      {
+       "type": "files",
+       "label": "追问",
+       "match": "/.*/i"
+      }
+     ]
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "09d3779e929dfaff355db5013429abfe.asar",
+   "name": "hosts",
+   "pluginName": "hosts 切换",
+   "description": "管理你的hosts文件",
+   "version": "2.1.1",
+   "author": "uTools 团队",
+   "homepage": "https://u.tools",
+   "features": [
+    {
+     "code": "hosts",
+     "explain": "hosts切换",
+     "keywords": [
+      "hosts"
+     ],
+     "matchers": []
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "1a95c68108e591e80d6800f213cdad44.asar",
+   "name": "a7bbcb77",
+   "pluginName": "文件夹助手",
+   "description": "设置常用文件夹并快速打开，将选中文件快速移至常用/已打开文件夹，在另存窗口快速切换至常用/已打开文件夹",
+   "version": "1.0.1",
+   "author": "云之轩",
+   "homepage": "",
+   "features": [
+    {
+     "code": "open",
+     "explain": "打开常用文件夹",
+     "keywords": [
+      "open"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "cd",
+     "explain": "切换常用文件夹",
+     "keywords": [
+      "cd"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "add",
+     "explain": "添加常用文件夹",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "files",
+       "fileType": "directory",
+       "label": "设置为常用文件夹",
+       "minNum": 1
+      }
+     ]
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "1f872b3ed4771109af0c9fff6a16ef07.asar",
+   "name": "3e1009f8",
+   "pluginName": "JavaScript 文档",
+   "description": "JavaScript MDN 文档",
+   "version": "1.0.0",
+   "author": "uTools官方",
+   "homepage": "https://u.tools",
+   "features": [
+    {
+     "code": "javascript",
+     "explain": "JavaScript MDN 文档速查",
+     "keywords": [
+      "JavaScript"
+     ],
+     "matchers": []
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "2d93b2288333c07d7fb1a657e3302297.asar",
+   "name": "zw1wobfx",
+   "pluginName": "闪电启动",
+   "description": "永久免费-快速对软件分类, 快速 打开/批量打开 文件夹/应用/uTools 插件/网址 支持插件别名 支持对应用集中管理(文件/文件夹/uTools 插件/网址) 闪电启动,音速启动,通过分类",
+   "version": "1.6.12",
+   "author": "xiaou",
+   "homepage": "https://www.github.com/xiaou66",
+   "features": [
+    {
+     "code": "setting",
+     "explain": "闪电启动设置",
+     "keywords": [
+      "ssetting",
+      "rsetting"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "init",
+     "explain": "闪电初始化, 多设备使用, 出现应用无法启动使用",
+     "keywords": [
+      "sinit",
+      "init"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "magnet",
+     "explain": "闪电盒子",
+     "keywords": [
+      "magnet",
+      "闪电盒子",
+      "sBoxView"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "tabView",
+     "explain": "闪电Tab",
+     "keywords": [
+      "sTabView",
+      "闪电Tab"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "ListView",
+     "explain": "闪电列表-显示所有的分类",
+     "keywords": [
+      "sListView",
+      "闪电列表"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "ListAllApp",
+     "explain": "闪电目录和应用应用列表",
+     "keywords": [
+      "sListAllAppView",
+      "闪电目录和应用应用列表"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "ListDirectoryApp",
+     "explain": "闪电目录列表",
+     "keywords": [
+      "sListDirectoryApp",
+      "闪电目录列表"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "ListApp",
+     "explain": "闪电应用列表",
+     "keywords": [
+      "sListApp",
+      "闪电应用列表"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "ListPlugApp",
+     "explain": "utools 安装全部插件",
+     "keywords": [
+      "sListPlug",
+      "闪电插件列表"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "historyList",
+     "explain": "闪电启动历史",
+     "keywords": [
+      "闪电启动历史",
+      "sListHistory"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "addApp",
+     "explain": "闪电启动-增加",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "files",
+       "label": "增加应用-闪电启动",
+       "minLength": 1
+      },
+      {
+       "type": "regex",
+       "label": "增加书签-闪电启动",
+       "match": "/^https?:\\/\\/(?:localhost|(?:(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]\\d|\\d)(?:\\.(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]\\d|\\d)){3})|(?:(?:[a-z\\u00a1-\\uffff0-9]-*)*[a-z\\u00a1-\\uffff0-9]+)(?:\\.(?:[a-z\\u00a1-\\uffff0-9]-*)*[a-z\\u00a1-\\uffff0-9]+)*(?:\\.(?:[a-z\\u00a1-\\uffff]{2,}))\\.?)(?::\\d{2,5})?(?:[/?#][^\\s\"]*)?$/",
+       "minLength": 8
+      },
+      {
+       "type": "window",
+       "label": "增加书签-闪电启动",
+       "match": {
+        "app": [
+         "chrome.exe",
+         "360chrome.exe",
+         "firefox.exe",
+         "MicrosoftEdge.exe",
+         "360se.exe",
+         "iexplore.exe",
+         "msedge.exe",
+         "Google Chrome.app",
+         "Safari.app",
+         "Microsoft Edge.app",
+         "chrome",
+         "firefox",
+         "SogouExplorer.exe"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "code": "commandList",
+     "explain": "闪电启动命令列表-包含闪电启动全部的命令",
+     "keywords": [
+      "sListCommand"
+     ],
+     "matchers": []
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "31a41e423007d871cf4febd4a9ed05c0.asar",
+   "name": "colorHelper",
+   "pluginName": "颜色助手",
+   "description": "颜色、AI 配置、图片色卡、UI 色卡、传统色、渐变色、收藏颜色",
+   "version": "5.0.1",
+   "author": "uTools 团队",
+   "homepage": "https://u.tools",
+   "features": [
+    {
+     "code": "color",
+     "explain": "颜色",
+     "keywords": [
+      "Color",
+      "颜色"
+     ],
+     "matchers": [
+      {
+       "type": "regex",
+       "maxLength": 50,
+       "match": "/^(?:#[a-f0-9]{3}|#?[a-f0-9]{6}|#[a-f0-9]{8});?$|^(?:(?:25[0-5]|2[0-4]\\d|1?\\d{1,2})(?:, *| +)){2}(?:25[0-5]|2[0-4]\\d|1?\\d{1,2})$|^rgba?\\((?:(?:25[0-5]|2[0-4]\\d|1?\\d{1,2})(?:, *| +)){2}(?:25[0-5]|2[0-4]\\d|1?\\d{1,2})|^hs[liv]a?\\((?:360|(?:(?:3[0-5]\\d|[1-2]\\d{2}|\\d{1,2})(?:\\.\\d{1,15})?))(?:deg)?(?:, *| +)(?:100|\\d{1,2}(?:\\.\\d{1,15})?)%?(?:, *| +)(?:100|\\d{1,2}(?:\\.\\d{1,15})?)%?/i",
+       "label": "颜色"
+      }
+     ]
+    },
+    {
+     "code": "ui",
+     "explain": "",
+     "keywords": [
+      "UI 色卡"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "traditional",
+     "explain": "故宫二十四节气 • 384 种中国传统色、465 种日本传统色",
+     "keywords": [
+      "传统色"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "gradient",
+     "explain": "渐变色合集",
+     "keywords": [
+      "渐变色"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "image",
+     "explain": "图片颜色提取，可以生成色卡图片",
+     "keywords": [
+      "图片色卡"
+     ],
+     "matchers": [
+      {
+       "type": "img",
+       "label": "图片色卡"
+      },
+      {
+       "type": "files",
+       "fileType": "file",
+       "match": "/\\.(?:jpg|jpeg|png)$/i",
+       "maxLength": 1,
+       "label": "图片色卡"
+      }
+     ]
+    },
+    {
+     "code": "collect",
+     "explain": "收藏颜色",
+     "keywords": [
+      "收藏颜色"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "pickercolor",
+     "explain": "屏幕取色",
+     "keywords": [
+      "屏幕取色"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "ai",
+     "explain": "AI 配色",
+     "keywords": [
+      "AI 配色"
+     ],
+     "matchers": [
+      {
+       "type": "regex",
+       "maxLength": 50,
+       "match": "/^(?:#[a-f0-9]{3}|#?[a-f0-9]{6}|#[a-f0-9]{8});?$|^(?:(?:25[0-5]|2[0-4]\\d|1?\\d{1,2})(?:, *| +)){2}(?:25[0-5]|2[0-4]\\d|1?\\d{1,2})$|^rgba?\\((?:(?:25[0-5]|2[0-4]\\d|1?\\d{1,2})(?:, *| +)){2}(?:25[0-5]|2[0-4]\\d|1?\\d{1,2})|^hs[liv]a?\\((?:360|(?:(?:3[0-5]\\d|[1-2]\\d{2}|\\d{1,2})(?:\\.\\d{1,15})?))(?:deg)?(?:, *| +)(?:100|\\d{1,2}(?:\\.\\d{1,15})?)%?(?:, *| +)(?:100|\\d{1,2}(?:\\.\\d{1,15})?)%?/i",
+       "label": "AI 配色"
+      }
+     ]
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "327430a8b8c66e8a5dc98ba1f0346b8f.asar",
+   "name": "5a0f786f",
+   "pluginName": "whistle",
+   "description": "whistle",
+   "version": "1.2.2",
+   "author": "Leo",
+   "homepage": "https://xuebin.me",
+   "features": [
+    {
+     "code": "whistle",
+     "explain": "whistle 控制面板",
+     "keywords": [
+      "w2",
+      "whistle"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "network",
+     "explain": "whistle 控制台",
+     "keywords": [
+      "w2-network",
+      "whistle"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "rules",
+     "explain": "whistle 规则",
+     "keywords": [
+      "w2-rules",
+      "whistle"
+     ],
+     "matchers": []
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "348849af834c82e39aefb7f14cc82fcf.asar",
+   "name": "zoclq1ma",
+   "pluginName": "汇率转换",
+   "description": "一个简单的汇率转换工具，基于ExchangeRate-API。",
+   "version": "1.0.2",
+   "author": "荣6呀",
+   "homepage": "https://rong6.cn",
+   "features": [
+    {
+     "code": "ExchangeRate",
+     "explain": "汇率转换",
+     "keywords": [
+      "汇率",
+      "汇率转换",
+      "转换",
+      "exchangerate"
+     ],
+     "matchers": []
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "39ef56804e5e0287087246cc026c8a32.asar",
+   "name": "f22b64c3",
+   "pluginName": "Github助手",
+   "description": "搜索github上的项目以及查看指定用户所有的项目及star过的项目",
+   "version": "0.1.1",
+   "author": "云之轩",
+   "homepage": "",
+   "features": [
+    {
+     "code": "repo",
+     "explain": "搜索github上的项目",
+     "keywords": [
+      "GitRepo"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "home",
+     "explain": "查看指定用户所有的项目",
+     "keywords": [
+      "GitHome"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "star",
+     "explain": "查看指定用户star过的项目",
+     "keywords": [
+      "GitStar"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "user",
+     "explain": "设置查询的用户",
+     "keywords": [
+      "GitUser"
+     ],
+     "matchers": []
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "3bfa4499ac324d6afe3d5de406fc6867.asar",
+   "name": "a27e6dc1",
+   "pluginName": "开发者助手",
+   "description": "提供多种开发者工具",
+   "version": "2.0.2",
+   "author": "blowsnow",
+   "homepage": "https://github.com/utools-blowsnow/web-developer",
+   "features": [
+    {
+     "code": "open",
+     "explain": "开发者工具",
+     "keywords": [
+      "开发者工具"
+     ],
+     "matchers": []
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "3dde73d52626c2ea4d71d763a08f6a86.asar",
+   "name": "a99f2c32",
+   "pluginName": "jenkins",
+   "description": "jenkins插件, 可搜索jenkins，构建项目和查看最后构建时间，查看构建进度等",
+   "version": "0.0.7",
+   "author": "me10zyl",
+   "homepage": "https://github.com/me10zyl/utools-jenkins",
+   "features": [
+    {
+     "code": "jenkins",
+     "explain": "搜索jenkins",
+     "keywords": [
+      "jenkins",
+      "jk"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "jenkins-set",
+     "explain": "设置jenkins URL、用户名、密码",
+     "keywords": [
+      "jenkins-set",
+      "jk-set"
+     ],
+     "matchers": []
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "3f4f62d25ef23cdf8f1dfdbd40fcdef5.asar",
+   "name": "zypiuj0v",
+   "pluginName": "图片批量处理",
+   "description": "图片压缩、格式转换、修改尺寸、添加水印、添加圆角、添加边框、补边留白、裁剪、旋转、翻转、合并为图片、合并为 PDF、合并为动图、手动裁剪",
+   "version": "2.2.5",
+   "author": "uTools 团队",
+   "homepage": "https://u.tools",
+   "features": [
+    {
+     "code": "pics",
+     "explain": "图片压缩、格式转换、修改尺寸、添加水印、添加圆角、添加边框、补边留白、裁剪、旋转、翻转、合并为图片、合并为 PDF、合并为动图、手动裁剪",
+     "keywords": [
+      "图片批量处理"
+     ],
+     "matchers": [
+      {
+       "type": "files",
+       "fileType": "file",
+       "extensions": [
+        "jpg",
+        "jpeg",
+        "png",
+        "svg",
+        "webp",
+        "tiff",
+        "avif",
+        "heic",
+        "bmp",
+        "gif",
+        "ico"
+       ],
+       "label": "图片批量处理"
+      },
+      {
+       "type": "img",
+       "label": "图片批量处理"
+      }
+     ]
+    },
+    {
+     "code": "read-dir",
+     "explain": "读取文件夹内所有图片进行批量处理",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "files",
+       "fileType": "directory",
+       "maxLength": 1,
+       "label": "读取文件夹内所有图片"
+      }
+     ]
+    },
+    {
+     "code": "free-crop",
+     "explain": "图片批量手动裁剪",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "files",
+       "fileType": "file",
+       "extensions": [
+        "jpg",
+        "jpeg",
+        "png",
+        "webp",
+        "tiff",
+        "avif",
+        "heic",
+        "bmp",
+        "ico"
+       ],
+       "label": "手动裁剪"
+      },
+      {
+       "type": "img",
+       "label": "手动裁剪"
+      }
+     ]
+    },
+    {
+     "code": "merge",
+     "explain": "将多张图片合并为一张图片",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "files",
+       "fileType": "file",
+       "minLength": 2,
+       "extensions": [
+        "jpg",
+        "jpeg",
+        "png",
+        "svg",
+        "webp",
+        "tiff",
+        "avif",
+        "heic",
+        "bmp"
+       ],
+       "label": "合并为图片"
+      }
+     ]
+    }
+   ],
+   "mcpTools": {
+    "image_info": {
+     "description": "获取图片的基础信息，包括尺寸、格式、文件大小等。",
+     "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+       "inputPath": {
+        "type": "string",
+        "format": "uri",
+        "description": "图片文件路径"
+       }
+      },
+      "required": [
+       "file"
+      ]
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string",
+        "format": "uri",
+        "description": "图片文件路径"
+       },
+       "name": {
+        "type": "string",
+        "description": "文件名（包含扩展名）"
+       },
+       "alias": {
+        "type": "string",
+        "description": "文件别名（用于处理重名文件）"
+       },
+       "basename": {
+        "type": "string",
+        "description": "基本文件名（不包含扩展名）"
+       },
+       "ext": {
+        "type": "string",
+        "description": "文件扩展名（小写）"
+       },
+       "size": {
+        "type": "number",
+        "description": "文件大小（字节）"
+       },
+       "width": {
+        "type": "number",
+        "description": "图片宽度（像素）"
+       },
+       "height": {
+        "type": "number",
+        "description": "图片高度（像素）"
+       },
+       "animated": {
+        "type": "boolean",
+        "description": "是否为动画图片（如 GIF、WebP 动画）"
+       },
+       "density": {
+        "type": "number",
+        "description": "图片DPI密度",
+        "nullable": true
+       },
+       "chromaSubsampling": {
+        "type": "string",
+        "description": "色度子采样格式",
+        "nullable": true
+       }
+      },
+      "required": [
+       "path",
+       "name",
+       "size",
+       "width",
+       "height",
+       "ext"
+      ]
+     }
+    },
+    "image_compress": {
+     "description": "压缩图片以减小文件大小，同时尽量保持图像质量，适用于各种图片格式。",
+     "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+       "inputPath": {
+        "type": "string",
+        "format": "uri",
+        "description": "图片文件路径"
+       },
+       "quality": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 100,
+        "default": 80,
+        "description": "压缩质量，可选，0-100，值越高越清晰文件越大，默认80"
+       },
+       "maxSize": {
+        "type": "number",
+        "minimum": 0,
+        "description": "目标文件大小（KB），可选，留空表示无限制",
+        "nullable": true
+       }
+      },
+      "required": [
+       "inputPath",
+       "quality"
+      ]
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "outputPath": {
+        "type": "string",
+        "format": "uri",
+        "description": "压缩后的图片文件路径"
+       },
+       "originalSize": {
+        "type": "number",
+        "description": "原始文件大小（字节）"
+       },
+       "compressedSize": {
+        "type": "number",
+        "description": "压缩后文件大小（字节）"
+       },
+       "compressionRatio": {
+        "type": "number",
+        "description": "压缩比率（百分比）"
+       }
+      },
+      "required": [
+       "outputPath",
+       "originalSize",
+       "compressedSize",
+       "compressionRatio"
+      ]
+     }
+    },
+    "image_convert": {
+     "description": "将图片转换为指定的格式，支持多种常见图片格式。",
+     "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+       "inputPath": {
+        "type": "string",
+        "format": "uri",
+        "description": "图片文件路径"
+       },
+       "format": {
+        "type": "string",
+        "description": "目标图片格式",
+        "enum": [
+         "png",
+         "jpg",
+         "jpeg",
+         "webp",
+         "tiff",
+         "avif",
+         "gif",
+         "svg",
+         "bmp",
+         "ico"
+        ]
+       }
+      },
+      "required": [
+       "inputPath",
+       "format"
+      ]
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "outputPath": {
+        "type": "string",
+        "format": "uri",
+        "description": "转换后的图片文件路径"
+       },
+       "originalSize": {
+        "type": "number",
+        "description": "原始文件大小（字节）"
+       },
+       "convertedSize": {
+        "type": "number",
+        "description": "转换后文件大小（字节）"
+       },
+       "originalFormat": {
+        "type": "string",
+        "description": "原始图片格式"
+       },
+       "targetFormat": {
+        "type": "string",
+        "description": "目标图片格式"
+       }
+      },
+      "required": [
+       "outputPath",
+       "originalSize",
+       "convertedSize",
+       "originalFormat",
+       "targetFormat"
+      ]
+     }
+    },
+    "image_resize": {
+     "description": "修改图片尺寸，支持像素值或百分比指定宽度和高度，提供多种缩放方式。",
+     "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+       "inputPath": {
+        "type": "string",
+        "format": "uri",
+        "description": "图片文件路径"
+       },
+       "width": {
+        "type": "string",
+        "description": "图片宽度，可以是像素值（如 800）或百分比（如 50%）"
+       },
+       "height": {
+        "type": "string",
+        "description": "图片高度，可以是像素值（如 600）或百分比（如 50%）"
+       },
+       "fit": {
+        "type": "string",
+        "enum": [
+         "cover",
+         "contain",
+         "fill",
+         "inside",
+         "outside"
+        ],
+        "default": "cover",
+        "description": "缩放方式，当同时指定宽度和高度时生效：cover-填满画面（裁边），contain-完整显示（留空白），fill-拉伸填满（变形），inside-保留完整（可能小），outside-至少覆盖（可能超出）"
+       }
+      },
+      "required": [
+       "inputPath"
+      ]
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "outputPath": {
+        "type": "string",
+        "format": "uri",
+        "description": "修改尺寸后的图片文件路径"
+       },
+       "originalWidth": {
+        "type": "number",
+        "description": "原始图片宽度（像素）"
+       },
+       "originalHeight": {
+        "type": "number",
+        "description": "原始图片高度（像素）"
+       },
+       "newWidth": {
+        "type": "number",
+        "description": "新图片宽度（像素）"
+       },
+       "newHeight": {
+        "type": "number",
+        "description": "新图片高度（像素）"
+       },
+       "fit": {
+        "type": "string",
+        "description": "使用的缩放方式"
+       }
+      },
+      "required": [
+       "outputPath",
+       "originalWidth",
+       "originalHeight",
+       "newWidth",
+       "newHeight"
+      ]
+     }
+    },
+    "image_watermark": {
+     "description": "为图片添加文字水印，支持自定义文本、字体、颜色、透明度、旋转角度、位置和平铺效果。",
+     "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+       "inputPath": {
+        "type": "string",
+        "format": "uri",
+        "description": "图片文件路径"
+       },
+       "text": {
+        "type": "string",
+        "description": "水印文本内容"
+       },
+       "fontSize": {
+        "type": "integer",
+        "minimum": 10,
+        "maximum": 200,
+        "default": 24,
+        "description": "字体大小，10-200，默认24"
+       },
+       "fontColor": {
+        "type": "string",
+        "default": "#597EF7",
+        "description": "字体颜色，十六进制颜色代码，默认#597EF7"
+       },
+       "opacity": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100,
+        "default": 50,
+        "description": "透明度，1-100，默认50"
+       },
+       "angle": {
+        "type": "integer",
+        "minimum": -180,
+        "maximum": 180,
+        "default": 0,
+        "description": "旋转角度，-180到180度，默认0"
+       },
+       "padding": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 1000,
+        "default": 10,
+        "description": "文字四周内边距，0-1000，默认10"
+       },
+       "tile": {
+        "type": "boolean",
+        "default": false,
+        "description": "是否平铺水印，默认false"
+       },
+       "margin": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 500,
+        "default": 50,
+        "description": "平铺水印时间距，0-500，默认50（仅当tile=true时有效）"
+       },
+       "position": {
+        "type": "string",
+        "enum": [
+         "left top",
+         "top",
+         "right top",
+         "left",
+         "center",
+         "right",
+         "left bottom",
+         "bottom",
+         "right bottom"
+        ],
+        "default": "center",
+        "description": "水印位置，默认center。当tile=true时此参数无效。"
+       }
+      },
+      "required": [
+       "inputPath",
+       "text"
+      ]
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "outputPath": {
+        "type": "string",
+        "format": "uri",
+        "description": "添加水印后的图片文件路径"
+       },
+       "originalSize": {
+        "type": "number",
+        "description": "原始文件大小（字节）"
+       },
+       "watermarkedSize": {
+        "type": "number",
+        "description": "添加水印后文件大小（字节）"
+       },
+       "text": {
+        "type": "string",
+        "description": "实际使用的水印文本"
+       },
+       "fontSize": {
+        "type": "integer",
+        "description": "实际使用的字体大小"
+       },
+       "fontColor": {
+        "type": "string",
+        "description": "实际使用的字体颜色"
+       },
+       "opacity": {
+        "type": "integer",
+        "description": "实际使用的透明度"
+       },
+       "angle": {
+        "type": "integer",
+        "description": "实际使用的旋转角度"
+       },
+       "tile": {
+        "type": "boolean",
+        "description": "是否平铺"
+       },
+       "position": {
+        "type": "string",
+        "description": "水印位置（如未平铺）"
+       }
+      },
+      "required": [
+       "outputPath",
+       "originalSize",
+       "watermarkedSize",
+       "text",
+       "fontSize",
+       "fontColor",
+       "opacity",
+       "angle",
+       "tile"
+      ]
+     }
+    },
+    "image_corner": {
+     "description": "为图片添加圆角效果，支持像素值或百分比两种方式指定圆角半径。",
+     "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+       "inputPath": {
+        "type": "string",
+        "format": "uri",
+        "description": "图片文件路径"
+       },
+       "radius": {
+        "type": "string",
+        "description": "圆角半径，可以是像素值（如 10）或百分比（如 10%），百分比表示相对于图片较小边长的比例"
+       }
+      },
+      "required": [
+       "inputPath",
+       "radius"
+      ]
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "outputPath": {
+        "type": "string",
+        "format": "uri",
+        "description": "添加圆角后的图片文件路径"
+       },
+       "radius": {
+        "type": "number",
+        "description": "实际使用的圆角半径（像素值）"
+       }
+      },
+      "required": [
+       "outputPath",
+       "radius"
+      ]
+     }
+    },
+    "image_pad": {
+     "description": "为图片添加边距留白，支持设置上下左右四个方向的边距大小、背景颜色和透明度。",
+     "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+       "inputPath": {
+        "type": "string",
+        "format": "uri",
+        "description": "图片文件路径"
+       },
+       "top": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 10,
+        "description": "上边距（像素），非负整数，可选，默认10"
+       },
+       "bottom": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 10,
+        "description": "下边距（像素），非负整数，可选，默认10"
+       },
+       "left": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 10,
+        "description": "左边距（像素），非负整数，可选，默认10"
+       },
+       "right": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 10,
+        "description": "右边距（像素），非负整数，可选，默认10"
+       },
+       "color": {
+        "type": "string",
+        "default": "#000000",
+        "description": "背景颜色，十六进制颜色代码，可选，默认#000000（黑色）"
+       },
+       "opacity": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 100,
+        "default": 100,
+        "description": "透明度，0-100，可选，默认100（不透明）"
+       }
+      },
+      "required": [
+       "inputPath"
+      ]
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "outputPath": {
+        "type": "string",
+        "format": "uri",
+        "description": "添加边距后的图片文件路径"
+       }
+      },
+      "required": [
+       "outputPath"
+      ]
+     }
+    },
+    "image_rotate": {
+     "description": "旋转图片指定的角度，支持 -360 到 360 度之间的旋转。",
+     "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+       "inputPath": {
+        "type": "string",
+        "format": "uri",
+        "description": "图片文件路径"
+       },
+       "angle": {
+        "type": "integer",
+        "minimum": -360,
+        "maximum": 360,
+        "description": "旋转角度，-360 到 360 度之间的整数"
+       }
+      },
+      "required": [
+       "inputPath",
+       "angle"
+      ]
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "outputPath": {
+        "type": "string",
+        "format": "uri",
+        "description": "旋转后的图片文件路径"
+       },
+       "angle": {
+        "type": "integer",
+        "description": "实际应用的旋转角度"
+       }
+      },
+      "required": [
+       "outputPath",
+       "angle"
+      ]
+     }
+    },
+    "image_flip": {
+     "description": "翻转图片，支持左右翻转（水平翻转）和上下翻转（垂直翻转）。",
+     "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+       "inputPath": {
+        "type": "string",
+        "format": "uri",
+        "description": "图片文件路径"
+       },
+       "way": {
+        "type": "string",
+        "description": "翻转方向",
+        "enum": [
+         "horizontal",
+         "vertical"
+        ]
+       }
+      },
+      "required": [
+       "inputPath",
+       "way"
+      ]
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "outputPath": {
+        "type": "string",
+        "format": "uri",
+        "description": "翻转后的图片文件路径"
+       },
+       "way": {
+        "type": "string",
+        "description": "实际应用的翻转方向"
+       }
+      },
+      "required": [
+       "outputPath",
+       "way"
+      ]
+     }
+    },
+    "image_merge_to_pdf": {
+     "description": "将多张图片合并为一个PDF文件，支持多种页面大小和边距设置。",
+     "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+       "inputPaths": {
+        "type": "array",
+        "items": {
+         "type": "string",
+         "format": "uri"
+        },
+        "description": "图片文件路径数组，至少需要2张图片",
+        "minItems": 2
+       },
+       "pageSize": {
+        "type": "string",
+        "enum": [
+         "A4",
+         "A3",
+         "A5",
+         "Letter",
+         "auto"
+        ],
+        "default": "A4",
+        "description": "页面大小：A4、A3、A5、Letter或auto（自适应图片大小）, 可选，默认A4"
+       },
+       "padding": {
+        "type": "integer",
+        "enum": [
+         0,
+         18,
+         36
+        ],
+        "default": 0,
+        "description": "页面边距（像素）：0（无边距）、18（窄边距）、36（宽边距）, 可选，默认0"
+       }
+      },
+      "required": [
+       "inputPaths"
+      ]
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "outputPath": {
+        "type": "string",
+        "format": "uri",
+        "description": "生成的PDF文件路径"
+       },
+       "pageCount": {
+        "type": "integer",
+        "description": "PDF文件中的页面数（等于图片数量）"
+       },
+       "pageSize": {
+        "type": "string",
+        "description": "使用的页面大小"
+       },
+       "padding": {
+        "type": "integer",
+        "description": "使用的页面边距"
+       }
+      },
+      "required": [
+       "outputPath",
+       "pageCount",
+       "pageSize",
+       "padding"
+      ]
+     }
+    },
+    "image_merge_to_image": {
+     "description": "将多张图片合并为一张图片，支持竖向和横向排列，可设置页面尺寸、边距、间距和背景色。",
+     "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+       "inputPaths": {
+        "type": "array",
+        "items": {
+         "type": "string",
+         "format": "uri"
+        },
+        "description": "图片文件路径数组，至少需要2张图片",
+        "minItems": 2
+       },
+       "direction": {
+        "type": "string",
+        "enum": [
+         "vertical",
+         "horizontal"
+        ],
+        "default": "vertical",
+        "description": "合并方向：vertical（竖向排列）、horizontal（横向排列）, 可选，默认vertical"
+       },
+       "width": {
+        "type": "integer",
+        "minimum": 100,
+        "default": 1000,
+        "description": "页面宽度（像素），当direction为vertical时有效, 可选，默认1000"
+       },
+       "height": {
+        "type": "integer",
+        "minimum": 100,
+        "default": 600,
+        "description": "页面高度（像素），当direction为horizontal时有效, 可选，默认600"
+       },
+       "paddingTop": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 20,
+        "description": "页面上下边距（像素）, 可选，默认20"
+       },
+       "paddingLeft": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 20,
+        "description": "页面左右边距（像素）, 可选，默认20"
+       },
+       "margin": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 20,
+        "description": "图片间距（像素）, 可选，默认20"
+       },
+       "bgColor": {
+        "type": "string",
+        "default": "#ffffff",
+        "description": "页面背景色，十六进制颜色代码, 可选，默认#ffffff（白色）"
+       }
+      },
+      "required": [
+       "inputPaths"
+      ]
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "outputPath": {
+        "type": "string",
+        "format": "uri",
+        "description": "生成的图片文件路径"
+       },
+       "pageWidth": {
+        "type": "integer",
+        "description": "最终图片宽度（像素）"
+       },
+       "pageHeight": {
+        "type": "integer",
+        "description": "最终图片高度（像素）"
+       },
+       "imageCount": {
+        "type": "integer",
+        "description": "合并的图片数量"
+       }
+      },
+      "required": [
+       "outputPath",
+       "pageWidth",
+       "pageHeight",
+       "imageCount"
+      ]
+     }
+    },
+    "image_merge_to_gif": {
+     "description": "将多张图片合并为GIF动图，支持设置画面尺寸、帧间隔和背景色。",
+     "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+       "inputPaths": {
+        "type": "array",
+        "items": {
+         "type": "string",
+         "format": "uri"
+        },
+        "description": "图片文件路径数组，至少需要2张图片",
+        "minItems": 2
+       },
+       "width": {
+        "type": "integer",
+        "minimum": 20,
+        "default": 500,
+        "description": "GIF画面宽度（像素）, 可选，默认500"
+       },
+       "height": {
+        "type": "integer",
+        "minimum": 20,
+        "default": 500,
+        "description": "GIF画面高度（像素）, 可选，默认500"
+       },
+       "delay": {
+        "type": "number",
+        "minimum": 1,
+        "default": 1,
+        "description": "帧间隔时间（秒）, 可选，默认1秒"
+       },
+       "bgColor": {
+        "type": "string",
+        "default": "#ffffff",
+        "description": "画面背景色，十六进制颜色代码, 可选，默认#ffffff（白色）"
+       }
+      },
+      "required": [
+       "inputPaths"
+      ]
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "outputPath": {
+        "type": "string",
+        "format": "uri",
+        "description": "生成的GIF文件路径"
+       }
+      },
+      "required": [
+       "outputPath"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "asar": "3fe898e8224e84854f44e5393e0f0a74.asar",
+   "name": "a9dbcdbd",
+   "pluginName": "文件收藏",
+   "description": "收藏文件夹和文件, 添加到 utools 快速访问.",
+   "version": "0.0.7",
+   "author": "lanyuanxiaoyao",
+   "homepage": "http://lanyuanxiaoyao.com",
+   "features": [
+    {
+     "code": "collect",
+     "explain": "管理收藏的文件夹和文件",
+     "keywords": [
+      "收藏"
+     ],
+     "matchers": [
+      {
+       "type": "files",
+       "label": "添加到文件收藏",
+       "minLength": 1
+      },
+      {
+       "type": "window",
+       "label": "添加到文件收藏",
+       "match": {
+        "app": [
+         "Finder.app",
+         "explorer.exe"
+        ]
+       }
+      }
+     ]
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "42bfb158884fddf57503b1275c3b71b0.asar",
+   "name": "todo",
+   "pluginName": "ToDo 待办",
+   "description": "记录待办与灵感，支持悬浮桌面便签常驻提醒，并内置番茄钟专注计时。",
+   "version": "2.2.3",
+   "author": "uTools 团队",
+   "homepage": "https://u.tools",
+   "features": [
+    {
+     "code": "todo",
+     "explain": "创建/查看/调整所有待办事项",
+     "keywords": [
+      "ToDo 待办"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "add",
+     "explain": "添加到待办",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "over",
+       "label": "添加到待办"
+      }
+     ]
+    }
+   ],
+   "mcpTools": {
+    "todo_group_list": {
+     "description": "列出所有待办分组",
+     "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "groups": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "name": {
+           "type": "string",
+           "description": "分组名称"
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "todo_search": {
+     "description": "搜索待办事项，支持关键词、分组、状态、结束日期筛选",
+     "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+       "query": {
+        "type": "string",
+        "description": "关键词搜索（可选）"
+       },
+       "group": {
+        "type": "string",
+        "description": "分组名称筛选（可选）"
+       },
+       "status": {
+        "type": "string",
+        "description": "按状态筛选：done=已完成，pending=未完成（可选）"
+       },
+       "dueAt": {
+        "type": "string",
+        "description": "结束日期筛选，格式：2025-12-31（可选）"
+       }
+      }
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "tasks": {
+        "type": "array",
+        "description": "搜索到的待办事项列表",
+        "items": {
+         "type": "object",
+         "properties": {
+          "id": {
+           "type": "string"
+          },
+          "text": {
+           "type": "string"
+          },
+          "group": {
+           "type": "string"
+          },
+          "completed": {
+           "type": "boolean"
+          },
+          "dueAt": {
+           "type": "string"
+          },
+          "completed_at": {
+           "type": "string"
+          },
+          "created_at": {
+           "type": "string"
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "todo_create": {
+     "description": "创建一个新的待办事项",
+     "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+       "content": {
+        "type": "string",
+        "description": "待办事项的内容（必填）"
+       },
+       "group": {
+        "type": "string",
+        "description": "分组名称，不存在则自动创建（可选）"
+       },
+       "dueAt": {
+        "type": "string",
+        "description": "结束日期，格式：2025-12-31（可选）"
+       }
+      },
+      "required": [
+       "content"
+      ]
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "id": {
+        "type": "string",
+        "description": "创建的待办事项ID"
+       },
+       "text": {
+        "type": "string",
+        "description": "待办事项的内容"
+       },
+       "group": {
+        "type": "string",
+        "description": "分组名称"
+       },
+       "dueAt": {
+        "type": "string",
+        "description": "结束日期"
+       },
+       "created_at": {
+        "type": "string",
+        "description": "创建时间"
+       }
+      }
+     }
+    },
+    "todo_update": {
+     "description": "根据 patch 字段更新待办事项",
+     "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+       "id": {
+        "type": "string",
+        "description": "待办事项的ID（必填）"
+       },
+       "patch": {
+        "type": "object",
+        "description": "要更新的字段",
+        "properties": {
+         "content": {
+          "type": "string",
+          "description": "更新待办内容"
+         },
+         "status": {
+          "type": "string",
+          "description": "更新状态：done=已完成，pending=未完成"
+         },
+         "dueAt": {
+          "type": "string",
+          "description": "更新结束日期，格式：2024-12-31"
+         },
+         "group": {
+          "type": "string",
+          "description": "更新分组名称，不存在则自动创建"
+         }
+        }
+       }
+      },
+      "required": [
+       "id",
+       "patch"
+      ]
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "id": {
+        "type": "string"
+       },
+       "text": {
+        "type": "string"
+       },
+       "group": {
+        "type": "string"
+       },
+       "completed": {
+        "type": "boolean"
+       },
+       "dueAt": {
+        "type": "string"
+       },
+       "updated": {
+        "type": "boolean"
+       }
+      }
+     }
+    },
+    "todo_pin_to_screen": {
+     "description": "将待办分组固定到桌面小组件",
+     "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+       "filter": {
+        "type": "object",
+        "description": "筛选条件",
+        "properties": {
+         "group": {
+          "type": "array",
+          "items": {
+           "type": "string"
+          },
+          "description": "分组名称列表（可选）"
+         },
+         "status": {
+          "type": "string",
+          "description": "按状态筛选：done=已完成，pending=未完成（可选）"
+         }
+        }
+       }
+      }
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "pinned": {
+        "type": "boolean",
+        "description": "是否固定成功"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "asar": "500df2e4b31a164294d72bd635ccf520.asar",
+   "name": "upassword",
+   "pluginName": "密码管理器",
+   "description": "uTools 官方开源、安全、简洁的密码管理器，包含独立的随机密码生成器",
+   "version": "2.2.0",
+   "author": "福州猿力信息科技有限公司",
+   "homepage": "https://u.tools",
+   "features": [
+    {
+     "code": "passwords",
+     "explain": "uTools 官方开源、安全、简洁的密码管理器",
+     "keywords": [
+      "Passwords",
+      "密码管理"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "random",
+     "explain": "随机密码生成器",
+     "keywords": [
+      "随机密码"
+     ],
+     "matchers": []
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "562aaa8150c6d99b1acb7a0a614eae29.asar",
+   "name": "jsoneditor",
+   "pluginName": "JSON 编辑器",
+   "description": "JSON 格式化处理",
+   "version": "1.7.1",
+   "author": "福州猿力信息科技有限公司",
+   "homepage": "https://u.tools",
+   "features": [
+    {
+     "code": "json",
+     "explain": "Json 格式化编辑",
+     "keywords": [
+      "Json"
+     ],
+     "matchers": [
+      {
+       "type": "regex",
+       "minLength": 2,
+       "match": "/^\\s*(\\{[\\s\\S]*\\}|\\[[\\s\\S]*\\])\\s*$/",
+       "label": "Json"
+      },
+      {
+       "type": "files",
+       "fileType": "file",
+       "maxLength": 1,
+       "match": "/\\.json$/i",
+       "label": "Json"
+      }
+     ]
+    },
+    {
+     "code": "urlparams2json",
+     "explain": "URL Params 转 JSON",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "regex",
+       "minLength": 6,
+       "match": "/^(?:[^\\s=&]{1,40}=[^\\s=&]*&)+[^\\s=&]{1,40}=[^\\s=&]*$/",
+       "label": "URL Params 转 JSON"
+      }
+     ]
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "5a5a740e0ce54523570c275c090bf0ef.asar",
+   "name": "abd93144",
+   "pluginName": "资源搜索 Lite",
+   "description": "海纳百川, 搜遍天下, 轻量版的资源搜索",
+   "version": "0.2.50",
+   "author": "lanyuanxiaoyao",
+   "homepage": "http://lanyuanxiaoyao.com",
+   "features": [
+    {
+     "code": "list",
+     "explain": "展示所有支持的站点",
+     "keywords": [
+      "All Site",
+      "所有站点",
+      "全部站点"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "97542cba-e5d3-41fd-b990-46e9a4a5c5d4",
+     "explain": "A BitTorrent Library for Japanese Media",
+     "keywords": [
+      "東京 図書館",
+      "tokyotosho"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "43e259b9-abd3-465f-bd22-7bdc8ad907a2",
+     "explain": "A BitTorrent community focused on Eastern Asian media including anime, manga, music, and more",
+     "keywords": [
+      "Nyaa"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "afee8741-8deb-4a34-8827-7ec0cc4fd651",
+     "explain": "网盘资源搜索，就用罗马盘 - 最好用的百度网盘搜索引擎",
+     "keywords": [
+      "罗马盘"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "52e8bdc3-84bc-495c-a406-b053a94fc825",
+     "explain": "专业网盘搜索引擎-56网盘搜索为您带来最佳网盘搜索体验",
+     "keywords": [
+      "56网盘"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "bb32f4ff-06ad-4709-b0c3-fb648ea210bd",
+     "explain": "小白盘帮收录了大量的网盘资源,页面清新，实时检查失效资源.帮您省心快速找到想要的电影,电视剧,小说,文档,音乐,软件,种子等热门网盘资源",
+     "keywords": [
+      "小白盘"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "0d3e0c9f-a9c9-40c5-999a-e67519aabac4",
+     "explain": "小可搜搜，有你更方便",
+     "keywords": [
+      "小可搜搜"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "98b54ae1-5ac4-43a9-b1e5-83cb64932952",
+     "explain": "简单好用的BT搜索引擎",
+     "keywords": [
+      "雨花阁"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "2a534ba1-c675-4cd9-80e6-b6e58598ddc4",
+     "explain": "Torrent Kitty - Free Torrent To Magnet Link Conversion Service",
+     "keywords": [
+      "Torrent Kitty"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "179363b0-2305-4732-8c7d-8ae5777fb151",
+     "explain": "超人搜索（www.crsoso.com）最好用的磁力链接搜索。",
+     "keywords": [
+      "超人搜索"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "b9ad410f-d655-4880-ba06-ee0c7cab3fec",
+     "explain": "搜番",
+     "keywords": [
+      "搜番",
+      "sofan"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "b5a76675-1d23-468e-b6a1-6845f217b3e3",
+     "explain": "BTSOW - The free online torrent file to magnet link conversion, magnet link to torrent file conversion, Search magnet link and Search torrent file.",
+     "keywords": [
+      "BTSOW"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "c4546f52-a602-4776-8e87-f05e01343d09",
+     "explain": "Download music, movies, games, software! The Pirate Bay - The galaxy's most resilient BitTorrent site",
+     "keywords": [
+      "海盗湾",
+      "The Pirate Bay"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "aa9c4d00-b805-412f-8bc5-10ce12ea78a2",
+     "explain": "Download verified torrents: movies, music, games, software",
+     "keywords": [
+      "1377X"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "9e3d4593-c279-4e02-8891-854c96b1ebee",
+     "explain": "The official YTS YIFY Movies Torrents website. Download free yify movies torrents in 720p, 1080p and 3D quality. The fastest downloads at the smallest size.",
+     "keywords": [
+      "YTS.MS"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "13e17cb5-ab9d-470d-8a59-13123f5897c8",
+     "explain": "Download torrents at Zooqle",
+     "keywords": [
+      "Zooqle"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "6d939c65-4f9c-47b7-864d-6d185b0d5bcd",
+     "explain": "EZTV, your one stop source for all your favorite TV shows. FREE downloads! Watch more TV Series than ever. EZTV is releasing daily new episodes. SAFE!",
+     "keywords": [
+      "EZTV"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "5bfd545b-9cc5-47df-a515-15f7f0d0f68a",
+     "explain": "IBit - Verified Torrent Search Engine. find &amp; download torrents, movies, music, games, software, tv shows, &amp; other downloads. download a verified bittorrent for free.",
+     "keywords": [
+      "iBit"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "bbf01d3b-55d8-4a62-9928-58caf01f32df",
+     "explain": "bilibili是国内知名的视频弹幕网站，这里有最及时的动漫新番，最棒的ACG氛围，最有创意的Up主。大家可以在这里找到许多欢乐。",
+     "keywords": [
+      "哔哩哔哩弹幕网",
+      "Bilibili"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "904562ca-18e3-4e45-87f6-339b50a44879",
+     "explain": "爱奇艺（iQIYI.COM）是拥有海量、优质、高清的网络视频的大型视频网站，专业的网络视频播放平台。爱奇艺影视内容丰富多元，涵盖电影、电视剧、动漫、综艺、生活、音乐、搞笑、财经、军事、体育、片花、资讯、微电影、儿童、母婴、教育、科技、时尚、原创、公益、游戏、旅游、拍客、汽车、纪录片、爱奇艺自制剧等剧目。视频播放清晰流畅，操作界面简单友好，真正为用户带来“悦享品质”的在线观看体验。",
+     "keywords": [
+      "iqiyi",
+      " 爱奇艺"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "9777491c-2a30-43e3-9008-60fb0a0d24a6",
+     "explain": "100影视网（100yingshi.com），每天搜集互联网最新电影和电视剧，为广大用户免费提供无广告在线观看电影和电视剧服务，及时收录最新、最热、最全的电影大片,高清正版免费看。",
+     "keywords": [
+      "100影视网"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "404af31f-0fe6-42e8-922b-9f45d628ea99",
+     "explain": "最好的迅雷电影下载网，分享最新电影，高清电影、综艺、动漫、电视剧、韩剧、港剧、台剧、泰剧、欧美剧、日剧等下载！",
+     "keywords": [
+      "1231d电影网"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "9792b981-b78a-4afe-8657-6fb1cb5ba385",
+     "explain": "蜗牛视频为您提供最新电影,好看的电影,新电视剧大全，经典动漫，推荐好看的热门综艺大全全集等免费高清视频在线观看。",
+     "keywords": [
+      "蜗牛影院"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "90b35a14-d7af-4171-bdae-f9ff3c98e8b7",
+     "explain": "91美剧网，一个可在线观看美剧的视频网站，美剧爱好者的在线美剧天堂。提供高清、流畅、无广告的观看体验。",
+     "keywords": [
+      "91美剧"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "c0de6c06-ca67-474b-8a8d-23bf14d88866",
+     "explain": "91影院,91视频,91,91视频在线观看,91福利视频,福利在线,手机电影院,免费影院,神马影院,福利区,国产影院",
+     "keywords": [
+      "91影院"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "caac0d94-29f4-4a70-afbf-7c71239d6732",
+     "explain": "豆角电影网为您提供最新免费高清电影,迅雷下载,最新电视剧在线观看,视频格式有720P 1024p高清rmvb,及mkv等影音资源-豆角电影网。",
+     "keywords": [
+      "豆角电影网"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "21288140-5491-4aac-a827-e084bfa70ae2",
+     "explain": "npm is the world’s largest software registry. Open source developers from every continent use npm to share and borrow packages, and many organizations use npm to manage development as well.",
+     "keywords": [
+      "npm",
+      "JavaScript"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "a2387be5-1b9d-41df-b28a-246c972e492f",
+     "explain": "Official search of Maven Central Repository.",
+     "keywords": [
+      "Maven (Sonatype)",
+      "mvn (Sonatype)"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "3a3d7617-80ef-44f7-a369-9032f13aa9a0",
+     "explain": "GitHub is where people build software. More than 50 million people use GitHub to discover, fork, and contribute to over 100 million projects.",
+     "keywords": [
+      "Github"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "19880471-f92d-4d14-9705-45c9e8ded084",
+     "explain": "Gitee.com 是 OSCHINA.NET 推出的代码托管平台，支持 Git 和 SVN，提供免费的私有仓库托管。目前已有超过 500 万的开发者选择 Gitee。",
+     "keywords": [
+      "Gitee",
+      "码云"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "de83842d-4d2f-485c-be5a-02ad2a443664",
+     "explain": "Docker Hub is the world's easiest way to create, manage, and deliver your teams' container applications.",
+     "keywords": [
+      "Docker Hub"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "651c444e-1c66-457c-895d-2eea27c9a306",
+     "explain": "The Python Package Index (PyPI) is a repository of software for the Python programming language.",
+     "keywords": [
+      "PyPI",
+      "Python"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "2ebf794a-fb1c-4f55-9737-0db9da3878fe",
+     "explain": "RubyGems.org 是 Ruby 社区的 Gem 托管服务。让你能便捷、快速的发布、管理你的 Gem 以及安装它们。提供 API 查阅可用 Gem 的详细资料。",
+     "keywords": [
+      "RubyGems"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "9b429345-b2a3-4530-b726-d3395b2221a4",
+     "explain": "Pub is the package manager for the Dart programming language, containing reusable libraries & packages for Flutter, AngularDart, and general Dart programs.",
+     "keywords": [
+      "pub",
+      "Flutter"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "3e0cc26f-a96a-4f23-ac1c-48b9b87d825b",
+     "explain": "Pub is the package manager for the Dart programming language, containing reusable libraries & packages for Flutter, AngularDart, and general Dart programs.",
+     "keywords": [
+      "pub (CN)",
+      "Flutter (CN)"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "055ae385-097a-4598-8c7b-e3d43e1f404e",
+     "explain": "The NuGet Gallery is the central package repository for NuGet, the package manager for .NET.",
+     "keywords": [
+      "Nuget",
+      "C#"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "e0c9c31c-14c6-4c0d-a66f-b2a06e8b1a82",
+     "explain": "cargo is the package manager and crate host for rust",
+     "keywords": [
+      "Cargo",
+      "Rust"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "23934197-14c3-4ad9-879f-ca27527711b2",
+     "explain": "A website for submitting and distributing Lua rocks",
+     "keywords": [
+      "LuaRocks"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "97081e97-54e1-49ad-8558-4adce0f99f9f",
+     "explain": "The PHP Package Repository.",
+     "keywords": [
+      "Packagist",
+      "PHP"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "407e4687-094e-4ce4-86ef-bb30e2cf6612",
+     "explain": "Search Gradle plugins.",
+     "keywords": [
+      "Gradle"
+     ],
+     "matchers": []
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "5c1898803740dc7c324f2858052b39cf.asar",
+   "name": "zl2mj3fd",
+   "pluginName": "yaml2json",
+   "description": "yaml转json，json转yaml",
+   "version": "1.0.0",
+   "author": "yuanhenglizhen",
+   "homepage": "https://gitee.com/yuanxianglizhen",
+   "features": [
+    {
+     "code": "yaml2json",
+     "explain": "yaml2json",
+     "keywords": [
+      "yaml",
+      "json"
+     ],
+     "matchers": [
+      {
+       "type": "text",
+       "label": "yaml2json"
+      }
+     ]
+    },
+    {
+     "code": "tranfile",
+     "explain": "yaml2json",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "files",
+       "label": "yaml2json"
+      }
+     ]
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "617006eedf694522b3a025d5a15d2c36.asar",
+   "name": "zjvgjfz6",
+   "pluginName": "AI Anywhere",
+   "description": "uTools-7：呼吸般顺畅的AI Agent（支持MCP、SKILL）",
+   "version": "2.13.7",
+   "author": "Komorebi",
+   "homepage": null,
+   "features": [
+    {
+     "code": "Anywhere Settings",
+     "explain": "设置页面",
+     "keywords": [
+      "Anywhere Settings"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "Resume Conversation",
+     "explain": "恢复聊天",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "files",
+       "label": "恢复聊天",
+       "fileType": "file",
+       "match": "/\\.(json)$/i"
+      },
+      {
+       "type": "over",
+       "label": "恢复聊天",
+       "maxLength": 99999999999
+      }
+     ]
+    },
+    {
+     "code": "append_global",
+     "explain": "追问",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "over",
+       "label": "追问",
+       "maxLength": 99999999999
+      },
+      {
+       "type": "img",
+       "label": "追问"
+      },
+      {
+       "type": "files",
+       "label": "追问",
+       "match": "/.*/i"
+      }
+     ]
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "77e893e9f5353de7c439e35f1b6b8e5d.asar",
+   "name": "b81163a6",
+   "pluginName": "程序员手册",
+   "description": "内置了十多个实用的离线中文手册，包括：Linux、PHP、Python、JS等,以及提供了搜索devdocs、dash/zeal上的文档的功能",
+   "version": "1.1.8",
+   "author": "云之轩",
+   "homepage": "https://github.com/fofolee/uTools-Manuals",
+   "features": [
+    {
+     "code": "options",
+     "explain": "调整程序员手册的功能",
+     "keywords": [
+      "手册设置",
+      "ManualOptions"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "dash",
+     "explain": "打开dash 或 zeal 进行搜索",
+     "keywords": [
+      "dash",
+      "zeal"
+     ],
+     "matchers": []
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "78ff3e36f5d7a82a6d96ade1086017c1.asar",
+   "name": "codehelper",
+   "pluginName": "编码小助手",
+   "description": "时间转换、base64编解码、URL编解码、哈希加密、Unicode、UUID、进制转换、HTML转义",
+   "version": "2.1.1",
+   "author": "福州猿力信息科技有限公司",
+   "homepage": "https://u.tools",
+   "features": [
+    {
+     "code": "timestamp",
+     "explain": "日期/时间格式转换",
+     "keywords": [
+      "date",
+      "timestamp",
+      "unixtime"
+     ],
+     "matchers": [
+      {
+       "type": "regex",
+       "minLength": 9,
+       "match": "/^\\d{4}[\\/.-]\\d{1,2}[\\/.-]\\d{1,2}(?:(?: |T)\\d{1,2}:\\d{1,2}:\\d{1,2}(?:\\.\\d{1,6}Z?)?)?$|^[1-9](?:\\d{8,9}|\\d{11,12})$/",
+       "label": "时间格式"
+      }
+     ]
+    },
+    {
+     "code": "uuid",
+     "explain": "随机唯一值",
+     "keywords": [
+      "UUID",
+      "GUID"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "hash",
+     "explain": "哈希加密",
+     "keywords": [
+      "MD5",
+      "SHA1",
+      "SHA224",
+      "SHA256",
+      "SHA384",
+      "SHA512"
+     ],
+     "matchers": [
+      {
+       "maxNum": 1,
+       "type": "files",
+       "fileType": "file",
+       "label": "文件 Hash"
+      }
+     ]
+    },
+    {
+     "code": "base64encode",
+     "explain": "base64 编码",
+     "keywords": [
+      "base64 encode(编码)"
+     ],
+     "matchers": [
+      {
+       "maxNum": 1,
+       "type": "files",
+       "fileType": "file",
+       "match": "/\\.(?:jpg|jpeg|gif|png)$/i",
+       "label": "图片 base64 编码"
+      },
+      {
+       "type": "img",
+       "label": "图片 base64 编码"
+      }
+     ]
+    },
+    {
+     "code": "base64decode",
+     "explain": "base64 解码",
+     "keywords": [
+      "base64 decode(解码)"
+     ],
+     "matchers": [
+      {
+       "type": "regex",
+       "minLength": 20,
+       "match": "/^(?:[A-Za-z0-9+/][A-Za-z0-9+/][A-Za-z0-9+/][A-Za-z0-9+/])+(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/",
+       "label": "base64 解码"
+      },
+      {
+       "type": "regex",
+       "minLength": 100,
+       "match": "/^data:image\\/(jpg|jpeg|gif|png);base64,/",
+       "label": "base64 图片"
+      }
+     ]
+    },
+    {
+     "code": "urlencode",
+     "explain": "URL 编码",
+     "keywords": [
+      "URL encode(编码)"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "urldecode",
+     "explain": "URL 解码",
+     "keywords": [
+      "URL decode(解码)"
+     ],
+     "matchers": [
+      {
+       "type": "regex",
+       "match": "/%[A-Fa-f0-9][A-Fa-f0-9]/",
+       "label": "URL 解码"
+      }
+     ]
+    },
+    {
+     "code": "unicode",
+     "explain": "Unicode 编码转换",
+     "keywords": [
+      "Unicode",
+      "万国码"
+     ],
+     "matchers": [
+      {
+       "type": "regex",
+       "match": "/^(?:\\\\u[a-f0-9]{4})+$|^(?:\\\\x[a-f0-9]{2})+$|^(?:\\\\u\\{[a-f0-9]{2,5}\\})+$|^(U\\+[a-f0-9]{2,5})+$|^(?:&#\\d{2,7};)+$|^(?:&#x[a-f0-9]{2,5};)+$/i",
+       "label": "Unicode 编码转换"
+      }
+     ]
+    },
+    {
+     "code": "hex",
+     "explain": "进制转换",
+     "keywords": [
+      "进制转换"
+     ],
+     "matchers": [
+      {
+       "type": "regex",
+       "match": "/^0x[0-9a-fA-F]+$/",
+       "label": "进制转换"
+      }
+     ]
+    },
+    {
+     "code": "htmlescape",
+     "explain": "HTML 转义字符",
+     "keywords": [
+      "HTML 转义字符"
+     ],
+     "matchers": [
+      {
+       "type": "regex",
+       "match": "/^&(quot|amp|lt|gt|nbsp);$/i",
+       "label": "HTML 转义字符"
+      }
+     ]
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "80f326d906bcb802b32c774273a179ac.asar",
+   "name": "QRCode",
+   "pluginName": "二维码助手",
+   "description": "二维码生成、二维码识别",
+   "version": "3.0.5",
+   "author": "uTools 团队",
+   "homepage": "https://u.tools",
+   "features": [
+    {
+     "code": "qrcode",
+     "explain": "二维码生成、二维码识别",
+     "keywords": [
+      "QRCode",
+      "二维码",
+      "扫码"
+     ],
+     "matchers": [
+      {
+       "type": "regex",
+       "match": "/^https?:\\/\\/(?:(?:(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]\\d|\\d)(?:\\.(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]\\d|\\d)){3})|(?:(?:[a-z\\u00a1-\\uffff0-9]-*)*[a-z\\u00a1-\\uffff0-9]+)(?:\\.(?:[a-z\\u00a1-\\uffff0-9]-*)*[a-z\\u00a1-\\uffff0-9]+)*(?:\\.(?:[a-z\\u00a1-\\uffff]{2,}))\\.?)(?::\\d{2,5})?(?:[/?#][^\\s\"]*)?$/i",
+       "label": "生成二维码"
+      },
+      {
+       "type": "img",
+       "label": "识别图片中二维码"
+      },
+      {
+       "type": "files",
+       "fileType": "file",
+       "extensions": [
+        "png",
+        "jpg"
+       ],
+       "label": "解析二维码图片"
+      }
+     ]
+    }
+   ],
+   "mcpTools": {
+    "qrcode_generator": {
+     "description": "输入文本或链接，生成二维码图片",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "text": {
+        "type": "string",
+        "title": "文本或链接"
+       }
+      },
+      "required": [
+       "text"
+      ]
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "outputPath": {
+        "type": "string",
+        "title": "生成的二维码图片路径"
+       }
+      },
+      "required": [
+       "outputPath"
+      ]
+     }
+    },
+    "qrcode_decoder": {
+     "description": "输入二维码图片路径，识别并输出其中的文本或链接",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "inputPath": {
+        "type": "string",
+        "title": "二维码图片路径"
+       }
+      },
+      "required": [
+       "inputPath"
+      ]
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "text": {
+        "type": "string",
+        "title": "识别出的文本或链接"
+       }
+      },
+      "required": [
+       "text"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "asar": "85f5d8ffa7e865ae7279448f45474083.asar",
+   "name": "z3jno9af",
+   "pluginName": "ChatGPT.好友",
+   "description": "无限创建Ai好友，支持chatgpt、claude、gemini等中转API接入，支持Ai语音对话、Ai绘画、Ai音乐、支持openai最新的GPT系列模型、支持谷歌gemini系列模型以及完美适配第三方中转api",
+   "version": "4.6.7",
+   "author": "呀唔咪",
+   "homepage": null,
+   "features": [
+    {
+     "code": "enterPlugin",
+     "explain": "无限创建基于ChatGPT的Ai好友，赋予每个Ai不同角色功能!",
+     "keywords": [
+      "ai",
+      "gpt",
+      "ChatGPT.好友",
+      "openai"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "setKeyfromUrl",
+     "explain": "通过url方式一键添加私有API路线+KEY!",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "regex",
+       "label": "一键绑定令牌",
+       "match": "/(?=.*key)(?=.*url)/",
+       "minLength": 68
+      }
+     ]
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "87d1edaeaf96933e284c34a6f1460006.asar",
+   "name": "830ef6d0",
+   "pluginName": "vscode",
+   "description": "快速搜索 vscode 历史项目并且在vscode中打开",
+   "version": "4.1.0",
+   "author": "莫回首",
+   "homepage": "https://github.com/mohuishou/utools",
+   "features": [
+    {
+     "code": "vsc",
+     "explain": "vscode历史项目搜索",
+     "keywords": [
+      "vsc"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "vsc-setting",
+     "explain": "vscode 历史搜索配置信息",
+     "keywords": [
+      "vsc-setting"
+     ],
+     "matchers": []
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "90afc94d34c0aae2c58c4436dbbe2fb0.asar",
+   "name": "automation",
+   "pluginName": "自动化助手",
+   "description": "自动化助手，让繁琐的步骤一步到位",
+   "version": "4.0.1",
+   "author": "uTools 团队",
+   "homepage": "https://u.tools",
+   "features": [
+    {
+     "code": "setting",
+     "explain": "自动化助手，让繁琐的步骤一步到位",
+     "keywords": [
+      "自动化助手设置"
+     ],
+     "matchers": []
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "9562b0aab4cb9f77a9b4ffcf13ed44e5.asar",
+   "name": "88bcd0ea",
+   "pluginName": "关闭进程",
+   "description": "搜索进程名或端口，进行关闭或管理。关键词：taskkill, tasklist, netstat, ps, process。",
+   "version": "2.0.5",
+   "author": "云之轩",
+   "homepage": "https://yuanliao.info/d/296",
+   "features": [
+    {
+     "code": "kill",
+     "explain": "搜索进程名或端口，并按进程占用内存排序",
+     "keywords": [
+      "kill",
+      "ps",
+      "关闭进程"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "restartExplorer",
+     "explain": "重启资源管理器",
+     "keywords": [
+      "重启资源管理器"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "netstat",
+     "explain": "搜索进程名或端口，并按端口排序",
+     "keywords": [
+      "netstat",
+      "查看端口"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "killFromMain",
+     "explain": "关闭进程",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "regex",
+       "label": "搜索进程（只列出前6项，回车关闭）",
+       "match": "/kill \\S+/i",
+       "minLength": 6
+      }
+     ]
+    },
+    {
+     "code": "restartFromMain",
+     "explain": "重启进程",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "regex",
+       "label": "搜索进程（只列出前6项，回车重启）",
+       "match": "/restart \\S+/i",
+       "minLength": 9
+      }
+     ]
+    },
+    {
+     "code": "netstatFromMain",
+     "explain": "关闭端口",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "regex",
+       "label": "搜索端口（只列出前6项，回车关闭）",
+       "match": "/netstat \\S+/i",
+       "minLength": 9
+      }
+     ]
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "9f65f5232f28edc0240e44f51f9b9f2a.asar",
+   "name": "quickweb",
+   "pluginName": "网页快开",
+   "description": "像启动应用一样快速打开网页",
+   "version": "4.1.2",
+   "author": "uTools 团队",
+   "homepage": "https://u.tools",
+   "features": [
+    {
+     "code": "setting",
+     "explain": "像启动应用一样快速打开网页",
+     "keywords": [
+      "网页快开"
+     ],
+     "matchers": [
+      {
+       "type": "regex",
+       "match": "/^https?:\\/\\/[^\\s/$.?#]\\S+$/i",
+       "label": "加入到「网页快开」"
+      }
+     ]
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "a18be99acfbeeedf5e6fe1e73e579611.asar",
+   "name": "a94c205a",
+   "pluginName": "翻译",
+   "description": "快速翻译，实时输入翻译，原生列表自动复制，AI、多语言、多API、多朗读引擎",
+   "version": "4.3.7",
+   "author": "HaleShaw",
+   "homepage": "https://github.com/HaleShaw/uTools-Translate",
+   "features": [
+    {
+     "code": "translate_text",
+     "explain": "快速翻译，实时输入翻译，列表翻译，自动复制，多语言翻译，多API切换，AI翻译，音标朗读，句子朗读，变量格式化",
+     "keywords": [
+      "翻译",
+      "translate",
+      "tr"
+     ],
+     "matchers": [
+      {
+       "type": "over",
+       "label": "翻译",
+       "exclude": "/^(翻译|translate|tr|fy|翻译设置|设置|translatesetting|tsetting|setting|ts|fysz|sz)$/",
+       "maxLength": 5000
+      }
+     ]
+    },
+    {
+     "code": "translate_setting",
+     "explain": "翻译设置，切换翻译API，设置朗读，设置源语言和目标语言，设置变量模式，设置代理",
+     "keywords": [
+      "翻译设置",
+      "setting",
+      "tsetting",
+      "设置",
+      "ts"
+     ],
+     "matchers": []
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "a8197e10752afc7bd4657f5f67e87502.asar",
+   "name": "everythingfind",
+   "pluginName": "本地搜索",
+   "description": "基于 Everything 更便捷的本地文件搜索 + 文件预览",
+   "version": "2.8.0",
+   "author": "uTools 团队",
+   "homepage": "https://u.tools",
+   "features": [
+    {
+     "code": "find",
+     "explain": "基于 Everything 更便捷的文件搜索 + 文件预览",
+     "keywords": [
+      "本地搜索",
+      "find",
+      "搜索"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "oversearch",
+     "explain": "本地文件搜索",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "over",
+       "maxLength": 40,
+       "exclude": "/[\\\\\\/\\t\\n]/",
+       "label": "文件搜索"
+      }
+     ]
+    },
+    {
+     "code": "explorerfind",
+     "explain": "「文件资源管理器」窗口所在目录内搜索",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "window",
+       "match": {
+        "app": [
+         "explorer.exe",
+         "SearchApp.exe",
+         "SearchHost.exe",
+         "FESearchHost.exe",
+         "prevhost.exe"
+        ],
+        "class": [
+         "CabinetWClass",
+         "ExploreWClass"
+        ]
+       },
+       "label": "窗口目录内搜索"
+      }
+     ]
+    },
+    {
+     "code": "folderfind",
+     "explain": "选中的文件夹内搜索",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "files",
+       "fileType": "directory",
+       "maxLength": 1,
+       "label": "文件夹内搜索"
+      }
+     ]
+    },
+    {
+     "code": "findtodialog",
+     "explain": "匹配任意「文件选择框」，搜索文件并直接选择",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "window",
+       "match": {
+        "class": "#32770"
+       },
+       "label": "\"文件选择框\"搜索选择"
+      }
+     ]
+    }
+   ],
+   "mcpTools": {
+    "search_files": {
+     "description": "使用 Everything v1.4.1 强大的文件搜索功能，在本地快速查找文件。",
+     "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+       "query": {
+        "type": "string",
+        "description": "搜索关键词，支持 Everything 的高级搜索语法，示例：\n\n- `*.txt`：搜索所有文本文件\n- `ext:doc;docm;docx dm:2025-01-01..2025-12-31`：搜索按修改日期的 Word 文件\n- `size:>10MB`：搜索大于 10MB 的文件\n\n更多语法请参考 [Everything 搜索语法官方文档](https://www.voidtools.com/support/everything/searching/)。",
+        "minLength": 1
+       },
+       "sortBy": {
+        "type": "string",
+        "enum": [
+         "nameAsc",
+         "nameDesc",
+         "pathAsc",
+         "pathDesc",
+         "sizeAsc",
+         "sizeDesc",
+         "mtimeAsc",
+         "mtimeDesc"
+        ],
+        "description": "排序方式：\n\nnameAsc : 按名称升序\nnameDesc : 按名称降序\npathAsc : 按路径升序\npathDesc : 按路径降序\nsizeAsc : 按大小升序\nsizeDesc : 按大小降序\nmtimeAsc : 按修改时间升序\nmtimeDesc : 按修改时间降序",
+        "default": "mtimeDesc"
+       },
+       "limit": {
+        "type": "number",
+        "description": "返回结果的最大数量，默认值为 20。",
+        "minimum": 1,
+        "maximum": 1000,
+        "default": 20
+       },
+       "offset": {
+        "type": "number",
+        "description": "结果偏移量，用于分页（从 0 开始），默认值为 0。",
+        "default": 0
+       }
+      },
+      "required": [
+       "query"
+      ]
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "list": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "filename": {
+           "type": "string",
+           "description": "文件或文件夹名称"
+          },
+          "dirPath": {
+           "type": "string",
+           "description": "文件或文件夹所在目录路径"
+          },
+          "size": {
+           "type": "number",
+           "description": "文件大小，单位字节"
+          },
+          "ext": {
+           "type": "string",
+           "description": "文件扩展名"
+          },
+          "isFolder": {
+           "type": "boolean",
+           "description": "是否为文件夹"
+          },
+          "dateModified": {
+           "type": "string",
+           "description": "文件或文件夹最后修改时间，格式 YYYY-MM-DD HH:mm:ss"
+          }
+         }
+        },
+        "description": "搜索结果列表，每项包含文件名、路径、大小和修改时间。"
+       },
+       "total": {
+        "type": "number",
+        "description": "匹配的总结果数量，可能大于返回的结果数量（受 limit 和 offset 影响）。"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "asar": "aeac1e24595f209ea6812fecb994105e.asar",
+   "name": "ocr",
+   "pluginName": "OCR 文字识别",
+   "description": "极便捷的 OCR 识别工具，支持提取：文字 / 表格 / 公式",
+   "version": "3.1.1",
+   "author": "uTools 团队",
+   "homepage": "https://u.tools",
+   "features": [
+    {
+     "code": "ocr",
+     "explain": "提取文字 / 提取表格 / 提取公式",
+     "keywords": [
+      "OCR 文字识别"
+     ],
+     "matchers": [
+      {
+       "type": "img",
+       "label": "OCR 文字识别"
+      }
+     ]
+    },
+    {
+     "code": "ocr-",
+     "explain": "截图 OCR 文字识别",
+     "keywords": [
+      "截图文字识别",
+      "截图 OCR 识别"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "ocr-copy",
+     "explain": "OCR 文字识别后自动复制",
+     "keywords": [
+      "截图文字识别+复制"
+     ],
+     "matchers": [
+      {
+       "type": "img",
+       "label": "文字识别+复制"
+      }
+     ]
+    },
+    {
+     "code": "ocr-translate",
+     "explain": "OCR 文字识别后自动前往翻译",
+     "keywords": [
+      "截图文字识别+翻译"
+     ],
+     "matchers": [
+      {
+       "type": "img",
+       "label": "文字识别+翻译"
+      }
+     ]
+    },
+    {
+     "code": "ocr-table",
+     "explain": "截图识别：提取表格 (Excel)",
+     "keywords": [
+      "截图表格识别"
+     ],
+     "matchers": [
+      {
+       "type": "img",
+       "label": "OCR 表格识别"
+      }
+     ]
+    },
+    {
+     "code": "ocr-formula",
+     "explain": "截图识别：提取公式 (LaTeX)",
+     "keywords": [
+      "截图公式识别"
+     ],
+     "matchers": [
+      {
+       "type": "img",
+       "label": "OCR 公式识别"
+      }
+     ]
+    }
+   ],
+   "mcpTools": {
+    "ocr_extract_content": {
+     "description": "从图片中识别并提取内容，支持文字、表格和公式",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "imagePath": {
+        "type": "string",
+        "description": "图片文件路径"
+       },
+       "extractType": {
+        "type": "string",
+        "enum": [
+         "text",
+         "table",
+         "formula"
+        ],
+        "description": "提取内容的类型，支持文字（text）、表格（table）和公式（formula）"
+       }
+      },
+      "required": [
+       "imagePath",
+       "extractType"
+      ],
+      "additionalProperties": false
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "type": {
+        "type": "string",
+        "enum": [
+         "text",
+         "table",
+         "formula"
+        ]
+       },
+       "content": {
+        "type": "string",
+        "description": "提取的内容，文本类型为纯文本，表格类型为Markdown格式，公式类型为LaTeX格式"
+       }
+      },
+      "required": [
+       "type",
+       "content"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "asar": "b43aa41f07bf5f88d8ed5fcb2674cf9e.asar",
+   "name": "regex",
+   "pluginName": "正则编辑器",
+   "description": "JavaScript & PHP正则表达式编辑器",
+   "version": "1.1.3",
+   "author": "福州猿力信息科技有限公司",
+   "homepage": "https://u.tools",
+   "features": [
+    {
+     "code": "regex",
+     "explain": "正则表达式编辑器",
+     "keywords": [
+      "Regex Editor",
+      "正则编辑器"
+     ],
+     "matchers": [
+      {
+       "type": "regex",
+       "match": "/^\\/.*\\/[igmsuUxyDAXJ]*$/",
+       "label": "正则编辑器"
+      }
+     ]
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "b95402afee551e894d4456243c616f50.asar",
+   "name": "a2478731",
+   "pluginName": "Ctool",
+   "description": "Ctool 程序开发常用工具",
+   "version": "2.3.0",
+   "author": "baiy",
+   "homepage": "https://github.com/baiy/Ctool",
+   "features": [
+    {
+     "code": "ctool",
+     "explain": "程序开发常用工具",
+     "keywords": [
+      "ctool",
+      "程序开发常用工具"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "ctool-qrCode-generate",
+     "explain": "二维码 - 生成",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "over",
+       "minLength": 10,
+       "label": "二维码 - 生成"
+      }
+     ]
+    },
+    {
+     "code": "ctool-ip-ip",
+     "explain": "IP地址查询",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "over",
+       "match": "/\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}/i",
+       "minLength": 7,
+       "maxLength": 15,
+       "label": "IP地址查询"
+      }
+     ]
+    },
+    {
+     "code": "ctool-unicode-decoder",
+     "explain": "Unicode - 解码",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "regex",
+       "match": "/\\\\u[0-9a-f]{4}/i",
+       "minLength": 6,
+       "label": "Unicode - 解码"
+      }
+     ]
+    },
+    {
+     "code": "ctool-time-timestamp",
+     "explain": "时间日期 - 时间戳",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "regex",
+       "match": "/(^\\d{5,}$)|(^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?$)/i",
+       "minLength": 5,
+       "maxLength": 25,
+       "label": "时间日期 - 时间戳"
+      }
+     ]
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "c2f5ea46fafdd6e9c8e228a4e06ae853.asar",
+   "name": "b4c0afb5",
+   "pluginName": "任务清单",
+   "description": "任务清单(todoList)",
+   "version": "0.0.9",
+   "author": "vst",
+   "homepage": "https://github.com/vst93",
+   "features": [
+    {
+     "code": "todoList",
+     "explain": "任务清单",
+     "keywords": [
+      "任务清单",
+      "todoList"
+     ],
+     "matchers": []
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "c4316fd299e89f8ab45512e4cc5377c0.asar",
+   "name": "picZip",
+   "pluginName": "图片压缩",
+   "description": "图片压缩, 支持 JPG、PNG、GIF、SVG",
+   "version": "1.1.0",
+   "author": "福州猿力信息科技有限公司",
+   "homepage": "https://u.tools",
+   "features": [
+    {
+     "code": "compress",
+     "explain": "图片压缩",
+     "keywords": [
+      "图片压缩"
+     ],
+     "matchers": [
+      {
+       "type": "files",
+       "fileType": "file",
+       "match": "/\\.(?:jpg|jpeg|png|gif|svg)$/i",
+       "label": "图片压缩"
+      },
+      {
+       "type": "img",
+       "label": "图片压缩"
+      },
+      {
+       "type": "window",
+       "match": {
+        "app": [
+         "Finder.app",
+         "explorer.exe",
+         "SearchApp.exe"
+        ],
+        "class": [
+         "CabinetWClass",
+         "ExploreWClass"
+        ]
+       },
+       "label": "压缩目录下所有图片"
+      }
+     ]
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "cf1c51a640e60e12fbac456576d165b3.asar",
+   "name": "zvklci3v",
+   "pluginName": "实时汇率",
+   "description": "显示实时汇率",
+   "version": "1.0.3",
+   "author": "宇文羽熠",
+   "homepage": null,
+   "features": [
+    {
+     "code": "exchange_rate",
+     "explain": "查看美元汇率",
+     "keywords": [
+      "汇率",
+      "美元汇率"
+     ],
+     "matchers": []
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "cf83823d0c6f0580529c5b3455e4aef5.asar",
+   "name": "a29622fe",
+   "pluginName": "Python 3.8 文档",
+   "description": "Python 3.8 文档速查",
+   "version": "1.0.0",
+   "author": "uTools官方",
+   "homepage": "https://u.tools",
+   "features": [
+    {
+     "code": "python",
+     "explain": "Python 3.8 文档速查",
+     "keywords": [
+      "Python 3.8"
+     ],
+     "matchers": []
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "d85819221445703f1e7830a6d21de757.asar",
+   "name": "notes",
+   "pluginName": "Markdown 笔记",
+   "description": "极佳的 Markdown 编辑体验，实时预览、存储",
+   "version": "1.15.0",
+   "author": "uTools 团队",
+   "homepage": "https://u.tools",
+   "features": [
+    {
+     "code": "notes",
+     "explain": "极佳的 Markdown 编辑体验，实时预览、存储",
+     "keywords": [
+      "Markdown 笔记",
+      "Markdown Notes",
+      "MD"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "create",
+     "explain": "新建 Markdown 笔记",
+     "keywords": [
+      "新建笔记"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "import",
+     "explain": "将 md 文件导入为 Markdown 笔记",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "files",
+       "fileType": "file",
+       "extensions": [
+        "md"
+       ],
+       "label": "导入 Markdown 笔记"
+      }
+     ]
+    }
+   ],
+   "mcpTools": {
+    "markdown_render": {
+     "description": "将 Markdown 文本渲染为图片或 PDF 文件，用于可视化展示或文档导出。\n\n支持扩展语法（可直接使用）：\n- Mermaid 图表：```mermaid 代码块\n- ECharts 图表：```echarts 代码块\n- LaTeX 数学公式：$...$（行内）、$$...$$（块级）\n- 任务列表：- [ ] / - [x]\n- 高亮标记：==text==\n- 多语言代码高亮：```js / ```python 等\n\n当需要生成包含图表、流程图、公式或代码展示的内容时优先使用此工具。\n输入内容将被直接渲染，请确保语法正确。",
+     "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+       "markdown": {
+        "type": "string",
+        "description": "Markdown 原文内容"
+       },
+       "format": {
+        "type": "string",
+        "enum": [
+         "image",
+         "pdf"
+        ],
+        "description": "输出格式：image（图片）或 pdf（文档）"
+       }
+      },
+      "required": [
+       "markdown",
+       "format"
+      ]
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "filePath": {
+        "type": "string",
+        "description": "生成文件的本地路径"
+       }
+      },
+      "required": [
+       "filePath"
+      ]
+     }
+    },
+    "markdown_notes_search": {
+     "description": "搜索 Markdown 笔记（标题和正文），返回匹配结果摘要，不包含完整正文。",
+     "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+       "query": {
+        "type": "string",
+        "description": "搜索关键词"
+       },
+       "limit": {
+        "type": "integer",
+        "description": "返回结果数量上限",
+        "default": 10,
+        "minimum": 1,
+        "maximum": 50
+       }
+      },
+      "required": [
+       "query"
+      ]
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "notes": {
+        "type": "array",
+        "description": "匹配的笔记摘要列表",
+        "items": {
+         "type": "object",
+         "properties": {
+          "id": {
+           "type": "string",
+           "description": "笔记唯一 ID"
+          },
+          "title": {
+           "type": "string",
+           "description": "笔记标题"
+          },
+          "snippet": {
+           "type": "string",
+           "description": "匹配内容摘要"
+          },
+          "matchedField": {
+           "type": "string",
+           "enum": [
+            "title",
+            "content"
+           ],
+           "description": "命中的字段"
+          },
+          "createAt": {
+           "type": "integer",
+           "description": "创建时间戳（毫秒）"
+          },
+          "updateAt": {
+           "type": "integer",
+           "description": "最后修改时间戳（毫秒）"
+          },
+          "wordCount": {
+           "type": "integer",
+           "description": "正文字数"
+          }
+         },
+         "required": [
+          "id",
+          "title",
+          "snippet",
+          "matchedField"
+         ]
+        }
+       },
+       "hasMore": {
+        "type": "boolean",
+        "description": "是否还有更多结果"
+       }
+      },
+      "required": [
+       "notes",
+       "total"
+      ]
+     }
+    },
+    "markdown_notes_get": {
+     "description": "获取笔记内容。支持获取原始 Markdown 文本或将笔记内容渲染为图片/PDF 文件。",
+     "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+       "id": {
+        "type": "string",
+        "description": "笔记唯一 ID"
+       },
+       "format": {
+        "type": "string",
+        "enum": [
+         "text",
+         "image",
+         "pdf"
+        ],
+        "default": "text",
+        "description": "输出格式：'text' 返回 Markdown 源码；'image'/'pdf' 返回渲染后的本地文件路径。"
+       }
+      },
+      "required": [
+       "id"
+      ]
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "id": {
+        "type": "string"
+       },
+       "title": {
+        "type": "string",
+        "description": "笔记标题"
+       },
+       "updateAt": {
+        "type": "integer",
+        "description": "最后修改时间戳（毫秒）"
+       },
+       "content": {
+        "type": "string",
+        "description": "笔记的 Markdown 源码。仅在 format 为 text 时提供。"
+       },
+       "filePath": {
+        "type": "string",
+        "description": "渲染文件的绝对路径。仅在 format 为 image 或 pdf 时提供。"
+       },
+       "mimeType": {
+        "type": "string",
+        "description": "内容的标准 MIME 类型（如 text/markdown, image/png, application/pdf）"
+       }
+      },
+      "required": [
+       "id",
+       "title"
+      ]
+     }
+    },
+    "markdown_notes_create": {
+     "description": "创建一条新的 Markdown 笔记",
+     "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+       "title": {
+        "type": "string",
+        "maxLength": 50,
+        "description": "笔记标题"
+       },
+       "content": {
+        "type": "string",
+        "description": "笔记内容（Markdown 源码）"
+       }
+      },
+      "required": [
+       "title",
+       "content"
+      ]
+     },
+     "outputSchema": {
+      "type": "object",
+      "properties": {
+       "success": {
+        "type": "boolean",
+        "description": "是否成功"
+       },
+       "message": {
+        "type": "string",
+        "description": "结果说明"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "asar": "d88fa3c63b609546b87b180486311cd9.asar",
+   "name": "calc",
+   "pluginName": "计算稿纸",
+   "description": "高效简洁的计算工具，实时计算、自动保存，像稿纸一样记录每一步过程",
+   "version": "2.0.4",
+   "author": "uTools 团队",
+   "homepage": "https://u.tools",
+   "features": [
+    {
+     "code": "calc",
+     "explain": "高效简洁的计算工具，实时计算、自动保存，像稿纸一样记录每一步过程",
+     "keywords": [
+      "计算稿纸"
+     ],
+     "matchers": [
+      {
+       "type": "regex",
+       "match": "/^[+-]?(?:\\d{1,15}|\\d{1,3}(?:,\\d\\d\\d){1,4})(?:\\.\\d{1,15})?$/",
+       "label": "计算稿纸"
+      }
+     ]
+    },
+    {
+     "code": "expression",
+     "explain": "数学公式计算",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "regex",
+       "match": "/^[\\(（]*[+-]?(?:\\d{1,15}|\\d{1,3}(?:,\\d\\d\\d){1,4})(?:\\.\\d{1,15})?%?[\\)）]*(?:\\s*[+*Xx/^%-]\\s*[\\(（]*[+-]?(?:\\d{1,15}|\\d{1,3}(?:,\\d\\d\\d){1,4})(?:\\.\\d{1,15})?%?[\\)）]*)+$/",
+       "label": "计算"
+      }
+     ]
+    },
+    {
+     "code": "sum",
+     "explain": "一串数字求和",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "regex",
+       "match": "/^\\s*(?:[+-]?(?:\\d{1,15}|\\d{1,3}(?:,\\d\\d\\d){1,4})(?:\\.\\d{1,15})?\\s+)+[+-]?(?:\\d{1,15}|\\d{1,3}(?:,\\d\\d\\d){1,4})(?:\\.\\d{1,15})?\\s*$/",
+       "label": "求和"
+      }
+     ]
+    },
+    {
+     "code": "average",
+     "explain": "一串数字求平均值",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "regex",
+       "match": "/^\\s*(?:[+-]?(?:\\d{1,15}|\\d{1,3}(?:,\\d\\d\\d){1,4})(?:\\.\\d{1,15})?\\s+)+[+-]?(?:\\d{1,15}|\\d{1,3}(?:,\\d\\d\\d){1,4})(?:\\.\\d{1,15})?\\s*$/",
+       "label": "求平均值"
+      }
+     ]
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "dae752a77edcb1b9d5b40f22e9a58340.asar",
+   "name": "9a1d1d03",
+   "pluginName": "快捷命令",
+   "description": "实现具备UI交互的自动化操作，支持可视化拖拽及直接编写脚本两种形式。1.可视化拖拽：支持文件、网络、音视频、图片、文本、浏览器、键鼠、AI对话等超过20种类型的自动化处理，2.编写脚本：支持utools的api，python、js、shell、cmd等多种脚本语言。关联关键词：自动化、可视化、RPA",
+   "version": "5.0.5",
+   "author": "云之轩",
+   "homepage": "https://github.com/fofolee/uTools-quickcommand",
+   "features": [
+    {
+     "code": "configuration",
+     "explain": "创建或编辑快捷命令",
+     "keywords": [
+      "快捷命令",
+      "QuickCommand"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "code",
+     "explain": "运行代码",
+     "keywords": [
+      "运行代码",
+      "RunCode"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "composer",
+     "explain": "运行可视化编排",
+     "keywords": [
+      "可视化编排",
+      "RunComposer"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "newcommand",
+     "explain": "快速新建快捷命令",
+     "keywords": [
+      "新建快捷命令",
+      "NewCommand"
+     ],
+     "matchers": []
+    },
+    {
+     "code": "importcommand",
+     "explain": "导入快捷命令",
+     "keywords": [],
+     "matchers": [
+      {
+       "type": "regex",
+       "label": "导入命令",
+       "match": "/(^\\{[\\s\\S]*\"program\" *: *\".*\"[\\s\\S]*\"cmd\" *: *\".*\"[\\s\\S]*\\}$)|(^qc\\/(id|base64)\\/.+)/i",
+       "maxNum": 1
+      }
+     ]
+    },
+    {
+     "code": "server",
+     "explain": "配置快捷命令后台服务",
+     "keywords": [
+      "快捷命令服务配置",
+      "quickcommandServer"
+     ],
+     "matchers": []
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "e247f17bd3b73d4d46562ce7ad09d1ed.asar",
+   "name": "zjqj3eva",
+   "pluginName": "公式图像转Latex",
+   "description": "公式图像转LaTeX代码的插件",
+   "version": "1.1.4",
+   "author": "hahamyt",
+   "homepage": "https://www.zhihu.com/people/xu-long-75-61",
+   "features": [
+    {
+     "code": "im2tex",
+     "explain": "图片转LaTeX代码工具",
+     "keywords": [
+      "im2tex",
+      "latex",
+      "tex",
+      "公式",
+      "图片转公式",
+      "img2tex"
+     ],
+     "matchers": [
+      {
+       "type": "img",
+       "label": "公式识别"
+      }
+     ]
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "e280d97bbcba1eb837f68db4dd3da8b6.asar",
+   "name": "zprgxqmh",
+   "pluginName": "代理切换",
+   "description": "快速切换、管理系统代理",
+   "version": "1.0.4",
+   "author": "P2K0",
+   "homepage": null,
+   "features": [
+    {
+     "code": "proxy",
+     "explain": "管理和切换系统代理",
+     "keywords": [
+      "proxy",
+      "代理",
+      "代理切换",
+      "切换代理"
+     ],
+     "matchers": []
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "ecafc443f44e3d0f112d3015fea68964.asar",
+   "name": "a4171f49",
+   "pluginName": "图床",
+   "description": "图床",
+   "version": "1.7.2",
+   "author": "xiaou",
+   "homepage": "",
+   "features": [
+    {
+     "code": "bookmark",
+     "explain": "图床",
+     "keywords": [
+      "图床",
+      "picture"
+     ],
+     "matchers": [
+      {
+       "type": "files",
+       "label": "上传到图床",
+       "fileType": "file",
+       "match": "/.*(jpg|png|jpeg|gif|webp)$/i",
+       "minLength": 1,
+       "maxLength": 10
+      },
+      {
+       "type": "img",
+       "label": "上传到图床"
+      }
+     ]
+    }
+   ],
+   "mcpTools": {}
+  },
+  {
+   "asar": "f57d8670ca38b8047d86faed8d3f00b8.asar",
+   "name": "53dc4662",
+   "pluginName": "lodash 文档",
+   "description": "lodash 文档速查",
+   "version": "1.0.0",
+   "author": "miniers",
+   "homepage": "https://github.com/miniers",
+   "features": [
+    {
+     "code": "lodash",
+     "explain": "lodash 文档速查",
+     "keywords": [
+      "lodash"
+     ],
+     "matchers": []
+    }
+   ],
+   "mcpTools": {}
+  }
+ ]
+}
