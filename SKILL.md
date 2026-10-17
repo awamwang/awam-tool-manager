@@ -138,6 +138,13 @@ CallToolResult 透传；生产环境 pyenv 3.12 即 1.29.0）。
     `id`/`name`/`type` 任一）时只拦命中的动作，未配则所有动作都拦。默认不启用——
     启用该字段等于放宽安全属性（未命中的动作由拦转放），须部署者按实际动作清单
     核对后显式配置。
+- **部署策略（`data/policy.json`，ARC-P1-05 Phase 2）**：部署者的显式决定，随仓库分发、
+  可评审；`AWAM_POLICY_FILE` 环境变量可覆盖。`tools.deny` 拒绝任意工具的调用、`tools.allow`
+  非 null 时进入白名单模式（deny 优先）；`destructive.mode` 三态——`require_confirm`（默认，
+  现行为）、`deny`（命中破坏性判定直接拒绝，**客户端传 `allowDestructive` 也不放行**）、
+  `allow`（本机信任，跳过确认，须显式写）。被策略拒绝返回 `permission_denied`（客户端无解，
+  需管理员改策略）。策略文件在服务启动时校验，坏策略让启动失败而非静默失效；无该文件时
+  全部走现行为（零配置零变更）。破坏性判定审计（含策略判决）追加到运行时目录的 `audit.log`。
 - 不合规的 `data/tools/*.json` 会被跳过并向 stderr 告警，不会让整个服务不可用
 - **`install.command` 默认不被自动执行**（P0 修复）：它写在进版本库的数据文件里、
   且会经 shell 执行，旧逻辑让它在「服务启动预热」和 `start_backend` 两条路径上

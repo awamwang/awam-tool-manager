@@ -70,6 +70,7 @@ awam-tool-manager/
 │   ├── mcp-conformance.md    # MCP 协议一致性对比
 │   └── code-review.md        # 审核报告
 ├── data/                     # 仓库内只有人工维护的真相源（A14 起）
+│   ├── policy.json           # 部署策略（deny/白名单 + destructive.mode，ARC-P1-05 Phase 2）
 │   └── tools/                # 工具条目：一个工具一个 JSON 文件
 │       ├── everything.json            (kind=app)
 │       ├── everything-search-mcp.json (kind=mcp)
@@ -169,6 +170,28 @@ awam-tool-manager/
 }
 ```
 
+### 4.3 部署策略 `data/policy.json`（ARC-P1-05 Phase 2）
+
+**部署者的显式决定**：承载「哪些工具可用、破坏性操作怎么管」。仓库文件随部署
+分发、可评审；`AWAM_POLICY_FILE` 环境变量可覆盖（机私策略）。`policy.load_policy()`
+在 **import 期**校验（`schema.POLICY_SCHEMA`，未知字段一律拒绝）——坏策略让进程
+启动失败，而不是静默失效。
+
+```json
+{
+  "version": 1,
+  "tools": { "deny": [], "allow": null },      // deny 优先；allow=null 表示不启用白名单
+  "destructive": { "mode": "require_confirm" }, // deny | require_confirm | allow
+  "audit": { "destructive": true }             // 判定行追加 <runtime>/audit.log
+}
+```
+
+判定链（单次调用）：`dispatch_tool` 先 `policy.check_call(name)`（deny 名单 /
+白名单，命中即 `permission_denied`，不进 handler）→ handler 内
+`policy.decide_destructive(...)`（`destructive.mode` 参与：`deny` 命中即拒绝且
+**不读**客户端 `allowDestructive`——策略赢；`allow` 跳过确认；默认
+`require_confirm` 维持现行为）。
+
 ---
 
 ## 5. 模块架构
@@ -227,8 +250,8 @@ awam-tool-manager/
 | `launcher_client.py` | 405 | 启动器适配器（非 MCP，Quicker）：动作清单解析/搜索、一次性外部命令调用 | `store` |
 | `errors.py` | 86 | 业务错误出口：`ErrorType` 常量枚举 + `ToolError` / `fail` / `ensure_success`（P1-04 从 server.py 原样搬出——tool_specs 的 handlers 要用，留在 server.py 会形成循环 import；server 命名空间继续 re-export；P1-03 补齐枚举至 16 种） | 标准库 |
 | `tool_specs.py` | 730 | 对外 MCP 工具声明式注册表（SSOT）：15 条 `ServerToolSpec`（name/description/inputSchema/annotations/handler 同条记录）+ 15 个 handler + `build_mcp_tools()` / `get_spec()` / `validate_specs()`（import 期自检：重名/空 handler/非法注解键快速失败） | `mcp`、`errors`、`launcher_client` |
-| `policy.py` | 约 210（易腐，Phase 2 起将增长） | 破坏性门禁统一判定 `decide_destructive(kind, tool, sub_op, args)`：mcp 子工具精确匹配 / launcher 动作级 glob（`destructiveActions`）/ 缺省回退条目级；输出 `Decision`（blocked / required_confirm / reason）并产出结构化审计行（decision / rule_hit / client_declared，Phase 1 落 stderr） | `errors`（经 handler 间接）、标准库 |
-| `server.py` | 464 | MCP 协议入口：协议装配 + 查表薄分发（`dispatch_tool` 约 10 行）+ Resources/Prompts + 生命周期（启动预热/状态恢复），启动时后台检测依赖 + 恢复期望状态 | `mcp`、`store`、`registry`、`backend_client`、`runtime_paths`、`launcher_client`、`schema`、`errors`、`tool_specs` |
+| `policy.py` | 375 | 破坏性门禁 + 部署策略：`decide_destructive(kind, tool, sub_op, args)`（mcp 子工具精确匹配 / launcher 动作级 glob / 缺省回退条目级；`destructive.mode` 参与判定）+ `check_call(name)`（dispatch 前置 deny/白名单）+ `load_policy()`（import 期校验，坏策略快速失败）+ 结构化审计行（stderr + `<runtime>/audit.log`） | `runtime_paths`、`schema`、标准库 |
+| `server.py` | 464 | MCP 协议入口：协议装配 + 查表薄分发（`dispatch_tool` 约 12 行，含策略前置检查）+ Resources/Prompts + 生命周期（启动预热/状态恢复），启动时后台检测依赖 + 恢复期望状态 | `mcp`、`store`、`registry`、`backend_client`、`runtime_paths`、`launcher_client`、`schema`、`errors`、`tool_specs`、`policy` |
 | `scripts/generate_format_doc.py` | 148 | 读 `schema.py` 渲染字段表并就地替换 `docs/format.md` 的生成区块；`--check` 做漂移检查 | 标准库、`schema` |
 
 ### 5.3 后端路由调用链
@@ -526,9 +549,9 @@ python src/server.py
 | `errors.py` `ToolError` / `fail` / `ensure_success` | 业务错误 → MCP `isError` 的转换层（P1-04 从 server.py 搬入 errors.py，server 命名空间 re-export，`from server import ToolError` 仍是同一个类对象） |
 | `tool_specs.py` `SERVER_TOOL_SPECS` / `build_mcp_tools()` | 15 个对外工具的声明表（SSOT）与 `Tool` 构造：annotations / outputSchema 在此统一挂载；`validate_specs()` 在 import 期自检 |
 | `server.py` `call_tool` | `tools/call` 入口，含意外异常兜底 |
-| `server.py` `dispatch_tool` | 15 个工具的查表分发（`get_spec` → handler → 统一 `json.dumps`；未命中即 `unknown_tool`） |
+| `server.py` `dispatch_tool` | 15 个工具的查表分发（`policy.check_call` 策略前置 → `get_spec` → handler → 统一 `json.dumps`；未命中即 `unknown_tool`，策略拒绝即 `permission_denied`） |
 | `launcher_client.py` `LauncherClient` | 启动器（非 MCP）适配器：`_scan_quicker` 解析动作清单、**先 json.loads 再取字符串**才能拿到动作名；`run_action` 走一次性外部命令（`-c<秒> "runaction:<ID>?参数"`），输出按 GBK 解码、失败按文本判定（退出码恒为 0） |
-| `policy.py` `decide_destructive` | 统一破坏性门禁（ARC-P1-05 Phase 1，取代 `tool_specs.py` 的 `_needs_destructive_confirm`）：mcp 子工具精确匹配（`destructiveTools`）/ launcher 动作级 glob（`destructiveActions`，大小写不敏感，匹配动作 id/name/type）/ 缺省回退条目级；未配置新字段时与旧行为逐字等价（`tests/test_policy_gate.py` 冻结旧逻辑对照锁定）；输出 `Decision` + 结构化审计行（decision / rule_hit / client_declared） |
+| `policy.py` `decide_destructive` / `check_call` | 统一破坏性门禁与部署策略（ARC-P1-05 Phase 1+2，取代 `tool_specs.py` 的 `_needs_destructive_confirm`）：mcp 子工具精确匹配（`destructiveTools`）/ launcher 动作级 glob（`destructiveActions`，大小写不敏感，匹配动作 id/name/type）/ 缺省回退条目级；`data/policy.json` 参与判决（deny 名单、白名单、`destructive.mode`：deny 时策略赢过客户端 `allowDestructive` → `permission_denied`）；未配置新字段/无策略文件时与旧行为逐字等价（`tests/test_policy_gate.py` 冻结旧逻辑对照 + `tests/test_policy_config.py` 默认策略行为锁定）；输出 `Decision` + 结构化审计行（stderr + `<runtime>/audit.log`，含 decision / rule_hit / client_declared / policy_mode） |
 | `server.py` `read_resource` | 返回 `Iterable[ReadResourceContents]` |
 | `server.py` `main` | stdio 事件循环 + 启动后台预热任务 `_prewarm_backends()`，`finally` 取消预热并关闭全部后端 |
 | `store.py` `load_json` / `save_json` | JSON 读写：读有容错（坏文件跳过），写走 `mkstemp` + `os.replace` 原子替换 |

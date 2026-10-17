@@ -114,6 +114,13 @@
       id/name/type），命中才拦；未配置回退条目级全拦（现语义不回退）；未配置新字段时
       与旧行为逐字等价（`tests/test_policy_gate.py` 冻结旧逻辑对照锁定）；
       `data/tools/quicker.json` 不启用该字段（默认行为零变更）
+- [x] **P1-05 Phase 2 部署策略**（2026-10-17）- `data/policy.json`（`AWAM_POLICY_FILE`
+      可覆盖）：`tools.deny`/`tools.allow`（deny 优先、allow=null 不启用白名单）+
+      `destructive.mode`（deny 时策略赢过客户端 `allowDestructive`——H1 修复；
+      require_confirm 默认；allow 跳过确认）；dispatch 前置 `policy.check_call`；
+      新增 errorType `permission_denied`（16→17，客户端无解需改策略）；
+      策略在 import 期校验（坏策略快速失败）；判定审计追加 `<runtime>/audit.log`；
+      无策略文件时零变更（`tests/test_policy_config.py` 13 条含 H1 验收）
 
 ### 测试覆盖
 - [x] `tests/test_registry.py` - store / registry 基础路径
