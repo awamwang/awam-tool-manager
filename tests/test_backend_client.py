@@ -2057,3 +2057,142 @@ def test_corrupt_per_tool_file_is_skipped_not_fatal(tmp_path, monkeypatch):
 
     state = BackendManager(FakeStore({}))._load_desired_state()
     assert set(state) == {"good"}
+
+
+# ---- #28：PATH 自愈的并发去重与快路径（e2e 场景③ 实测暴露） ----
+#
+# 缺陷：`ensure_npm_bin_on_path()` 的缓存只在**解析完成之后**才落定，
+# 并发调用期间 `_npm_bin_dir` 仍是 None → 每个并发调用各跑一条 npm；而
+# `ensure_installed()` 又把这次探测放在 `_target_available()` **之前**无条件
+# 执行，于是「目标明明已在 PATH 上」也要先付一次 `npm prefix -g`
+# （本机实测 6.5s/条，预热与 start_backend 各跑一条）。
+
+
+def test_npm_bin_probe_runs_only_once_under_concurrency(monkeypatch, tmp_path):
+    """#28：并发调用 ensure_npm_bin_on_path 只跑**一条** npm（过去各跑一条）"""
+    bin_dir = tmp_path / "npm-global"
+    bin_dir.mkdir()
+    monkeypatch.setattr(backend_client, "_npm_bin_dir", None)
+    monkeypatch.setattr(backend_client, "_npm_bin_lock", None)
+
+    calls: list = []
+    release = asyncio.Event()
+
+    class _BlockingNpmPrefix:
+        """communicate 挂住直到测试放行——制造真实的并发窗口"""
+
+        def __init__(self, prefix: str):
+            self._prefix = prefix
+            self.returncode = 0
+            self.killed = False
+
+        async def communicate(self):
+            await release.wait()
+            return (f"{self._prefix}\n".encode(), b"")
+
+        def kill(self):
+            self.killed = True
+
+        async def wait(self):
+            return self.returncode
+
+    async def factory(command, **kwargs):
+        calls.append(command)
+        return _BlockingNpmPrefix(str(bin_dir))
+
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", factory)
+
+    async def scenario():
+        first = asyncio.create_task(REAL_ENSURE_NPM_BIN())
+        second = asyncio.create_task(REAL_ENSURE_NPM_BIN())
+        # 轮询到第一条 npm 真的起来（并发窗口成立），而不是固定 sleep
+        for _ in range(200):
+            if calls:
+                break
+            await asyncio.sleep(0.01)
+        assert calls == ["npm prefix -g"], f"并发窗口没造出来：{calls}"
+        release.set()
+        return await asyncio.gather(first, second)
+
+    results = asyncio.run(scenario())
+
+    assert results == [str(bin_dir), str(bin_dir)]
+    assert len(calls) == 1, f"并发下跑了 {len(calls)} 条 npm——去重失效"
+
+
+def test_ensure_installed_skips_npm_probe_when_target_already_on_path(monkeypatch):
+    """#28 快路径：目标已在 PATH → 一次 npm 探测都不跑"""
+    calls: list = []
+    monkeypatch.setattr(backend_client, "_npm_bin_dir", None)
+    monkeypatch.setattr(backend_client, "_npm_bin_lock", None)
+    monkeypatch.setattr(
+        asyncio, "create_subprocess_shell", _fake_shell_dispatch("", returncode=1, log=calls)
+    )
+    # 走真实的 PATH 自愈（conftest 默认打成 noop），才能观察它到底有没有被调
+    monkeypatch.setattr(backend_client, "ensure_npm_bin_on_path", REAL_ENSURE_NPM_BIN)
+
+    # sys.executable 一定在 PATH 上：真实世界里绝大多数后端就是这种情况
+    client = BackendClient("x", {"command": sys.executable, "args": ["-m", "probe"]})
+    result = asyncio.run(client.ensure_installed())
+
+    assert result == {"success": True, "available": True, "installed": False}
+    assert calls == [], f"目标已在 PATH，却仍跑了 npm 探测：{calls}"
+
+
+def test_ensure_installed_slow_path_heals_path_then_caches(monkeypatch, tmp_path):
+    """#28 慢路径：目标不在 PATH → 补 npm 全局 bin → **重判命中**；第二次不再探测"""
+    bin_dir = tmp_path / "npm-global"
+    bin_dir.mkdir()
+    target = "awam-probe-cli-2"
+    exe = bin_dir / (target + (".cmd" if os.name == "nt" else ""))
+    exe.write_text("stub", encoding="utf-8")
+    if os.name != "nt":  # pragma: no cover - 本仓库主要在 Windows 上跑
+        exe.chmod(0o755)
+
+    log: list = []
+    monkeypatch.setattr(backend_client, "_npm_bin_dir", None)
+    monkeypatch.setattr(backend_client, "_npm_bin_lock", None)
+    monkeypatch.setattr(
+        asyncio, "create_subprocess_shell", _fake_shell_dispatch(str(bin_dir), log=log)
+    )
+    monkeypatch.setenv("PATH", str(tmp_path))  # 裁剪环境：没有 bin_dir
+    monkeypatch.setattr(backend_client, "ensure_npm_bin_on_path", REAL_ENSURE_NPM_BIN)
+
+    client = BackendClient(
+        "x",
+        {"command": "cmd.exe", "args": ["/c", target]},
+        {"command": f"npm i -g {target}"},
+    )
+
+    # 第一次：当前 PATH 判不到 → 补 PATH → 重判命中（不触发安装）
+    result = asyncio.run(client.ensure_installed())
+    assert result == {"success": True, "available": True, "installed": False}
+    assert log == ["npm prefix -g"], "慢路径必须真的补一次 PATH，且不该触发安装"
+
+    # 第二次：缓存命中，不再探测
+    log.clear()
+    result2 = asyncio.run(client.ensure_installed())
+    assert result2 == {"success": True, "available": True, "installed": False}
+    assert log == [], f"缓存命中后仍跑了 npm 探测：{log}"
+
+
+def test_npm_bin_failure_state_also_short_circuits(monkeypatch):
+    """#28：失败态（""）同样是缓存——后续调用（含并发）不再 spawn"""
+    calls: list = []
+    monkeypatch.setattr(backend_client, "_npm_bin_dir", None)
+    monkeypatch.setattr(backend_client, "_npm_bin_lock", None)
+    monkeypatch.setattr(
+        asyncio, "create_subprocess_shell", _fake_shell_dispatch("", returncode=1, log=calls)
+    )
+
+    async def scenario():
+        first = await REAL_ENSURE_NPM_BIN()
+        assert first is None
+        assert len(calls) == 1, f"首次应当真的探一次：{calls}"
+        # 并发两个：命中失败态缓存，不该再起 npm
+        return await asyncio.gather(REAL_ENSURE_NPM_BIN(), REAL_ENSURE_NPM_BIN())
+
+    results = asyncio.run(scenario())
+
+    assert results == [None, None]
+    assert len(calls) == 1, f"失败态没有短路，又跑了 {len(calls) - 1} 条 npm"

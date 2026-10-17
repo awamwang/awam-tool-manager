@@ -99,6 +99,12 @@ def install_auto_authorized_by_env() -> bool:
 #   路径  = 已解析到的 npm 全局 bin 目录。
 _npm_bin_dir: str | None = None
 
+# PATH 自愈的并发去重锁（**惰性创建**，见 ensure_npm_bin_on_path 内的说明）。
+# 为什么需要：缓存只在解析**完成之后**才落定，所以并发调用期间
+# `_npm_bin_dir` 仍是 None——没有这把锁的话，服务启动预热与 start_backend
+# 会各跑一条 `npm prefix -g`（本机实测 6.5s/条），start_backend 被凭空拖慢。
+_npm_bin_lock: asyncio.Lock | None = None
+
 
 def _patch_path(directory: str) -> bool:
     """把 directory 追加进 os.environ["PATH"]；为空或已在 PATH 中则不动"""
@@ -130,8 +136,14 @@ async def ensure_npm_bin_on_path() -> str | None:
 
     任何失败都静默返回 None：PATH 自愈只是优化，不能因为它把启动或调用
     搞挂。npm prefix -g 本身限时 15s，超时杀子进程防孤儿。
+
+    **并发去重（ARC-P3-02 / #28）**：解析本身由 `_probe_npm_bin_dir()` 承担，
+    本函数负责三件事——① 缓存命中（含失败态）走快路径、不抢锁；② 未命中时
+    用一把进程级锁串行化，**抢到锁后再查一次**（等锁期间别人可能已解析完）；
+    ③ 最坏情况是等一次 npm 跑完（上限 15s）——远好过各跑一条：两条并发
+    npm 是 2×6.5s 的机器开销，且先到的那条结论本可以被复用。
     """
-    global _npm_bin_dir
+    global _npm_bin_lock
 
     if _npm_bin_dir is not None:
         # 已解析过（含失败）：命中缓存的目录时兜底补进 PATH 再返回
@@ -139,6 +151,26 @@ async def ensure_npm_bin_on_path() -> str | None:
             _patch_path(_npm_bin_dir)
             return _npm_bin_dir
         return None
+
+    # 锁**惰性创建**：模块级直接 `asyncio.Lock()` 在部分 Python 版本上会绑定到
+    # import 期的事件循环（3.10 起才与 loop 解绑），放到首次 async 调用里建，
+    # 可确保它属于**当前**运行的 loop。
+    if _npm_bin_lock is None:
+        _npm_bin_lock = asyncio.Lock()
+
+    async with _npm_bin_lock:
+        # 双重检查：等锁期间别人可能已经解析完，直接复用
+        if _npm_bin_dir is not None:
+            if _npm_bin_dir:
+                _patch_path(_npm_bin_dir)
+                return _npm_bin_dir
+            return None
+        return await _probe_npm_bin_dir()
+
+
+async def _probe_npm_bin_dir() -> str | None:
+    """真跑一次 `npm prefix -g` 并落缓存（**调用方须持锁**，只做一次）"""
+    global _npm_bin_dir
 
     proc = None
     try:
@@ -452,10 +484,15 @@ class BackendClient:
         策略：
         1. 解析不出启动目标（例如没配 command）→ 不装也不阻塞，如实报告
            available=False，由 spawn 产出原生错误；
-        2. 先做 PATH 自愈（ensure_npm_bin_on_path）：上游可能用裁剪过的
-           环境启动本服务，不补齐就会把已装好的包误判成缺失，误触发
-           数十秒的无效安装；
-        3. 启动命令的真实目标已在 PATH 上 → 直接返回，什么都不做；
+        2. **先按当前 PATH 判一次**目标是否已在 PATH 上 → 命中就返回，
+           什么都不做（ARC-P3-02 / #28 的快路径）。顺序很关键：过去是
+           无条件先跑一次 `npm prefix -g`（本机实测 **6.5s**）再判定，
+           于是「目标明明已在 PATH 上」也要先付这 6.5s；
+        3. 未命中才做 PATH 自愈（`ensure_npm_bin_on_path`）：上游可能用
+           裁剪过的环境启动本服务，不补齐就会把已装好的包误判成缺失，
+           误触发数十秒的无效安装。补完 PATH 后**必须再判一次**——只补
+           PATH 却不重判，等于把「已装好但 PATH 缺目录」判成缺失，正是
+           这个函数存在的意义；
         4. 没有 install.command → 返回 available=False 但**不阻塞**：由
            spawn 产出原生错误，行为与接入前完全一致，不把「本来能起」的
            配置误判死（例如 bash -c 跟一串脚本参数，which 无从判定）；
@@ -488,8 +525,14 @@ class BackendClient:
                 "installed": False,
                 "note": "无法解析启动命令",
             }
-        # PATH 自愈：补齐 npm 全局 bin 后再判断「是否已安装」，
-        # 避免把已装好的包误判为缺失、触发数十秒的无效安装。
+        # 快路径：绝大多数后端的目标本就在 PATH 上（例如 command 是某个
+        # 绝对路径），这时**不该**付一次 `npm prefix -g`（本机实测 6.5s）。
+        # #28 之前这一步在 PATH 自愈之后，白白把每次 start_backend 拖慢。
+        if self._target_available(target):
+            return {"success": True, "available": True, "installed": False}
+
+        # 慢路径：当前 PATH 判不到才补 npm 全局 bin，补完**必须再判一次**
+        # （只往 PATH 追加目录，which 的结果单调不减，故结论集合不变）。
         await ensure_npm_bin_on_path()
         if self._target_available(target):
             return {"success": True, "available": True, "installed": False}
