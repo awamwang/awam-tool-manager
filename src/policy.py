@@ -212,8 +212,79 @@ def _decide_launcher(tool: dict | None, sub_op: dict) -> tuple[bool, str, str]:
 
 
 def _emit_audit(audit: dict) -> None:
-    """结构化审计行（Q4：Phase 1 只 stderr，机器可解析的 JSON 单行）"""
-    print(json.dumps(audit, ensure_ascii=False), file=sys.stderr, flush=True)
+    """审计行：stderr 恒输出；audit.log 追加受策略 `audit.destructive` 控制。
+
+    Phase 1（Q4 裁决）：stderr 一行 JSON；Phase 2 起按策略追加落盘
+    `<runtime>/audit.log`（append-only、不轮转——首版刻意不做轮转，
+    避免过度工程）。落盘失败只吞异常：审计是旁路，不能拖垮调用。
+    """
+    line = json.dumps(audit, ensure_ascii=False)
+    print(line, file=sys.stderr, flush=True)
+    policy = get_policy()
+    if not (policy.get("audit") or {}).get("destructive", True):
+        return
+    try:
+        AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(AUDIT_LOG, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+
+
+def _policy_denial(tool_name: str, rule_hit: str, reason: str) -> dict:
+    """策略拒绝的 Decision（error_type=permission_denied）"""
+    policy = get_policy()
+    audit = {
+        "event": "policy_check",
+        "ts": _utc_now_iso(),
+        "action": "dispatch",
+        "tool": tool_name,
+        "kind": "",
+        "sub_op": "",
+        "decision": "block",
+        "rule_hit": rule_hit,
+        "client_declared": False,
+        "policy_version": policy.get("version"),
+        "policy_mode": (policy.get("destructive") or {}).get("mode")
+        or "require_confirm",
+    }
+    _emit_audit(audit)
+    return {
+        "blocked": True,
+        "required_confirm": False,
+        "error_type": "permission_denied",
+        "reason": reason,
+        "audit": audit,
+    }
+
+
+def check_call(tool_name: str) -> dict | None:
+    """`dispatch_tool` 前置的工具级策略检查：deny 名单 / allow 白名单。
+
+    命中返回拒绝 Decision（`error_type=permission_denied`，客户端无法自行
+    解除，需管理员调整策略）；放行返回 None。放行不产出审计行——每次调用
+    都记会把 audit.log 变成调用流水，冲掉真正有价值的判定记录；拒绝必留痕。
+
+    deny 优先于 allow；`tools.allow` 为 null 表示不启用白名单（默认）。
+    """
+    policy = get_policy()
+    tools_cfg = policy.get("tools") or {}
+    if tool_name in (tools_cfg.get("deny") or []):
+        return _policy_denial(
+            tool_name,
+            "deny_list",
+            f"工具 '{tool_name}' 在部署策略 deny 名单内（policy.json），"
+            f"客户端无法自行解除，需管理员调整策略",
+        )
+    allow = tools_cfg.get("allow")
+    if allow is not None and tool_name not in allow:
+        return _policy_denial(
+            tool_name,
+            "allow_list_miss",
+            f"工具 '{tool_name}' 不在部署策略白名单内（policy.json tools.allow），"
+            f"需管理员把该工具加入白名单",
+        )
+    return None
 
 
 def decide_destructive(
@@ -231,10 +302,14 @@ def decide_destructive(
             `client_declared`，判定本身与客户端声明无关。
 
     Returns:
-        `{"blocked": bool, "required_confirm": bool, "reason": str, "audit": dict}`
+        `{"blocked": bool, "required_confirm": bool, "error_type": str,
+        "reason": str, "audit": dict}`
         - `required_confirm`：判定命中（与客户端声明无关）；
-        - `blocked`：最终是否应拒绝 = 判定命中 且 客户端未声明
-          `allowDestructive`；
+        - `blocked`：最终是否应拒绝 = 判定命中 且（策略 deny 模式，或客户端
+          未声明 `allowDestructive`）；
+        - `error_type`：拒绝时给客户端的分类——默认 `destructive_blocked`
+          （客户端传 `allowDestructive=true` 可自解），策略 deny 模式下为
+          `permission_denied`（客户端无解，需改策略）；
         - `reason`：拒绝时直接作为 ToolError 文案（带上具体子操作）。
     """
     if kind == "mcp":
@@ -255,14 +330,26 @@ def decide_destructive(
         sub_op_label = ""
         audit_action = kind
 
+    policy = get_policy()
+    mode = (policy.get("destructive") or {}).get("mode") or "require_confirm"
     client_declared = bool(args.get("allowDestructive"))
-    blocked = required and not client_declared
-    if not required:
-        decision = "allow"
-    elif client_declared:
-        decision = "confirm"
-    else:
-        decision = "block"
+
+    blocked = False
+    if required:
+        if mode == "allow":
+            # 部署者显式声明本机信任：跳过确认流程（required 一并清掉，
+            # handler 不再打「已确认」日志、响应不挂 warning）
+            required = False
+        elif mode == "deny":
+            # 策略赢（H1 修复）：命中即拒绝，不读客户端 allowDestructive
+            blocked = True
+            reason = f"部署策略 destructive.mode=deny，拒绝该破坏性操作；{reason}"
+        elif not client_declared:
+            blocked = True
+    decision = "block" if blocked else ("confirm" if required else "allow")
+    error_type = (
+        "permission_denied" if (mode == "deny" and required) else "destructive_blocked"
+    )
 
     audit = {
         "event": "destructive_gate",
@@ -274,12 +361,15 @@ def decide_destructive(
         "decision": decision,
         "rule_hit": rule_hit,
         "client_declared": client_declared,
+        "policy_version": policy.get("version"),
+        "policy_mode": mode,
     }
     _emit_audit(audit)
 
     return {
         "blocked": blocked,
         "required_confirm": required,
+        "error_type": error_type,
         "reason": reason,
         "audit": audit,
     }

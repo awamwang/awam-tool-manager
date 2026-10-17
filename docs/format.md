@@ -243,8 +243,9 @@
 
 `errorType`：`not_found` / `unknown_tool` / `unknown_resource` / `unknown_prompt`
 / `invalid_params` / `connection_error` / `runtime_error` / `config_error`
-/ `destructive_blocked` / `backend_busy` / `backend_installing` / `internal_error`
-/ `launcher_error` / `install_required` / `install_not_allowed` / `unknown_error`
+/ `destructive_blocked` / `permission_denied` / `backend_busy` / `backend_installing`
+/ `internal_error` / `launcher_error` / `install_required` / `install_not_allowed`
+/ `unknown_error`
 
 ---
 

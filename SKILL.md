@@ -101,8 +101,9 @@ awam-tool-manager/
 
 `errorType` 取值：`not_found` / `unknown_tool` / `unknown_resource` / `unknown_prompt`
 / `invalid_params` / `connection_error` / `runtime_error` / `config_error`
-/ `destructive_blocked` / `backend_busy` / `backend_installing` / `internal_error`
-/ `launcher_error` / `install_required` / `install_not_allowed` / `unknown_error`。
+/ `destructive_blocked` / `permission_denied` / `backend_busy` / `backend_installing`
+/ `internal_error` / `launcher_error` / `install_required` / `install_not_allowed`
+/ `unknown_error`。
 
 - **`invalid_params`**：参数缺失 / 类型错 / 取值非法。当前发射点：`set_backend_log_level`
   的 `level` 非法值（参数校验议题上线后将扩大启用面）。
@@ -111,6 +112,9 @@ awam-tool-manager/
 - **`backend_installing`**：后端依赖正在自动安装中——分钟级忙态，不是错误（与 `backend_busy`
   的秒级并发冲突分工不同，故单列）。**可重试**：轮询 `get_backend_status` 或稍后重试
   `start_backend`；不要并发重试。
+- **`permission_denied`**：被部署策略拒绝（`data/policy.json` 的 `tools.deny` 名单、
+  白名单未收录、或 `destructive.mode=deny` 命中破坏性判定）。**客户端无法自行解除**
+  （与 `destructive_blocked` 区分：后者传 `allowDestructive=true` 即可），需管理员调整策略。
 - **`install_required`**：后端依赖缺失，且**未授权**自动执行 `install.command`（默认即此状态）。
   见「安全约定」——开授权后重试 `start_backend` 即可。
 - **`install_not_allowed`**：已授权，但 `install.command` 不在受支持的白名单内

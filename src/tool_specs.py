@@ -229,7 +229,7 @@ async def _handle_call_backend_tool(arguments: dict, ctx: ToolContext) -> dict:
     if decision["blocked"]:
         fail(
             decision["reason"],
-            error_type=ErrorType.DESTRUCTIVE_BLOCKED,
+            error_type=decision["error_type"],
             toolId=tool_id,
             toolName=tool_name,
         )
@@ -341,7 +341,7 @@ async def _handle_run_launcher_action(arguments: dict, ctx: ToolContext) -> dict
     if decision["blocked"]:
         fail(
             decision["reason"],
-            error_type=ErrorType.DESTRUCTIVE_BLOCKED,
+            error_type=decision["error_type"],
             toolId=tool_id,
         )
     if decision["required_confirm"]:

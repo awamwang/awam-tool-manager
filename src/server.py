@@ -53,6 +53,9 @@ from tool_specs import (
     build_mcp_tools,
     get_spec,
 )
+# ARC-P1-05 Phase 2：部署策略（data/policy.json）的 dispatch 前置检查。
+# policy 在 import 期加载并校验策略（坏策略快速失败，不在这里处理）。
+from policy import check_call
 
 # 数据目录：DATA_DIR 放人写的声明（进版本库），RUNTIME_DIR 放程序生成的
 # 运行时数据（本机应用数据目录）。两者此前混在 data/ 下，导致活实例改写
@@ -158,6 +161,11 @@ async def dispatch_tool(name: str, arguments: dict) -> str:
     spec = get_spec(name)
     if spec is None:
         fail(f"未知工具: {name}", error_type=ErrorType.UNKNOWN_TOOL, toolName=name)
+    # ARC-P1-05 Phase 2：策略层先于 handler——deny 名单 / 白名单命中即拒绝
+    # （permission_denied），调用参数（含 allowDestructive）一律不看。
+    denial = check_call(name)
+    if denial is not None:
+        fail(denial["reason"], error_type=ErrorType.PERMISSION_DENIED, toolName=name)
     payload = await spec.handler(arguments, _TOOL_CONTEXT)
     return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 

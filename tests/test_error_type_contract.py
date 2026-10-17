@@ -5,19 +5,19 @@
 
 1. **枚举完整性**：`ErrorType` 常量枚举的值集合 == `SKILL.md`「错误处理
    约定」与 `docs/format.md`「错误返回约定」两份文档各自声明的集合
-   （各 16 种，任何一份漂移即红）——把「文档 vs 代码」的漂移变成显红，
+   （各 17 种，任何一份漂移即红）——把「文档 vs 代码」的漂移变成显红，
    而非静默。format.md 的枚举段是手写区（不在生成区块，
    `test_docs_sync` 的生成块校验管不到），必须由本守卫单独看住；
 2. **A 层站点守卫**：清点单 §3.1 的 14 个客户端可达失败站点（经
    `ensure_success()` 转 `ToolError` 进协议）逐个真实触发，断言载荷带
    合法 `errorType`（合法集 = `ErrorType.all()`，含 `backend_installing`）
    且具体取值与 §3.2 补齐表逐站一致——哪个站点漏带 / 带错，这里就红；
-3. **覆盖台账**：16 种取值每种至少一条触发用例。台账记录「哪个测试
+3. **覆盖台账**：17 种取值每种至少一条触发用例。台账记录「哪个测试
    触发了哪个值」并校验被引用的测试函数真实存在——删了触发用例不补，
    台账就红。
 
 两个此前的覆盖缺口由本文件补上：`invalid_params` 在 A1 落地前是死值
-（`fail()` 默认参数从未被用上）；`launcher_error` 是 16 种里唯一没有
+（`fail()` 默认参数从未被用上）；`launcher_error` 是当时 16 种里唯一没有
 触发用例的非 A 层值（`list_launcher_actions` 的 handler 把
 `LauncherError` 转成带 errorType 的失败，而不是落进内部异常兜底）。
 """
@@ -231,7 +231,7 @@ def test_a_layer_failures_all_carry_valid_error_type():
         )
 
 
-# ---- 3. 覆盖台账：16 种取值各有触发用例 ----
+# ---- 3. 覆盖台账：17 种取值各有触发用例 ----
 
 
 def test_launcher_error_is_reachable(monkeypatch):
@@ -270,6 +270,9 @@ _TRIGGER_LEDGER = {
     ErrorType.DESTRUCTIVE_BLOCKED: (
         "test_registry_policy.py",
         "test_destructive_call_is_blocked_without_confirmation"),
+    # Phase 2（P1-05 方案 C）：策略拒绝的真实触发（deny 名单 → dispatch 拒绝）
+    ErrorType.PERMISSION_DENIED: (
+        "test_policy_config.py", "test_deny_list_blocks_dispatch_call"),
     ErrorType.BACKEND_BUSY: (
         "test_server_dispatch.py", "test_backend_busy_maps_to_typed_error"),
     ErrorType.BACKEND_INSTALLING: (
@@ -290,7 +293,7 @@ _TRIGGER_LEDGER = {
 
 
 def test_every_error_type_has_a_trigger_case():
-    """台账覆盖全部 16 种取值，且被引用的测试函数真实存在"""
+    """台账覆盖全部 17 种取值，且被引用的测试函数真实存在"""
     assert set(_TRIGGER_LEDGER) == set(ErrorType.all()), (
         "台账与枚举不一致：补齐缺失条目或删除多余条目"
     )

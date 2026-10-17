@@ -37,6 +37,9 @@ class ErrorType:
 
     16 种取值的语义 / 触发条件 / 客户端动作见 SKILL.md「错误处理约定」
     与清点单 `docs/architecture_incremental_p1-03_errorType_inventory.md` §2。
+    （Phase 2 扩容第 17 种 `permission_denied`：被部署策略拒绝，客户端
+    无法自行解除——与 `destructive_blocked` 的「传 allowDestructive 即可
+    自解」明确区分。）
     """
 
     NOT_FOUND = "not_found"
@@ -61,6 +64,9 @@ class ErrorType:
     # 兜底值：后端抛了既非 BackendBusyError/ConnectionError/RuntimeError
     # 的未分类异常
     UNKNOWN_ERROR = "unknown_error"
+    # Phase 2 新增（P1-05 方案 C）：被部署策略拒绝（deny 名单 / 白名单未收录 /
+    # destructive.mode=deny 命中）——客户端无法自行解除，需管理员改策略
+    PERMISSION_DENIED = "permission_denied"
 
     @classmethod
     def all(cls) -> frozenset:
