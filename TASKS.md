@@ -251,7 +251,8 @@
       完全等价）；NE-3 `validate_specs()` import 期自检（对合法输入零差异，spec 表损坏时
       快速失败）；NE-4 `server.py` 行数下降致旧文档行号引用失效（M06 已同步
       `docs/architecture.md`）；NE-5 `search_tools`/`list_tools` 入参文案里的 `driver`
-      举例漂移本期不修（U1：改了违反行为等价，并入后续漂移清理批次）
+      举例漂移已于 2026-10-17 漂移清理批次修正为 `launcher`（§3.1 #20，行为变更：tools/list
+      两处 description 文案变更，golden 同步重新基线）
 
 ### 其他
 - [x] Git 仓库初始化，代码版本管理

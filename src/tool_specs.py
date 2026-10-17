@@ -362,8 +362,8 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
                 },
                 "kind": {
                     "type": "string",
-                    # NE-5：driver 是历史漂移，本期不许修（golden 钉住原文；修复并入后续漂移清理批次）
-                    "description": "可选，按工具类型筛选（如 app、mcp、driver）"
+                    # NE-5：driver 历史漂移已于 2026-10-17 修正为 launcher（§3.1 #20；golden 同步重新基线）
+                    "description": "可选，按工具类型筛选（如 app、mcp、launcher）"
                 }
             },
             "required": ["keyword"]
@@ -379,8 +379,8 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
             "properties": {
                 "kind": {
                     "type": "string",
-                    # NE-5：driver 是历史漂移，本期不许修（golden 钉住原文；修复并入后续漂移清理批次）
-                    "description": "可选，按工具类型筛选（如 app、mcp、driver）"
+                    # NE-5：driver 历史漂移已于 2026-10-17 修正为 launcher（§3.1 #20；golden 同步重新基线）
+                    "description": "可选，按工具类型筛选（如 app、mcp、launcher）"
                 }
             }
         },

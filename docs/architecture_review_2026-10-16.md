@@ -38,7 +38,7 @@
 | `:132-136` `call_tool` 的 `except ToolError` | `server.py:130-137`（该函数逐字未动） |
 | `:147-151` `ensure_success` / `fail` | `errors.py:82` / `errors.py:75`（P1-03 S2 后 errors.py 增至 86 行，两者由 `:31`/`:24` 下移）；`server.py:45` re-export（同一对象） |
 | `:158-431` 15 个 `Tool(...)` 字面量 | `tool_specs.py:351-657` `SERVER_TOOL_SPECS`（15 条 spec） |
-| `:171`/`:185` `kind` 的 driver 文案 | `tool_specs.py:366`/`:383`（NE-5：原文保留，本期不许修，见 §3.1 第 20 条；NE-5 注释在其上一行 `:365`/`:382`） |
+| `:171`/`:185` `kind` 的 driver 文案 | `tool_specs.py:366`/`:383`（P1-04 时原文「如 app、mcp、driver」保留不修；**2026-10-17 已按 §3.1 #20 修正为「launcher」**；NE-5 注释在其上一行 `:365`/`:382`） |
 | `:174` `search_tools` 的 `required: ["keyword"]` | `tool_specs.py:369`（同属 inputSchema 声明不校验证据，旧行号落在 `:158-431` 区间内故单列） |
 | `:205-206` `launch_tool` 描述 | `tool_specs.py:408`（`description="取指定工具的启动命令（只返回命令，不实际执行启动）"`；spec 块 `:405-411`） |
 | `:303-324` `get_backend_logs` Tool 定义 | `tool_specs.py:517-540` |

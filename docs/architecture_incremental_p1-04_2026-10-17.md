@@ -22,7 +22,7 @@
 | `:100-105` `SHARED_OUTPUT_SCHEMA` | `tool_specs.py:86-91` |
 | `:108-126` `_needs_destructive_confirm` | `tool_specs.py:102-120` |
 | `:158-431` 15 个 `Tool(...)` 字面量 | `tool_specs.py:351-657` `SERVER_TOOL_SPECS` |
-| `:171` / `:185` `kind` 的 driver 文案 | `tool_specs.py:366` / `:383`（NE-5：原文保留，本期不许修；NE-5 注释在其上一行 `:365` / `:382`） |
+| `:171` / `:185` `kind` 的 driver 文案 | `tool_specs.py:366` / `:383`（P1-04 时保留原文「如 app、mcp、driver」；**2026-10-17 §3.1 #20 已修正为「launcher」**，NE-5 注释在其上一行 `:365` / `:382`） |
 | `:435` `if hints:` 真值判断 | `tool_specs.py:684`（`if ToolAnnotations is not None and spec.annotations:`） |
 | `:439-440` outputSchema 挂载循环 | `tool_specs.py:686`（`tool.outputSchema = spec.output_schema or SHARED_OUTPUT_SCHEMA`） |
 | `:500-717` `dispatch_tool` if/elif 链 | `server.py:153-163` 查表分发 + `tool_specs.py:123-347` 15 个 handler |
@@ -575,7 +575,7 @@ graph LR
 
 | # | 事项 | 我的假设 / 建议 | 裁决（2026-10-17，team-lead） |
 |---|---|---|---|
-| U1 | `src/server.py:171`/`:185` 的 `driver` 是有意预留还是历史残留？ | 按**历史残留**处理，但**本期不改**（改了违反行为等价，NE-5）。建议单独开一个 P3 文档漂移修复，把文案收敛为「app、mcp、launcher」 | ✅ **本期不修，不单独开 P3**；并入后续「§3.1 漂移清理」批次，连同 schema 文案 + 文档 + 测试一起改 |
+| U1 | `src/server.py:171`/`:185` 的 `driver` 是有意预留还是历史残留？ | 按**历史残留**处理，但**本期不改**（改了违反行为等价，NE-5）。建议单独开一个 P3 文档漂移修复，把文案收敛为「app、mcp、launcher」 | ✅ **本期不修，不单独开 P3**；并入后续「§3.1 漂移清理」批次，连同 schema 文案 + 文档 + 测试一起改（**2026-10-17 已兑现**：§3.1 #20 批次修正为 launcher + golden 重新基线） |
 | U2 | `SKILL.md:64-80` 工具表要不要做生成器（对标 `schema.py` → `format.md` 的模式）？ | **本期不做**，只加测试守卫（T04）。理由：生成器要改 `SKILL.md` 结构并引入第二套生成/判漂移机制，收益/风险比在 spec 表尚未稳定前不划算；等 P1-04 落地运行一段时间后再做 | ✅ **同意本期不做**；T04 只加三方守卫测试 |
 | U3 | L2（`BackendManager` / `LauncherManager` 统一）是否单独立项？ | 建议立，但**必须**先有独立的 errorType 与生命周期设计；本期只留 `ToolContext` 这个入口 | ✅ **不单独立项**——违反行为等价是硬约束，且当前无真实诉求（为统一而统一）。列为 **P3 观察项**，触发条件写明：①出现第三种数据 kind；②mcp/launcher 两个 L2 实现被迫共享同一段逻辑。`ToolContext` 入口已足够 |
 | U4 | P1-03 的 errorType 是否收敛为常量枚举？ | 建议收敛，落点 `src/errors.py`（P1-04 之后该文件已存在）。P1-04 不预留字段 | ✅ **立项，排在 P1-04 回归通过后立即执行**。落点 `src/errors.py`（与 `fail()` 同模块，P1-04 已留门）。范围 = errorType 契约清点 + 常量枚举 + 29 处 `"success": False` 中 23 处缺失补齐。**P1-04 期间严禁顺手补**（等价重构里补了就是行为变更）；P1-03 是显式契约修复，补齐属有意行为变更，须同步 SKILL.md 契约文档与测试断言。**要求：P1-03 启动前由架构师出一份契约清点单**（每个 errorType 的触发条件、语义、与现状差距） |
@@ -610,7 +610,7 @@ graph LR
 
 | # | 检查点 | 结论 |
 |---|---|---|
-| 1 | NE-5：`driver` 漂移未被顺手修掉 | ✅ `tool_specs.py:366`/`:383` 原文「如 app、mcp、driver」保留（NE-5 注释在其上一行 `:365`/`:382`，M08 补），golden 同步钉住 |
+| 1 | NE-5：`driver` 漂移未被顺手修掉 | ✅ `tool_specs.py:366`/`:383` 原文「如 app、mcp、driver」保留（NE-5 注释在其上一行 `:365`/`:382`，M08 补），golden 同步钉住。（**后续**：该文案已于 2026-10-17 的 §3.1 #20 漂移清理批次修正为 `launcher`，golden 重新基线——本检查点记录的是 M08 时点状态） |
 | 2 | `SHARED_OUTPUT_SCHEMA` 约束注释随常量搬入 | ✅ `tool_specs.py:79-91`，outputSchema↔structuredContent 注释原文随行 |
 | 3 | `_prewarm_backends`/`_restore_backends` 留在 `server.py` | ✅ `server.py:342-409`；`ensure_npm_bin_on_path` 仍可经 server 命名空间 monkeypatch |
 | 4 | golden 比对归一化 | ✅ `_fields()` 仅对 annotations 施加 `exclude_none=True`，其余四字段严格比；两条禁令（不补 null 键、不整表偷懒）遵守 |
