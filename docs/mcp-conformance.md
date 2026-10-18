@@ -73,7 +73,7 @@ MCP 规范定义了标准的 `logging` 能力（`logging/setLevel` + `notificati
 ### 1.4 分页 ⚠️
 
 `tools/list`、`resources/list`、`prompts/list` 都支持 `cursor` / `nextCursor` 游标分页。
-本项目 handler 签名不含 cursor，SDK 会返回不带 `nextCursor` 的结果 —— 当前 12 个工具规模下完全够用，
+本项目 handler 签名不含 cursor，SDK 会返回不带 `nextCursor` 的结果 —— 当前 18 个工具规模下完全够用，
 属于**有意不为**，不是缺陷。
 
 ---
@@ -202,7 +202,7 @@ MCP Tool 支持 `annotations`（`title` / `readOnlyHint` / `destructiveHint` / `
 |---|---|---|
 | 只读 | `search_tools` / `list_tools` / `get_tool_info` / `list_backend_tools` / `get_backend_status` / `get_backend_logs` / `get_usage_stats` | `readOnlyHint=true`、`destructiveHint=false` |
 | 幂等 | `start_backend` / `stop_backend` / `sync_backend_tools` | `idempotentHint=true` |
-| 副作用静态不可知 | `call_backend_tool` / `launch_tool` / `get_tool_help` | `openWorldHint=true`（**不谎报 readOnly**） |
+| 副作用静态不可知 | `call_backend_tool` / `launch_tool` / `get_tool_help` / `discover_tools` | `openWorldHint=true`（**不谎报 readOnly**） |
 
 `call_backend_tool` 只标 `openWorldHint` 是刻意的：它转发到任意后端子工具，
 副作用取决于运行时的 `tool_name`，静态断言只读会误导客户端。真正的防护落在
@@ -217,6 +217,12 @@ spawn 进程，条目 `destructive` 时同样需 `allowDestructive=true`；正�
 能力清单 / 动作清单 / 命令预览，零 spawn），`kind=app` 显式 `run=true` 才执行
 帮助命令——图形程序不认 `--help` 时会把它当普通启动参数跑起来，所以这条路径也
 接进了 destructive 门禁（审计与拒绝文案按 `get_tool_help` 入口标注）。
+
+`discover_tools` 是第四条：默认路径确实只读文件系统（路径存在 / 目录条目数 /
+`shutil.which` 查 PATH），但清单里的 `command.argv` 在 `run_commands=true` 时会被
+真的执行去取版本号。**能力面含执行就不声明 `readOnlyHint`**——哪怕默认路径一次都不
+spawn，声明只读等于把「它可以跑命令」对客户端藏起来。返回体的 `run` 报的是
+「这一维真的跑过没有」，不是调用方传了什么标志位。
 
 ### 2.5 异常兜底
 
@@ -237,13 +243,14 @@ MCP **不规定** Server 内部如何持久化数据，因此 `data/tools/`（�
 ### 3.2 `inputSchema` 合法性 ✅
 
 协议要求每个 Tool 的 `inputSchema` 是合法 JSON Schema（Draft 2020-12 子集）。
-本项目 16 个工具全部为：
+本项目 18 个工具全部为：
 
 ```json
 { "type": "object", "properties": { ... }, "required": [...] }
 ```
 
-符合要求。且从 1.30 起 SDK 会**自动用 jsonschema 校验入参**（`validate_input=True` 默认开启），
+符合要求（`required` 是可选项：`discover_tools` 的两个参数都可选，声明里就不带它）。
+且从 1.30 起 SDK 会**自动用 jsonschema 校验入参**（`validate_input=True` 默认开启），
 参数错误会在进入 handler 前被拦截。
 
 ### 3.3 后端子工具 schema 透传 ⚠️

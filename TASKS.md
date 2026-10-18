@@ -25,13 +25,14 @@
 - [x] MCP Server 入口（server.py）：stdio 模式
 - [x] 日志系统（输出到 stderr，不污染协议通道）
 
-### 对外 MCP 工具（17 个）
+### 对外 MCP 工具（18 个）
 - [x] `search_tools` - 搜索工具（关键词 + `kind` / `status` / `publisher` 筛选）
 - [x] `list_tools` - 列出所有工具（同上三个筛选维度，见「筛选维度增强」）
 - [x] `get_tool_info` - 查看工具详情
 - [x] `launch_tool` - 返回启动命令信息；2026-10-18 起支持显式 `execute=true` 真正执行启动（默认仍只返回命令）
 - [x] `get_tool_help` - 工具帮助信息：文档链接 + 能力清单（mcp 子工具 / launcher 动作）+ 帮助命令预览；2026-10-18 新增，`kind=app` 显式 `run=true` 才执行 `--help` 并捕获输出（默认零副作用）
 - [x] `get_usage_stats` - 调用使用统计：2026-10-18 新增（P3），只读 `<runtime>/usage.log` 并按窗口聚合，见「工具使用统计」小节
+- [x] `discover_tools` - 本机工具发现：2026-10-18 新增（P1），按 `data/discovery.json` 声明的候选清单做只读探测，见「工具自动发现」小节
 - [x] `call_backend_tool` - 路由调用后端 MCP 的子工具
 - [x] `list_backend_tools` - 列出后端子工具（含完整参数 schema）
 - [x] `start_backend` / `stop_backend` / `get_backend_status` - 后端进程管理
@@ -234,10 +235,11 @@
   destructive 门禁摘除的变异本轮被权限策略拦下未跑（同款摘除已在场景⑦验过，
   help 路径的门禁由单测 `test_handler_destructive_entry_blocks_run_until_allowed`
   与场景⑧的断言锁定）
-- **口径**：`pytest tests/ -q` = 343 passed / **8 deselected**；
-  `pytest -m e2e -q` = 8 passed / 343 deselected。说「343」时要带上
+- **口径**：`pytest tests/ -q` = 411 passed / **8 deselected**；
+  `pytest -m e2e -q` = 8 passed / 411 deselected。说「411」时要带上
   「另有 8 个 e2e 默认不收集」，否则会被误读成总数。
-  （本行随每次落地更新：NE-8 时为 314，NE-9「工具使用统计」落地后为 343）
+  （本行随每次落地更新：NE-8 时为 314，NE-9「工具使用统计」落地后为 343，
+  NE-10「工具自动发现」落地后为 411）
 - **手工脚本**（不在上面 8 个里）：
   `"<pyenv 3.12 python>" tests/e2e/manual_install_gate.py`——验「已授权时
   install.command 真的被提交给 shell」，依赖本机 npm，故保留手工。
@@ -497,6 +499,76 @@
       首版刻意不做，避免过度工程）；③不做「用户直接启动工具」的统计——
       那条路径根本不经过本 server
 
+### 工具自动发现（P1，2026-10-18）
+
+授权口径（用户选定「代码先行，真机由客户端跑」）：仓库内实现探测面，**单测全部跑
+`tmp_path` 合成数据、不碰用户真机**；真机结果由客户端调一次 `discover_tools` 得到。
+本轮因此没有读取过用户的 `LOCALAPPDATA` / `PATH` 内容。
+
+- [x] **`src/discovery.py`（新模块，425 行）+ `data/discovery.json`（9 个候选）** -
+      声明式候选清单（scoop / powertoys / winget / quicker / utools / everything /
+      node / python / steam）+ 三类探测：`path_exists`（能下结论）、`dir_count`
+      （只补充证据，目录空不等于没装）、命令是否在 PATH（`shutil.which`，**不 spawn**）
+- [x] **结论三态：`hit` / `miss` / `inconclusive`** - `{ENV}` 位置因为环境变量没设
+      而没检查成时必须判「不知道」而不是「没装」，否则探测面自己制造假结论；
+      `miss` 要求**所有**能下结论的维度都说没有、且没有维度没检查成。
+      `status` / `kind` 复用工具条目的同一套词表（与 NE-8「能筛的维度都能看见」反过来成立：
+      发现结果要能被 `list_tools` 的筛选参数接住）
+- [x] **失败时机与 `policy.py` 刻意不同** - 两者都是「仓库里的 JSON 声明 + 环境变量覆盖」，
+      但坏策略等于安全约束静默失效所以 import 期快速失败；发现清单不是安全面，
+      坏文件只让 `discover_tools` 这一次调用返回 `config_error`，不拖垮整个服务
+- [x] **第 18 个对外工具 `discover_tools`**（`tool_specs.py`）- 参数 `run_commands`
+      （默认 false）与 `status`（带 `enum`）均非必填；返回 `manifestPath`（自证声明源）+
+      `runCommands` + `summary`（整份清单计数，不随筛选裁剪）+ `returned` +
+      `candidates`（逐条 `status` / `confidence` / `registered` / `evidence`）+ `note`。
+      清单为空时 `note` 改口说「这是还没声明要找什么，不是本机没有工具」
+- [x] **`note` 自证探测面不是穷举** - 清单没写的安装位置发现不了，所以「未命中」
+      只能给中信心（`confidence=medium`）；这条限制写在返回体里而不是只写在文档里，
+      否则调用方会把「没发现」读成「本机没有」
+- [x] **默认零 spawn 的实现细节** - `probe_command()` 只用 `shutil.which` 判可用性
+      （不起进程），`run=True` 才用 which 解析出的**绝对路径**无 shell 执行
+      （Windows 的 `.cmd` 垫片必须绝对路径），超时与 `OSError` 都折成结论返回而不抛；
+      载荷里的 `run` 报的是「这一维真的跑过没有」，不是回显调用方传的标志位
+- [x] **实现期抓到的两个真问题** - ①`fail()` 参数顺序写反（`fail(ErrorType.CONFIG_ERROR, str(exc))`）
+      会把任意异常文本发布成 `errorType` 契约值，改为 `fail(str(exc), error_type=…)`；
+      ②`probe.get("limit") or DEFAULT_DIR_LIMIT` 把显式 `0` 吞成默认值，改为
+      `get("limit", DEFAULT)` 并让 `limit<=0` 返回空、校验期要求 int
+- [x] **测试：+68 条（343 → 411）** - `tests/test_discovery.py` 66 条（清单校验 14 条参数化、
+      仓库清单静态校验 + 只声明 env token 的守卫、`expand_path` 四种失败、`run_probes`
+      三态折叠、`fold_verdicts` / `status_of` 表、命令面 11 条含超时/OSError/截断、
+      `discover` 编排、**5 条 dispatch 集成**含「默认一次都不 spawn」的正证与 `config_error`、
+      spec 注解），`tests/test_protocol_roundtrip.py` +2 条（真实会话载荷形状 + 不 spawn、
+      `status` enum 在线上就拦下拼错的值）
+- [x] **变异红绿（9 组，各打死对应用例后按 sha256 还原）** - M1 环境变量没设退化成相对路径、
+      M2 `inconclusive` 塌缩成 `miss`、M3 忽略 `run` 门禁、M4 命令可用性不参与结论、
+      M5 不校验 `version_pattern`、M6 `status` 去掉 enum、M7 把会 spawn 的工具声明成只读、
+      M8 `dir_count` 也参与命中判定、M9 清掉 `note`；9/9 击杀集合精确、无多余无漏杀
+- [x] **M3 第一版杀不动，暴露两个测试缺口（本轮最有价值的一次红）** -
+      ①门禁用例原先用不在 PATH 的命令，「没 spawn」平凡为真 → 换成 tmp bin 里的
+      `herecli`（可用但不该跑），让「可用」与「跑过」两个维度分离；
+      ②`command.run` 原先回显调用方标志位，「忽略门禁」的变异照样报 `run: false` →
+      改为在真正 `subprocess.run` 之前才置真。用例与实现一起补，之后 M3 击杀 5/5
+- [x] **golden 重基线（NE-10）** - 纯追加：17→18，diff 39+/1-（唯一删除是文件末尾的 `]`），
+      前 17 条逐字节不变；三方名字守卫（`SERVER_TOOL_SPECS` / `conftest.EXPECTED_TOOL_NAMES` /
+      SKILL.md 工具表）同步加 `discover_tools`
+- [x] **顺带修一条脆弱用例** - `test_usage_stats_is_read_only_spec` 原先取 `names[-1]`，
+      追加新工具就让不相干用例变红；改为 `get_spec("get_usage_stats")` 按名取
+- [x] **文档同步** - `SKILL.md`（核心能力增「工具发现」、工具表新行、目录树、
+      用例数 343→411、安全约定的「显式参数才 spawn」对照表加第三条）、`docs/format.md`
+      （新增「发现候选清单」字段表 + 示例 + 三态表、契约行、词表闭环说明）、
+      `docs/architecture.md`（能力表、目录树、4.4 新节、模块表加 `discovery.py` 行与
+      `tool_specs.py` 975→1038、7.2 门禁纪律行、6.1 工具表 17→18、实现索引）、
+      `docs/mcp-conformance.md`（`discover_tools` 归入 `openWorldHint` 一类并说明
+      「能力面含执行就不声明只读」，顺带修正 12/16 两处陈旧工具数）
+- [x] **未做 e2e 场景** - 本期授权口径就是「不探测用户真机」，而 e2e 层要证的是
+      真实子进程与 stdout 通道不被污染；这两点分别由「清单里只写 `{ENV}` token」的
+      静态守卫 + 协议回环用例（真实会话、PATH 换成 tmp bin、`subprocess.run` 换成
+      记录型桩）在更低成本上锁定。Scoop 适配器（P2）落地时再补 e2e 场景
+- [x] **明确不做** - ①不把发现结果自动回填 `data/tools/`（登记是人的决定）；
+      ②不做清单自动生成/穷举扫描（与「声明式」定位冲突，且会扩大读取面）；
+      ③不并发探测（首版候选个位数，串行够用）；④不把 `not_installed` 当事实结论用；
+      ⑤不在仓库测试里跑任何真实命令面
+
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
 - [x] Everything Search MCP（`kind=mcp`，已实测连接、调用、启停跑通）
@@ -550,7 +622,13 @@
       （2026-10-18 P3 落地，详见「工具使用统计」小节：golden 纯追加重基线 16→17，
       diff 35+/0-；**新增一项本地写副作用**——每次 `tools/call` 往
       `<runtime>/usage.log` append 一行（不含参数），客户端可见的载荷字段无变化；
-      既有 16 条 spec 逐字节不变）
+      既有 16 条 spec 逐字节不变）；
+      NE-10 新增第 18 个对外工具 `discover_tools`（2026-10-18 P1 落地，详见
+      「工具自动发现」小节：golden 纯追加重基线 17→18，diff 39+/1-（唯一删除是文件
+      末尾的 `]`），既有 17 条 spec 逐字节不变；**新增一项本机读取面**——按
+      `data/discovery.json` 声明的路径做文件系统存在性/目录列举读取，
+      默认不起任何子进程，`run_commands=true` 才执行清单里的版本命令；
+      annotations 标 `openWorldHint` 且**不声明** `readOnlyHint`）
 
 ### 其他
 - [x] Git 仓库初始化，代码版本管理
@@ -594,6 +672,14 @@
    append-only、无锁、无轮转（首版刻意不做，避免过度工程）。网关可能同时拉多个
    server 进程，行与行之间会交错——计数以行数为准（每行自带 `tool`/`ts`，交错不影响
    聚合正确性），但「第 N 行紧跟第 N+1 行」这类顺序假设不成立
+- **发现面是声明出来的，不是穷举**（NE-10 的刻意边界）：`discover_tools` 只看
+   `data/discovery.json` 里写了的位置和命令，清单没写的安装路径（如自定义 scoop 根、
+   绿色软件目录）发现不了。所以 `not_installed` 只是**中信心**结论，不能当「本机确实
+   没装」的事实用；`unknown` 更进一步——连一个位置都没检查成（环境变量没设）。
+   这条限制由返回体的 `note` 每次自证，不靠调用方读文档
+- **本期没在用户真机上跑过探测**（授权口径：代码先行）：仓库内单测与协议回环用例
+   全部用 `tmp_path` 合成的假目录、假 PATH、假清单，只有两条用例**静态**读仓库清单
+   （校验它合规、且路径只用 `{ENV}` token）。真实结论要等客户端调一次 `discover_tools`
 - ~~`data/backend-tools/*.json` 是自动生成的缓存却受 git 跟踪，多实例在跑时
   `lastSynced` 会被反复改写~~ → 已解决（A14）：运行时缓存整体迁到
   `%LOCALAPPDATA%\.awam-tool-manager`，仓库里只剩人工维护的 `data/tools/`
@@ -616,7 +702,12 @@
 - [ ] 接入 npm（npm MCP）— ⚠️ 需求待澄清：npm 官方无 MCP server，需明确接哪个包
 
 ### P1 - 体验完善
-- [ ] 工具自动发现：检测本机已安装哪些可作为 MCP 后端接入的工具
+- [x] 工具自动发现 — ✅ 已完成（2026-10-18，见「工具自动发现（P1）」小节）：
+      `data/discovery.json` 声明候选清单 + `src/discovery.py` 只读探测
+      （路径存在 / 目录条目数 / 命令是否在 PATH），第 18 个对外工具
+      `discover_tools` 给出 `installed` / `not_installed` / `unknown` 三态结论；
+      取版本号要显式 `run_commands=true`。**本期口径**：代码先行，仓库内单测全部
+      跑 `tmp_path` 合成数据、不探测用户真机，真机结论由客户端调一次 `discover_tools` 得到
       （「工具帮助文档查看」「筛选维度增强」已于 2026-10-18 完成，见上节 P1）
 
 ### P2 - 生态扩展
@@ -655,6 +746,11 @@
 > 早期设计中的「启动器配置层」`data/launchers/` 与「适配器层」`src/adapters/` 已废弃移除。
 > MCP 现在是**工具的一种类型**（`kind=mcp`），而非独立层级，
 > 所有对外工具统一用 `tool_id` 指定目标。
+>
+> `data/policy.json`（部署策略）与 `data/discovery.json`（发现候选清单）同样是
+> 仓库内人工维护的真相源，但**都不是数据层**：前者是「允许怎么调」的策略，
+> 后者是「该去找什么」的声明，都不描述已登记的工具，也不由 `schema.py` 生成字段表
+> （策略走 `schema.POLICY_SCHEMA`，清单走 `discovery.validate_manifest`）。
 
 ### 4.2 工具条目（`data/tools/{tool_id}.json`）
 
@@ -740,9 +836,11 @@ awam-tool-manager/
 │   │   ├── winget-mcp.json
 │   │   ├── quicker.json        # kind=launcher
 │   │   └── utools.json         # kind=launcher
+│   ├── policy.json             # 部署策略（ARC-P1-05 Phase 2，AWAM_POLICY_FILE 可覆盖）
+│   └── discovery.json          # 发现候选清单（discover_tools 的声明源，NE-10）
 ├── src/
 │   ├── server.py               # MCP Server 入口：协议装配 + 薄分发 + 生命周期
-│   ├── tool_specs.py           # 对外 MCP 工具声明式注册表（SSOT：17 条 spec + handlers）
+│   ├── tool_specs.py           # 对外 MCP 工具声明式注册表（SSOT：18 条 spec + handlers）
 │   ├── policy.py               # 破坏性门禁统一判定 + 部署策略（data/policy.json）
 │   ├── errors.py               # 业务错误出口（ToolError / fail / ensure_success）
 │   ├── store.py                # JSON 存储层（tools 走仓库，缓存走 runtime dir）
@@ -751,12 +849,13 @@ awam-tool-manager/
 │   ├── launcher_client.py      # 启动器适配器（非 MCP：Quicker / uTools）
 │   ├── app_launcher.py         # kind=app 启动执行（launch_tool 的 execute=true 路径）
 │   ├── tool_help.py            # 帮助信息分层取数 + 帮助命令执行（get_tool_help 底座）
+│   ├── discovery.py            # 本机工具发现（声明清单 + 只读探测，默认零 spawn）
 │   ├── usage.py                # 调用使用统计：dispatch 出口记 usage.log + 按窗口聚合
 │   ├── runtime_paths.py        # 运行时目录解析 + 旧路径迁移（A14）
 │   └── schema.py               # 两层数据的 JSON Schema 校验 + **文档生成源**
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                      # 17 个 test_*.py（343 passed）+ 8 个 e2e 场景（默认不收集）
+└── tests/                      # 18 个 test_*.py（411 passed）+ 8 个 e2e 场景（默认不收集）
     ├── test_store.py
     ├── test_registry.py
     ├── test_registry_policy.py
@@ -770,6 +869,7 @@ awam-tool-manager/
     ├── test_launcher_client.py
     ├── test_app_launcher.py          # kind=app 启动执行（execute 路径底座）
     ├── test_tool_help.py             # 帮助取数分层 + help 命令执行（run 才 spawn）
+    ├── test_discovery.py             # 发现清单校验 + 三态折叠 + 默认零 spawn
     ├── test_runtime_paths.py     # 运行时目录解析与迁移（A14）
     ├── test_protocol_roundtrip.py   # 真实 MCP 会话，不 mock SDK
     ├── test_docs_sync.py            # 文档/示例/data 与 schema 的一致性

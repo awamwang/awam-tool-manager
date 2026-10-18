@@ -1,6 +1,6 @@
 # awam-tool-manager 架构文档
 
-> 本文基于**当前代码实际状态**整理（截至 2026-10-18，HEAD `0df7b37`：含 P0 install 门禁 `4dc8b31`、P1-04 声明式注册表重构 `ee252eb`–`a2a8079`、P1-03 errorType 契约补齐 `7f66d32`–`fce1b4b`、P1 筛选维度 `f062fa0`、P3 使用统计 `0df7b37`）。文中行数与行号均为**易腐数字**，精确值以 `wc -l src/*.py` / 源码为准。
+> 本文基于**当前代码实际状态**整理（截至 2026-10-18，HEAD `944430f`：含 P0 install 门禁 `4dc8b31`、P1-04 声明式注册表重构 `ee252eb`–`a2a8079`、P1-03 errorType 契约补齐 `7f66d32`–`fce1b4b`、P1 筛选维度 `f062fa0`、P3 使用统计 `0df7b37`、P1 工具发现 `944430f`）。文中行数与行号均为**易腐数字**，精确值以 `wc -l src/*.py` / 源码为准。
 >
 > 历史包袱说明：仓库文档早期描述的「三层架构」含 `data/launchers/`（启动器配置）与
 > `src/adapters/`（启动器适配器）。这两层已在重构中移除（`3f5257a` / `bf78c2b` / `77ed097`），
@@ -33,6 +33,7 @@
 | 工具搜索（名称 / 显示名 / 描述 / 标签模糊匹配） | `registry.py` | ✅ |
 | 工具列出 + `kind` / `status` / `publisher` 筛选 | `registry.py` | ✅ |
 | 调用使用统计（dispatch 出口记日志 + 按窗口聚合） | `usage.py` | ✅ |
+| 本机工具发现（声明式候选清单 + 只读探测，默认零 spawn） | `discovery.py` | ✅ 代码与单测就位；真机结论由客户端调 `discover_tools` 给出 |
 | 工具详情查询（app / mcp 分支） | `server.py` | ✅ |
 | 工具启动信息返回（默认只返回命令；`execute=true` 才启动） | `registry.py` + `app_launcher.py` | ✅ |
 | 后端 MCP 路由调用 | `backend_client.py` | ✅ 已实测跑通 |
@@ -72,6 +73,7 @@ awam-tool-manager/
 │   └── code-review.md        # 审核报告
 ├── data/                     # 仓库内只有人工维护的真相源（A14 起）
 │   ├── policy.json           # 部署策略（deny/白名单 + destructive.mode，ARC-P1-05 Phase 2）
+│   ├── discovery.json        # 发现候选清单（discover_tools 的声明源，不是数据层）
 │   └── tools/                # 工具条目：一个工具一个 JSON 文件
 │       ├── everything.json            (kind=app)
 │       ├── everything-search-mcp.json (kind=mcp)
@@ -79,7 +81,7 @@ awam-tool-manager/
 │       └── quicker.json               (kind=launcher)
 ├── src/
 │   ├── server.py             # MCP Server 入口：协议装配 + 薄分发 + 生命周期
-│   ├── tool_specs.py         # 对外 MCP 工具声明式注册表（SSOT：17 条 spec + handlers）
+│   ├── tool_specs.py         # 对外 MCP 工具声明式注册表（SSOT：18 条 spec + handlers）
 │   ├── policy.py             # 破坏性门禁统一判定（decide_destructive + 结构化审计）
 │   ├── errors.py             # 业务错误出口（ToolError / fail / ensure_success）
 │   ├── store.py              # JSON 存储层（tools 走仓库，缓存走运行时目录）
@@ -89,11 +91,12 @@ awam-tool-manager/
 │   ├── launcher_client.py    # 启动器适配器（非 MCP：Quicker / uTools）
 │   ├── app_launcher.py       # kind=app 启动执行（launch_tool 的 execute=true 路径）
 │   ├── tool_help.py          # 帮助信息分层取数 + 帮助命令执行（get_tool_help 的底座）
+│   ├── discovery.py          # 本机工具发现（声明清单 + 只读探测，默认零 spawn）
 │   ├── usage.py              # 调用使用统计：dispatch 出口记 usage.log + 按窗口聚合
 │   └── runtime_paths.py      # 运行时目录解析 + 旧路径迁移
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 17 个用例文件，343 passed（含真实 MCP 会话与文档漂移检测）
+└── tests/                    # 18 个用例文件，411 passed（含真实 MCP 会话与文档漂移检测）
                               # 另有 tests/e2e/ 8 个真实会话用例，默认不收集
     └── e2e/                  # 真实子进程 / 真实 stdio 端到端层（ARC-P3-02）：8 个用例
                               # **默认不收集**（起真实子进程、慢、依赖本机解释器），
@@ -101,9 +104,9 @@ awam-tool-manager/
                               # manual_install_gate.py（依赖本机 npm，手工跑，不进 pytest）
 ```
 
-> **用例数口径（2026-10-18 更新）**：`pytest tests/ -q` = **254 passed**（另有 6 个
-> e2e 用例被 deselect）。254 **不是**全部用例数——真实 e2e 层不进默认收集，
-> 总数应表述为「254（默认）+ 6（e2e，`pytest -m e2e`）= 260」。
+> **用例数口径（2026-10-18 更新）**：`pytest tests/ -q` = **411 passed**（另有 8 个
+> e2e 用例被 deselect）。411 **不是**全部用例数——真实 e2e 层不进默认收集，
+> 总数应表述为「411（默认）+ 8（e2e，`pytest -m e2e`）= 419」。
 
 运行时数据（**不在仓库**，A14 起）：`%LOCALAPPDATA%\.awam-tool-manager/`
 （环境变量 `AWAM_RUNTIME_DIR` 可覆盖；server 启动时自动从旧路径迁移）
@@ -206,6 +209,26 @@ awam-tool-manager/
 **不读**客户端 `allowDestructive`——策略赢；`allow` 跳过确认；默认
 `require_confirm` 维持现行为）。
 
+### 4.4 发现候选清单 `data/discovery.json`（P1）
+
+**不是数据层**：`data/tools/` 说「登记了什么」，这份清单说「该去找什么」，
+所以它不进 `schema.py`（不生成字段表），校验源是 `discovery.validate_manifest()`，
+`AWAM_DISCOVERY_FILE` 可覆盖。失败时机与策略文件刻意相反——发现不是安全面，
+坏清单只让 `discover_tools` 这一次调用返回 `config_error`，不让整个服务起不来。
+
+探测面三档，**默认只读文件系统**：
+
+| 探测 | 能否下结论 | 说明 |
+|---|---|---|
+| `path_exists` | 能 | 声明的多个位置逐个试，第一个存在即命中；位置用 `{ENV}` 模板 |
+| `dir_count` | 不能 | 只补充证据（装了几个包）——目录空不等于没装 |
+| 命令是否在 PATH | 能 | `shutil.which`，**不 spawn**；版本号要显式 `run_commands=true` |
+
+结论三态 `hit` / `miss` / **`inconclusive`**：`{ENV}` 取不到就是「这个位置没检查成」，
+绝不回退成相对路径去试存在性——那会把「没设环境变量」伪装成「这个路径不存在」。
+`status` / `kind` 与工具条目共用词表，所以发现结果能直接回填 `list_tools` 的筛选参数。
+字段表与示例见 [`format.md`](format.md) 的「发现候选清单」一节。
+
 ---
 
 ## 5. 模块架构
@@ -219,7 +242,7 @@ awam-tool-manager/
                         │  MCP / stdio (JSON-RPC)
 ┌───────────────────────▼──────────────────────────────────┐
 │  接口层  src/server.py（协议装配 + 薄分发 + 生命周期）   │
-│   · 17 个 Tool 定义 + 分发：tool_specs.py 声明（SSOT）  │
+│   · 18 个 Tool 定义 + 分发：tool_specs.py 声明（SSOT）  │
 │   · errors.py：业务错误出口（fail / ensure_success）    │
 │   · 3 个 Resource、3 个 Prompt                           │
 │   · 全部返回值统一 JSON 序列化                            │
@@ -266,7 +289,8 @@ awam-tool-manager/
 | `app_launcher.py` | 188 | `kind=app` 的启动执行（`launch_tool` 的 `execute=true` 路径）：`create_subprocess_exec` 无 shell、stdio 三件套 DEVNULL（A8）、`shutil.which` 预检、观察窗口（默认 5s / 封顶 30s）区分「早退报退出码」与「仍在运行报 running」；运行中进程由模块级注册表强引用保活（CPython transport.close() 会 kill 运行中子进程） | `errors`、`anyio` |
 | `tool_help.py` | 256 | 帮助信息分层（`get_tool_help` 的底座）：`resolve_help_command()`（`help.command` > `launch.command`，`help.args` > `--help`，**永不复用 `launch.args`**；timeout 默认 5s / 封顶 30s）+ `entry_help` / `backend_summary` / `launcher_summary` 纯取数 + `run_help_command()`（`create_subprocess_exec` 无 shell、PIPE 捕获、UTF-8→GBK→replace 三级解码、超时必 kill、>20000 字符截断、非零但有文本仍算成功） | `errors`、`anyio` |
 | `usage.py` | 209 | 调用使用统计（P3）：`record_call()` 在 dispatch 每个出口 append 一行 JSONL 到 `<runtime>/usage.log`（**刻意不记参数**；落盘失败只向 stderr 告警，绝不把「统计写不进去」变成「工具调用失败」）+ `read_rows()` 容错读取（缺文件算空、坏行跳过并汇总告警一次）+ 日历日窗口 + `aggregate()` 纯函数折成 byName / targets / byDay / errorTypes + `window()` 让结果自证口径。选日志而非内存计数器：网关会整池回收进程，计数必须在盘上才是真相源 | `runtime_paths`、标准库 |
-| `tool_specs.py` | 975 | 对外 MCP 工具声明式注册表（SSOT）：17 条 `ServerToolSpec`（name/description/inputSchema/annotations/handler 同条记录）+ 17 个 handler + `build_mcp_tools()` / `get_spec()` / `validate_specs()`（import 期自检：重名/空 handler/非法注解键快速失败） | `mcp`、`errors`、`launcher_client`、`app_launcher`、`tool_help`、`policy`、`usage` |
+| `discovery.py` | 425 | 本机工具发现（P1）：`load_manifest()`（文件不存在算空清单，坏文件抛 `DiscoveryError`）+ `validate_manifest()`（调用期校验，与 `policy` 的 import 期快速失败刻意不同）+ `expand_path()`（`{ENV}` 模板，任一 token 取不到就判「没检查成」，**绝不退化成相对路径**）+ `run_probes()` / `fold_verdicts()`（`hit` / `miss` / `inconclusive` 三态）+ `probe_command()`（默认只 `shutil.which` 查 PATH，`run=true` 才无 shell 执行并按 `version_pattern` 取版本号，超时/OSError 都折成结论不抛）+ `discover()`（纯编排，折成 `status` / `confidence` / `registered` + summary）+ `note_for()`（自证探测面是声明出来的、不是穷举） | 标准库 |
+| `tool_specs.py` | 1038 | 对外 MCP 工具声明式注册表（SSOT）：18 条 `ServerToolSpec`（name/description/inputSchema/annotations/handler 同条记录）+ 18 个 handler + `build_mcp_tools()` / `get_spec()` / `validate_specs()`（import 期自检：重名/空 handler/非法注解键快速失败） | `mcp`、`errors`、`launcher_client`、`app_launcher`、`tool_help`、`discovery`、`policy`、`usage` |
 | `policy.py` | 429 | 破坏性门禁 + 部署策略：`decide_destructive(kind, tool, sub_op, args)`（mcp 子工具精确匹配 / launcher 动作级 glob / 缺省回退条目级；`destructive.mode` 参与判定）+ `check_call(name)`（dispatch 前置 deny/白名单）+ `load_policy()`（import 期校验，坏策略快速失败）+ 结构化审计行（stderr + `<runtime>/audit.log`） | `runtime_paths`、`schema`、标准库 |
 | `server.py` | 525 | MCP 协议入口：协议装配 + 查表薄分发（`dispatch_tool` 约 40 行：策略前置 → 查表 → handler → 统一 `json.dumps`，五个出口各记一行使用统计）+ Resources/Prompts + 生命周期（启动预热/状态恢复），启动时后台检测依赖 + 恢复期望状态 | `mcp`、`store`、`registry`、`backend_client`、`runtime_paths`、`launcher_client`、`schema`、`errors`、`tool_specs`、`policy`、`usage` |
 | `scripts/generate_format_doc.py` | 148 | 读 `schema.py` 渲染字段表并就地替换 `docs/format.md` 的生成区块；`--check` 做漂移检查 | 标准库、`schema` |
@@ -393,12 +417,12 @@ toolport 网关会**周期性整池回收**它拉起的 server 进程（2026-10-
 
 ## 6. 对外 MCP 契约（实际实现）
 
-### 6.1 Tools（17 个）
+### 6.1 Tools（18 个）
 
 后端相关工具统一使用 **`tool_id`** 指定目标工具（`mcp_tool_id` / `launcher_id` 已废弃）。
 
 > **P1-04 起，本表与 `tools/list` 的实际下发由 `src/tool_specs.py` 的声明表
-> 单一来源产出**（17 条 `ServerToolSpec`）：注解、`inputSchema`、`outputSchema`
+> 单一来源产出**（18 条 `ServerToolSpec`）：注解、`inputSchema`、`outputSchema`
 > 与工具名同条记录，`dispatch_tool` 查表分发。下表的参数/说明与 spec 表的
 > 一致性由 `tests/test_tool_specs.py` 的 golden 五字段比对（采集自重构前
 > HEAD）与三方名字守卫锁定。
@@ -422,6 +446,7 @@ toolport 网关会**周期性整池回收**它拉起的 server 进程（2026-10-
 | `sync_launcher_actions` | `tool_id`(必填) | 手动同步启动器动作清单 |
 | `get_tool_help` | `tool_id`(必填)、`run`、`timeout`、`allowDestructive` | 帮助信息分层取数（文档链接 / 后端能力清单 / 启动器动作清单 / 命令预览，默认不 spawn）；`kind=app` 显式 `run=true` 才执行帮助命令并捕获输出 |
 | `get_usage_stats` | `days`、`tool_id` | 调用使用统计（只读 `<runtime>/usage.log`，标 `readOnlyHint`）：按天 / 按对外工具 / 按目标 `tool_id` 聚合调用量、成败与耗时 |
+| `discover_tools` | `run_commands`、`status` | 按 `data/discovery.json` 发现本机工具：路径存在 / 目录条目数 / 命令是否在 PATH，默认**只读不 spawn**（`run_commands=true` 才执行版本命令），输出 `status` + `confidence` + `registered` + 逐条证据；标 `openWorldHint`（能力面含执行，故**不声明** `readOnlyHint`） |
 
 **失败语义**：一律抛出 `ToolError`，由 MCP SDK 转成 `CallToolResult(isError=True)`，
 正文是可解析的 JSON（`success` / `errorType` / `error`）。
@@ -472,6 +497,7 @@ python src/server.py
 | 后端调用统一超时（默认 30s，`connection.timeout` 可覆盖） | ✅ 避免子进程卡死拖垮服务 |
 | `start` / `stop` 共用锁 + 独立清理锁 | ✅ 状态与真实连接一致，清理幂等 |
 | 后端依赖自装 + 启动预热（`ensure_installed` / `ensure_all_installed`） | ✅ `install` 元数据从死数据变为真能力：缺失才装、只装一次、装不坏不阻断启动 |
+| 默认零副作用：能 spawn 的参数必须显式给（`launch_tool.execute` / `get_tool_help.run` / `discover_tools.run_commands` / install 授权） | ✅ 同一条纪律的四个实例；返回体里的 `run` / `executed` 报的是**真的跑过没有**，不是调用方传了什么 |
 | `store` 每次请求全量重读 JSON | ⚠️ 小规模可接受，无缓存层 |
 
 ---
@@ -554,6 +580,7 @@ python src/server.py
 | 依赖自装 + 启动预热（A6 ✅ 已收口；P0 后**默认不再执行安装**） | `install` 元数据接入执行：`ensure_installed()`（`_resolved_command` 剥壳解包 → `shutil.which` 检测 → 门禁 → 限时装一次 → 复检）+ `start()` 前置调用。启动预热在 P0 后**退化为纯检测**（只读 PATH、不执行外部命令），要恢复自动安装需部署者显式设 `AWAM_AUTO_INSTALL=1` 或条目 `install.auto=true` |
 | 工具变更通知 | `notifications/tools/list_changed` 未发送（顶层工具集静态，影响小） |
 | 标准 logging capability | 目前用自定义 Tool 查日志 |
+| 本机工具发现（P1 ✅ 已落地） | `discover_tools` + `data/discovery.json`：声明式候选清单 + 三类只读探测，结论 `installed` / `not_installed` / `unknown` 带 `confidence`，`status` / `kind` 与工具条目共用词表。**边界**：探测面是**声明出来的、不是穷举**——清单没写的安装位置发现不了，所以「未命中」只给中信心而不能当事实结论；版本号这一维要调用方显式 `run_commands=true` 才取 |
 | 并发限流（A3 ✅ 已收口） | 单后端串行（`_call_lock`），并发调用报 `backend_busy`；要升级信号量 + 排队只需调 `MAX_CONCURRENT_CALLS` |
 | 启动器（`kind=launcher`） | ✅ 已接入 Quicker 与 uTools：非 MCP，调用是一次性的（Quicker 走 `QuickerStarter.exe runaction:` 命令行回传；uTools 走 `utools://` 协议唤起，fire-and-forget 无回传）；动作清单走第二层数据（运行时目录 `launcher-actions/`），对外 `sync/list/run_launcher_action`。**边界**：Quicker 动作正文在加密 db，名称只能从 state 缓存尽力解析（可能 `source=partial`，只剩 ID）；uTools 清单从 `plugins/*.asar` 的 plugin.json 解析（声明完整，`source` 恒 `auto`），但协议调用无结果回传、payload 仅文本 |
 
@@ -567,12 +594,13 @@ python src/server.py
 |---|---|
 | `server.py` 顶部 | mcp 依赖的兼容导入（`ReadResourceContents` 缺失时降级） |
 | `errors.py` `ToolError` / `fail` / `ensure_success` | 业务错误 → MCP `isError` 的转换层（P1-04 从 server.py 搬入 errors.py，server 命名空间 re-export，`from server import ToolError` 仍是同一个类对象） |
-| `tool_specs.py` `SERVER_TOOL_SPECS` / `build_mcp_tools()` | 17 个对外工具的声明表（SSOT）与 `Tool` 构造：annotations / outputSchema 在此统一挂载；`validate_specs()` 在 import 期自检 |
+| `tool_specs.py` `SERVER_TOOL_SPECS` / `build_mcp_tools()` | 18 个对外工具的声明表（SSOT）与 `Tool` 构造：annotations / outputSchema 在此统一挂载；`validate_specs()` 在 import 期自检 |
 | `server.py` `call_tool` | `tools/call` 入口，含意外异常兜底 |
-| `server.py` `dispatch_tool` | 17 个工具的查表分发（`policy.check_call` 策略前置 → `get_spec` → handler → 统一 `json.dumps`；未命中即 `unknown_tool`，策略拒绝即 `permission_denied`）。P3 起五个出口（成功 / `unknown_tool` / `permission_denied` / handler 业务错 / 意外异常）各调一次 `_record()` 记使用统计：业务错的 `errorType` 直接从异常正文取（与客户端看到的载荷同源），意外异常记 `internal_error`；埋点是旁路，返回值与异常语义一字未改（`tests/test_usage.py` 的 dispatch 层用例锁定） |
+| `server.py` `dispatch_tool` | 18 个工具的查表分发（`policy.check_call` 策略前置 → `get_spec` → handler → 统一 `json.dumps`；未命中即 `unknown_tool`，策略拒绝即 `permission_denied`）。P3 起五个出口（成功 / `unknown_tool` / `permission_denied` / handler 业务错 / 意外异常）各调一次 `_record()` 记使用统计：业务错的 `errorType` 直接从异常正文取（与客户端看到的载荷同源），意外异常记 `internal_error`；埋点是旁路，返回值与异常语义一字未改（`tests/test_usage.py` 的 dispatch 层用例锁定） |
 | `launcher_client.py` `LauncherClient` | 启动器（非 MCP）适配器：`_scan_quicker` 解析动作清单、**先 json.loads 再取字符串**才能拿到动作名；`run_action` 走一次性外部命令（`-c<秒> "runaction:<ID>?参数"`），输出按 GBK 解码、失败按文本判定（退出码恒为 0） |
 | `app_launcher.py` `launch_app` | `kind=app` 的启动执行：`launch_tool` 传 `execute=true` 才走到这里；只支持 `launch.type=executable`，失败一律走返回载荷（`config_error` 预检不通过 / `runtime_error` 退出码非 0），不抛异常 |
 | `tool_help.py` `resolve_help_command` / `run_help_command` | `get_tool_help` 的两段：前者把条目折成一条帮助命令（`help.command` > `launch.command`、`help.args` > `--help`，**绝不复用 `launch.args`**，timeout 归一化封顶 30s），后者只在显式 `run=true` 时被调用——`shutil.which` 预检 → `create_subprocess_exec` 捕获 stdout/stderr（UTF-8→GBK→replace 三级解码）→ 超时 kill 并报 `runtime_error`；`executed` 字段如实反映「是否真的 spawn 过」 |
+| `discovery.py` `expand_path` / `fold_verdicts` / `probe_command` | P1 工具发现的三段：`expand_path()` 把 `{ENV}` 模板展开成绝对路径，任一 token 取不到就返回「没检查成」而不是相对路径；`fold_verdicts()` 把逐条证据折成 `hit` / `miss` / `inconclusive`（miss 要求**所有**能下结论的维度都说没有，且没有维度没检查成）；`probe_command()` 默认只用 `shutil.which` 判可用性（不 spawn），`run=True` 才用绝对路径无 shell 执行、按 `version_pattern` 取版本号，超时与 OSError 都折成结论返回而不抛 |
 | `policy.py` `decide_destructive` / `check_call` | 统一破坏性门禁与部署策略（ARC-P1-05 Phase 1+2，取代 `tool_specs.py` 的 `_needs_destructive_confirm`）：mcp 子工具精确匹配（`destructiveTools`）/ launcher 动作级 glob（`destructiveActions`，大小写不敏感，匹配动作 id/name/type）/ app 条目级（`launch_tool execute=true` 与 `get_tool_help run=true` 两个执行入口共用同一判定，审计 `action` 跟随实际入口）/ 缺省回退条目级；`data/policy.json` 参与判决（deny 名单、白名单、`destructive.mode`：deny 时策略赢过客户端 `allowDestructive` → `permission_denied`）；未配置新字段/无策略文件时与旧行为逐字等价（`tests/test_policy_gate.py` 冻结旧逻辑对照 + `tests/test_policy_config.py` 默认策略行为锁定）；输出 `Decision` + 结构化审计行（stderr + `<runtime>/audit.log`，含 decision / rule_hit / client_declared / policy_mode） |
 | `server.py` `read_resource` | 返回 `Iterable[ReadResourceContents]` |
 | `server.py` `main` | stdio 事件循环 + 启动后台预热任务 `_prewarm_backends()`，`finally` 取消预热并关闭全部后端 |

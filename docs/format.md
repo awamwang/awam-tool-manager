@@ -201,6 +201,72 @@
 
 ---
 
+## 发现候选清单（`data/discovery.json`）
+
+> **它不是数据层**：`data/tools/` 描述「已经登记了什么」，这份清单描述「该去找什么」。
+> 因此它不进 `src/schema.py`（不生成字段表），校验源是 `src/discovery.py` 的
+> `validate_manifest`；路径可用 `AWAM_DISCOVERY_FILE` 覆盖。
+> 失败时机也与策略文件刻意不同：坏清单只让 `discover_tools` 这一次调用返回
+> `config_error`，不会把整个服务拖到起不来（发现不是安全面）。
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `version` | `int` | - | 清单格式版本，当前为 1，加载侧不参与判定 |
+| `candidates` | `array` | 是 | 候选列表；空数组等于「没声明要找什么」，不是「本机没有工具」 |
+| `candidates[].tool_id` | `string` | 是 | 与工具条目同一套 id；非空且不重复，用于对照 `registered` |
+| `candidates[].name` | `string` | 是 | 人读名称，非空 |
+| `candidates[].kind` | `string` | - | 取值与工具条目共用词表（`app` / `mcp` / `launcher`），缺省按 `app` |
+| `candidates[].purpose` | `string` | - | 一句话用途，缺省空串 |
+| `candidates[].probes` | `array` | - | 文件系统探测面，至少声明一条路径 |
+| `candidates[].probes[].probe` | `string` | 是 | `path_exists`（能下结论）/ `dir_count`（只补充证据） |
+| `candidates[].probes[].path` / `paths` | `string` / `array` | 是 | `{ENV}` 模板路径，多个位置逐个试，第一个存在即命中 |
+| `candidates[].probes[].label` | `string` | - | 证据行显示名，缺省取第一条路径 |
+| `candidates[].probes[].limit` | `int` | - | 仅 `dir_count`：最多列几条（默认 60，封顶 200，`<=0` 返回空） |
+| `candidates[].command` | `object` | - | 命令面；`argv` 非法（空 / 非字符串数组）会被校验拒绝 |
+| `candidates[].command.argv` | `array` | 是 | 无 shell 的参数数组，`argv[0]` 用 PATH 查找判定可用性 |
+| `candidates[].command.preview` | `string` | - | 人读预览，缺省由 `argv` 拼接 |
+| `candidates[].command.version_pattern` | `string` | - | 取版本号的正则（须有捕获组），加载时就编译校验 |
+
+**路径模板**：`{ProgramFiles}`、`{APPDATA}`、`{LOCALAPPDATA}`、`{USERPROFILE}`，
+Windows 变量名里的括号也支持（`{ProgramFiles(x86)}`）。任一 token 在环境里取不到
+→ **该位置判「没检查成」**（`inconclusive`），绝不回退成相对路径去试存在性——
+那会把「没设环境变量」伪装成「这个路径不存在」。
+
+**结论三态**（`status` 与工具条目共用词表，可直接回填 `list_tools` 的筛选）：
+
+| 结论 | `status` | `confidence` | 成立条件 |
+|---|---|---|---|
+| 命中 | `installed` | `high` | 任一路径存在，或命令在 PATH 上 |
+| 未命中 | `not_installed` | `medium` | 所有能下结论的维度都说没有，且没有维度没检查成 |
+| 没检查成 | `unknown` | `none` | 至少一个声明位置因环境变量未设置而没探测成 |
+
+`dir_count` 永远不参与结论（目录空不等于没装）。命令可用性只查 PATH（`shutil.which`），
+**不 spawn**；执行版本命令取版本号要显式传 `run_commands=true`，与 `launch_tool` 的
+`execute` / `get_tool_help` 的 `run` 是同一条门禁纪律。
+
+### 示例
+
+```json
+{
+  "version": 1,
+  "candidates": [
+    {
+      "tool_id": "scoop",
+      "name": "Scoop",
+      "kind": "app",
+      "purpose": "Windows 命令行软件包管理器",
+      "probes": [
+        { "probe": "path_exists", "paths": ["{USERPROFILE}\\scoop\\shims\\scoop.exe", "{USERPROFILE}\\scoop\\shims\\scoop.cmd"], "label": "默认安装根目录" },
+        { "probe": "dir_count", "path": "{USERPROFILE}\\scoop\\apps", "limit": 40, "label": "已安装 formula" }
+      ],
+      "command": { "argv": ["scoop", "--version"], "version_pattern": "CURRENT:\\s+([0-9.]+)" }
+    }
+  ]
+}
+```
+
+---
+
 ## 对外契约：MCP 工具
 
 本技能作为 MCP Server 暴露给 AI 客户端的工具列表（**不是磁盘上的数据层**）。
@@ -226,6 +292,7 @@
 | `run_launcher_action` | `tool_id`(必填)、`action_id`/`action_name`(至少一个)、`param`、`wait`、`allowDestructive` | 执行启动器动作（条目或目标标记 `destructive` 时需 `allowDestructive=true`；配 `destructiveActions` 时按动作 id/name/type 的 glob 判定，仅命中的动作需确认） |
 | `get_tool_help` | `tool_id`(必填)、`run`、`timeout`、`allowDestructive` | 取工具帮助信息：文档链接 + 能力清单（`kind=mcp` 子工具 / `kind=launcher` 动作）+ 帮助命令预览。**默认只读数据、不 spawn**；`kind=app` 显式 `run=true` 才执行 `help.command`/`launch.command` + `help.args`（缺省 `--help`）并捕获输出（条目 `destructive` 时需 `allowDestructive=true`；`timeout` 默认 5s、封顶 30s） |
 | `get_usage_stats` | `days`、`tool_id` | 查询调用使用统计（只读 `<runtime>/usage.log`）：按天 / 按对外工具 / 按目标 `tool_id` 聚合调用量、成败与耗时。`days` 按日历日含今天、缺省 7、越界收敛到 1~365；`tool_id` 与记录里的 `target` 精确匹配 |
+| `discover_tools` | `run_commands`、`status` | 按 `data/discovery.json` 发现本机工具：`path_exists` / `dir_count` / 命令是否在 PATH 三类**只读**探测，输出 `status`（installed / not_installed / unknown）+ `confidence` + `registered` + 逐条证据。**默认不 spawn**，`run_commands=true` 才执行清单里的版本命令取版本号；`status` 带 `enum`，只裁剪返回的候选，`summary` 仍是整份清单的计数 |
 
 > **统计的覆盖范围是「经本 server 分发的调用」**：`dispatch_tool` 的每个出口
 > （成功、`unknown_tool`、`permission_denied`、handler 业务错、意外异常）各记一行
@@ -244,6 +311,9 @@
 > **能筛的维度都能看见**：`list_tools` / `search_tools` 的每条结果都投影
 > `id` / `name` / `kind` / `description` / `status` / `publisher`（条目没写的投影成
 > 缺省值 `installed` / 空串，不是缺键），调用方可以直接把看到的值回填给筛选参数。
+> `discover_tools` 走的是同一套 `status` / `kind` 词表（反向也成立：发现结果的
+> `status` 能直接接住筛选参数），但**它的探测面不是穷举**——清单没声明的安装位置
+> 发现不了，所以「未命中」只是中信心结论，返回体固定附 `note` 自证这一条。
 
 ### Resources
 
