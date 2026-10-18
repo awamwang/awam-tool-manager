@@ -189,7 +189,7 @@
 | `lastSynced` | `string` | - | 上次同步时间，ISO 8601；缓存超过 `ACTIONS_CACHE_TTL`（300s）后 list/run 会自动重扫 |
 | `source` | `string` | - | 来源（取值：`auto` / `partial`，`partial` 表示部分动作只解析出 ID） |
 | `actions` | `array<object>` | ✅ | 启动器动作列表 |
-| `actions[].id` | `string` | ✅ | 动作 ID（Quicker 的 UUID），`run_launcher_action` 的 `action_id` 参数 |
+| `actions[].id` | `string` | ✅ | 动作 ID（Quicker 的 UUID；uTools 为 `<插件名>/<关键词>`），`run_launcher_action` 的 `action_id` 参数 |
 | `actions[].name` | `string` | - | 动作名称（尽力而为：来自 state 缓存与运行日志，可能缺失） |
 | `actions[].type` | `string` | - | 动作类型（来自 state 缓存） |
 | `actions[].app` | `string` | - | 动作面向的应用（来自 state 缓存） |

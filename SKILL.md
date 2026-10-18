@@ -8,7 +8,7 @@ description: 统一工具管理器，维护本机工具名单，提供统一的�
 统一管理本机各类工具，提供统一的注册、搜索、启动与**后端路由调用**能力。
 
 工具有三类 `kind`：MCP 工具（`kind=mcp`）、普通应用（`kind=app`）与启动器（`kind=launcher`，
-如 Quicker——不是 MCP，调用为一次性外部命令），三者共用同一套 `tool_id` 体系。
+如 Quicker、uTools——不是 MCP，调用为一次性外部命令），三者共用同一套 `tool_id` 体系。
 
 ## 核心能力
 
@@ -36,12 +36,12 @@ awam-tool-manager/
 │   ├── store.py              # JSON 存储层（tools 走仓库，缓存走运行时目录）
 │   ├── registry.py           # 工具注册中心（查询语义）
 │   ├── backend_client.py     # 后端 MCP 客户端与连接池
-│   ├── launcher_client.py    # 启动器适配器（非 MCP：Quicker）
+│   ├── launcher_client.py    # 启动器适配器（非 MCP：Quicker / uTools）
 │   ├── runtime_paths.py      # 运行时目录解析 + 旧路径迁移
 │   └── schema.py             # 两层数据的 JSON Schema 校验 + 文档生成源
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 227 个用例（另有 6 个真实 e2e 用例默认不收集，
+└── tests/                    # 250 个用例（另有 6 个真实 e2e 用例默认不收集，
                               # `pytest -m e2e` 显式跑；含真实 MCP 会话与文档漂移检测）
 ```
 
@@ -76,18 +76,26 @@ awam-tool-manager/
 | `get_backend_logs` | `tool_id`(必填)、`level`、`limit` | 查看后端日志（`limit<=0` 返回空） |
 | `set_backend_log_level` | `tool_id`、`level`(必填) | 设置后端日志级别（低于该级别的日志不再入队/打印） |
 | `sync_backend_tools` | `tool_id`(必填) | 手动同步子工具目录 |
-| `list_launcher_actions` | `tool_id`(必填)、`keyword`、`limit`、`refresh` | 列出/搜索启动器（Quicker）的动作；返回带 `lastSynced`/`source` |
-| `run_launcher_action` | `tool_id`(必填)、`action_id`、`action_name`、`param`、`wait`、`allowDestructive` | 执行启动器动作；条目标了 `destructive` 时需 `allowDestructive=true`（配了 `destructiveActions` 时按动作 id/name/type 的 glob 判定，仅命中的动作需确认） |
+| `list_launcher_actions` | `tool_id`(必填)、`keyword`、`limit`、`refresh` | 列出/搜索启动器（Quicker / uTools）的动作；返回带 `lastSynced`/`source` |
+| `run_launcher_action` | `tool_id`(必填)、`action_id`、`action_name`、`param`、`wait`、`allowDestructive` | 执行启动器动作；Quicker 走命令行（有 stdout 回传），uTools 走 `utools://` 协议唤起（fire-and-forget 无回传）；条目标了 `destructive` 时需 `allowDestructive=true`（配了 `destructiveActions` 时按动作 id/name/type 的 glob 判定，仅命中的动作需确认） |
 | `sync_launcher_actions` | `tool_id`(必填) | 手动同步启动器动作清单 |
 
-> `kind=launcher`（启动器，如 Quicker）不是 MCP：没有长连接，调用是一次性外部命令
-> （`QuickerStarter.exe -c<秒> "runaction:<ID或名称>?参数"`）。动作清单缓存在
-> 运行时目录的 `launcher-actions/{tool_id}.json`，`source=partial` 表示部分动作只拿到 ID
-> （Quicker 的 `quicker.db` 是加密的，名称只能从 state 缓存 + 运行日志尽力解析）。
+> `kind=launcher`（启动器，如 Quicker / uTools）不是 MCP：没有长连接，调用是一次性的。
+> - **Quicker**：`QuickerStarter.exe -c<秒> "runaction:<ID或名称>?参数"`，stdout 回传动作
+>   结果（失败时退出码仍是 0，按输出文本判定）。`source=partial` 表示部分动作只拿到 ID
+>   （`quicker.db` 是加密的，名称只能从 state 缓存 + 运行日志尽力解析）。
+> - **uTools**：`cmd start "utools://<URL编码插件名>/<URL编码关键词>[?<URL编码文本>]"`
+>   协议唤起，**fire-and-forget 无结果回传**（结果只在 uTools UI，返回体带
+>   `fireAndForget: true` 明示此事；payload 仅文本，文件类功能经 URL 不可达）。
+>   动作清单从 `plugins/*.asar` 的 plugin.json 解析（纯 Python 读 Pickle 封包，
+>   只读文件头 + 条目；声明完整，`source` 恒 `auto`）；`wait` 语义改为「投递后
+>   观察窗口」（等 renderer 起来，默认取条目 timeout、封顶 5s）。
+>
+> 动作清单缓存在运行时目录的 `launcher-actions/{tool_id}.json`。
 >
 > **这份清单是活的**：缓存超过 5 分钟（`ACTIONS_CACHE_TTL`）时，`list`/`run` 会
-> 自动重扫一次再回答，`refresh=true` 可强制重扫，所以 Quicker 里新增的动作无需手动
-> 同步就能搜到、调到。刷新失败（如 Quicker 数据目录不可用）会静默沿用旧缓存，
+> 自动重扫一次再回答，`refresh=true` 可强制重扫，所以启动器里新增的动作无需手动
+> 同步就能搜到、调到。刷新失败（如数据目录不可用）会静默沿用旧缓存，
 > 不会让查询失败——看返回里的 `lastSynced` 就知道数据有多旧。
 
 另有 3 个 Resource：`awam://tools`、`awam://mcp-servers`、`awam://backends/status`。
@@ -167,7 +175,10 @@ CallToolResult 透传；生产环境 pyenv 3.12 即 1.29.0）。
 
 1. 在 `data/tools/` 下新建 `{tool_id}.json`（字段见 `docs/format.md`）
 2. 普通应用写 `kind=app` + `launch`；MCP 工具写 `kind=mcp` + `connection`
-3. MCP 工具调用 `start_backend(tool_id=...)` 建立连接并自动同步子工具目录；
+3. 启动器写 `kind=launcher` + `launcher` 配置（`type=quicker`/`utools`、数据目录、
+   超时；uTools 的 `dataDir` 可写 `%APPDATA%` 等环境变量，由适配器展开），
+   动作清单由 `sync_launcher_actions` 从启动器本地数据自动生成
+4. MCP 工具调用 `start_backend(tool_id=...)` 建立连接并自动同步子工具目录；
    启动命令不在 PATH 时**默认不安装**，返回 `install_required`——需要自动安装
    就设 `AWAM_AUTO_INSTALL=1` 或给条目配 `install.auto: true`（见「安全约定」）
 

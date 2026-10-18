@@ -85,20 +85,20 @@ awam-tool-manager/
 │   ├── registry.py           # 工具注册中心（含条目校验过滤）
 │   ├── schema.py             # 两层数据的 JSON Schema 与校验（**文档生成源**）
 │   ├── backend_client.py     # 后端 MCP 客户端与连接池
-│   ├── launcher_client.py    # 启动器适配器（非 MCP：Quicker）
+│   ├── launcher_client.py    # 启动器适配器（非 MCP：Quicker / uTools）
 │   └── runtime_paths.py      # 运行时目录解析 + 旧路径迁移
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 14 个用例文件，227 passed（含真实 MCP 会话与文档漂移检测）
+└── tests/                    # 14 个用例文件，250 passed（含真实 MCP 会话与文档漂移检测）
     └── e2e/                  # 真实子进程 / 真实 stdio 端到端层（ARC-P3-02）：6 个用例
                               # **默认不收集**（起真实子进程、慢、依赖本机解释器），
                               # 发布 / CI 前须显式跑 `pytest -m e2e -q`；另有
                               # manual_install_gate.py（依赖本机 npm，手工跑，不进 pytest）
 ```
 
-> **用例数口径（2026-10-17 更新）**：`pytest tests/ -q` = **227 passed**（另有 6 个
-> e2e 用例被 deselect）。227 **不是**全部用例数——真实 e2e 层不进默认收集，
-> 总数应表述为「227（默认）+ 6（e2e，`pytest -m e2e`）= 233」。
+> **用例数口径（2026-10-18 更新）**：`pytest tests/ -q` = **250 passed**（另有 6 个
+> e2e 用例被 deselect）。250 **不是**全部用例数——真实 e2e 层不进默认收集，
+> 总数应表述为「250（默认）+ 6（e2e，`pytest -m e2e`）= 256」。
 
 运行时数据（**不在仓库**，A14 起）：`%LOCALAPPDATA%\.awam-tool-manager/`
 （环境变量 `AWAM_RUNTIME_DIR` 可覆盖；server 启动时自动从旧路径迁移）
@@ -109,7 +109,8 @@ awam-tool-manager/
 │   ├── everything-search-mcp.json
 │   └── winget-mcp.json
 ├── launcher-actions/               # 启动器动作清单缓存
-│   └── quicker.json
+│   ├── quicker.json
+│   └── utools.json
 └── desired/                        # 后端启动意图（每工具一个文件，A10 跨世代自愈用）
     └── <urlencoded-tool_id>.json
 ```
@@ -227,7 +228,7 @@ awam-tool-manager/
 │  · get_tool            │   │    启动/停止/状态/日志/心跳    │
 │  · launch_tool         │   │    工具列表缓存（5 分钟）     │
 │                         │   │  launcher_client.py          │
-│                         │   │  · LauncherManager（Quicker） │
+│                         │   │  · LauncherManager（Quicker/uTools）│
 └───────┬───────────────┘   └───────────┬──────────────────┘
         │                               │
 ┌───────▼───────────────────────────────▼──────────────────┐
@@ -255,7 +256,7 @@ awam-tool-manager/
 | `schema.py` | 321 | 两层数据的 JSON Schema 与校验（`jsonschema` 可选，缺失时降级）；**同时是 `docs/format.md` 字段表的唯一生成源** | `jsonschema`(可选) |
 | `registry.py` | 141 | 工具查询语义（列表 / 搜索含 `id` / 详情 / 启动信息），加载时过滤不合规条目 | `store`、`schema` |
 | `backend_client.py` | 1481 | 后端 MCP 子进程的连接管理、调用转发、缓存、心跳、日志、**install 执行门禁（P0）** | `mcp`、`store`、`runtime_paths` |
-| `launcher_client.py` | 405 | 启动器适配器（非 MCP，Quicker）：动作清单解析/搜索、一次性外部命令调用 | `store` |
+| `launcher_client.py` | 628 | 启动器适配器（非 MCP，Quicker / uTools）：Quicker 走 states 目录解析 + `runaction:` 命令行回传；uTools 走 `plugins/*.asar` 的 plugin.json 纯 Python 解析（Chromium Pickle 封包）+ `utools://` 协议唤起（fire-and-forget） | `store` |
 | `errors.py` | 86 | 业务错误出口：`ErrorType` 常量枚举 + `ToolError` / `fail` / `ensure_success`（P1-04 从 server.py 原样搬出——tool_specs 的 handlers 要用，留在 server.py 会形成循环 import；server 命名空间继续 re-export；P1-03 补齐枚举至 16 种） | 标准库 |
 | `tool_specs.py` | 730 | 对外 MCP 工具声明式注册表（SSOT）：15 条 `ServerToolSpec`（name/description/inputSchema/annotations/handler 同条记录）+ 15 个 handler + `build_mcp_tools()` / `get_spec()` / `validate_specs()`（import 期自检：重名/空 handler/非法注解键快速失败） | `mcp`、`errors`、`launcher_client` |
 | `policy.py` | 375 | 破坏性门禁 + 部署策略：`decide_destructive(kind, tool, sub_op, args)`（mcp 子工具精确匹配 / launcher 动作级 glob / 缺省回退条目级；`destructive.mode` 参与判定）+ `check_call(name)`（dispatch 前置 deny/白名单）+ `load_policy()`（import 期校验，坏策略快速失败）+ 结构化审计行（stderr + `<runtime>/audit.log`） | `runtime_paths`、`schema`、标准库 |
@@ -543,7 +544,7 @@ python src/server.py
 | 工具变更通知 | `notifications/tools/list_changed` 未发送（顶层工具集静态，影响小） |
 | 标准 logging capability | 目前用自定义 Tool 查日志 |
 | 并发限流（A3 ✅ 已收口） | 单后端串行（`_call_lock`），并发调用报 `backend_busy`；要升级信号量 + 排队只需调 `MAX_CONCURRENT_CALLS` |
-| 启动器（`kind=launcher`） | ✅ 已接入 Quicker：非 MCP，调用是一次性外部命令；动作清单走第二层数据（运行时目录 `launcher-actions/`），对外 `sync/list/run_launcher_action`。**边界**：动作正文在加密 db，名称只能从 state 缓存尽力解析（可能 `source=partial`，只剩 ID） |
+| 启动器（`kind=launcher`） | ✅ 已接入 Quicker 与 uTools：非 MCP，调用是一次性的（Quicker 走 `QuickerStarter.exe runaction:` 命令行回传；uTools 走 `utools://` 协议唤起，fire-and-forget 无回传）；动作清单走第二层数据（运行时目录 `launcher-actions/`），对外 `sync/list/run_launcher_action`。**边界**：Quicker 动作正文在加密 db，名称只能从 state 缓存尽力解析（可能 `source=partial`，只剩 ID）；uTools 清单从 `plugins/*.asar` 的 plugin.json 解析（声明完整，`source` 恒 `auto`），但协议调用无结果回传、payload 仅文本 |
 
 > 完整清单见 [`code-review.md`](code-review.md) 与 [`mcp-conformance.md`](mcp-conformance.md)。
 

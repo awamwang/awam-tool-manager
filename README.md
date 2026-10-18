@@ -41,8 +41,9 @@ python server.py
 | `everything-search-mcp` | mcp | Everything 的 MCP 接口，可路由调用 `search_files` 等 |
 | `winget-mcp` | mcp | WinGet 官方 MCP：查询/安装升级包（安装受破坏性门禁） |
 | `quicker` | launcher | Quicker 启动器：列出/搜索/执行动作 |
+| `utools` | launcher | uTools 启动器：解析插件 asar 列出功能，`utools://` 协议唤起（fire-and-forget） |
 
-后续可接入：Steam、npm、Scoop、uTools、WeGame、PowerToys 等，
+后续可接入：Steam、npm、Scoop、WeGame、PowerToys 等，
 按 [新增工具步骤](SKILL.md#新增工具步骤) 添加 JSON 即可。
 
 ## 目录结构
@@ -55,7 +56,7 @@ src/
 ├── store.py           # JSON 存储层（tools 走仓库，缓存走运行时目录）
 ├── registry.py        # 工具注册中心
 ├── backend_client.py  # 后端 MCP 客户端与连接池
-├── launcher_client.py # 启动器适配器（Quicker）
+├── launcher_client.py # 启动器适配器（Quicker / uTools）
 └── runtime_paths.py   # 运行时目录解析 + 旧路径迁移
 ```
 

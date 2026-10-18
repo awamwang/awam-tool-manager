@@ -162,10 +162,12 @@
       `执行动作：<名称> id=<uuid>`（含轮转日志 .1~.5），只补空不覆盖；本机实测补全
       16 个名称（144 → 160 / 212）。另排查 `*_searchhistory.db`（仅 34 条、带二进制
       噪音，是搜索历史不是全量索引），未采用
-- [x] `tests/test_launcher_client.py`（27 用例）- 启动器动作清单解析（含「必须解析 JSON
+- [x] `tests/test_launcher_client.py`（49 用例）- 启动器动作清单解析（含「必须解析 JSON
       再取字符串」的回归）、关键词搜索、调用命令构造（`-cN` / `runaction:` / `?参数` /
       stdin 隔离）、GBK 解码与「退出码为 0 但输出说失败」的判定、执行确认门禁、
-      A13 自动刷新 7 例（陈旧一律改写 `lastSynced` 制造，不依赖时钟刻度）
+      A13 自动刷新 7 例（陈旧一律改写 `lastSynced` 制造，不依赖时钟刻度）、
+      uTools 适配器 22 例（asar Pickle 封包现场构造与解析 / 协议 URL 编码 /
+      fire-and-forget 语义 / 观察窗口封顶）
 - [x] `tests/test_runtime_paths.py`（10 用例）- 运行时目录解析：默认
       `%LOCALAPPDATA%\.awam-tool-manager`、`AWAM_RUNTIME_DIR` 覆盖、旧路径数据
       一次性迁移（含目标已存在时不重复搬）、迁移失败不炸启动
@@ -201,8 +203,8 @@
 - **当前 6 个场景**：① 起服 + `tools/list` ≡ golden、② 只读工具真调、
   ③ 仓内假后端全链路（含无残留子进程断言）、④ resources / prompts 往返、
   ⑤ policy deny 端到端（后端零调用）、⑥ install 门禁未授权不执行。
-- **口径**：`pytest tests/ -q` = 227 passed / **6 deselected**；
-  `pytest -m e2e -q` = 6 passed / 227 deselected。说「227」时要带上
+- **口径**：`pytest tests/ -q` = 250 passed / **6 deselected**；
+  `pytest -m e2e -q` = 6 passed / 250 deselected。说「250」时要带上
   「另有 6 个 e2e 默认不收集」，否则会被误读成总数。
 - **手工脚本**（不在上面 6 个里）：
   `"<pyenv 3.12 python>" tests/e2e/manual_install_gate.py`——验「已授权时
@@ -245,7 +247,7 @@
       实现索引「12 个工具」→ 15；`README.md:13` `mcp>=1.9.0` → 1.29；
       `SKILL.md` errorType 枚举补全为真实集合。
 
-### 启动器接入（`kind=launcher`，2026-10-16）
+### 启动器接入（`kind=launcher`，2026-10-16 / 2026-10-18）
 - [x] **新增 `kind=launcher` 工具类型** - 启动器不是 MCP，但有可列/可搜/可调用的动作：
       `launcher` 配置（适配器类型 / 命令 / 数据目录 / 超时）+ 第二层数据
       `<runtime_dir>/launcher-actions/{tool_id}.json`（与 backend-tools 同构，A14 起同迁运行时目录）
@@ -255,6 +257,16 @@
       `QuickerStarter.exe -c<秒> "runaction:<ID或名称>?参数"`；动作 ID 来自
       `states/state_<uuid>.json` 文件名，名称来自其 state 缓存的动作列表（尽力而为，
       缓存没覆盖到的只有 ID，`source=partial`）
+- [x] **uTools 适配器**（`src/launcher_client.py`，2026-10-18）- 调用走
+      `cmd start "utools://<URL编码插件名>/<URL编码关键词>[?<URL编码文本>]"` 协议唤起
+      （**fire-and-forget 无回传**，结果只在 uTools UI；返回体带 `fireAndForget: true`；
+      `wait` 语义为「投递后观察窗口」，默认取条目 timeout、封顶 5s）；动作清单从
+      `%APPDATA%/uTools/plugins/*.asar` 的 plugin.json 纯 Python 解析（Chromium Pickle
+      封包，只读文件头 + 条目，无新依赖），声明完整故 `source` 恒 `auto`；本机实测
+      44 个插件全解析、**218 个动作**、0 跳过；协议调用实调成功（`start` 退出码 0，
+      URL 与勘察验证样例逐字一致）。限制：无结果回传 / payload 仅文本 / 依赖 uTools
+      运行 / MCP key 会变 / 插件市场动态由 A13 TTL 覆盖（详见
+      `docs/utools_integration_findings_2026-10-18.md` §4/§5）
 
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
@@ -334,10 +346,12 @@
 ### P2 - 生态扩展
 - [ ] 接入 Scoop（写 CLI 适配器）— 本机已装（`S:\Libs\Scoop`），可实测
 - [ ] 接入 WeGame（腾讯平台）
-- [ ] 接入 uTools（效率启动器）— ⚠️ 本机未安装
 - [x] 接入 Quicker — ✅ 已完成（见「启动器接入」）：实测同步 212 个动作、160 个有名称，
       关键词搜索命中（"搜索"→5 条 / "剪贴"→2 条 / "识别二维码"→1 条），
       调用全链路通（含成功路径：真实执行动作并返回 OK）
+- [x] 接入 uTools — ✅ 已完成（2026-10-18，见「启动器接入」）：实测同步 218 个动作、
+      source=auto，协议调用成功（`start` 退出码 0）；fire-and-forget 无回传、
+      payload 仅文本等限制见勘察报告 §5
 - [ ] 接入 PowerToys — 本机已装，可实测
 
 ### P3 - 高级功能
@@ -440,7 +454,8 @@ awam-tool-manager/
 │   │   ├── everything.json
 │   │   ├── everything-search-mcp.json
 │   │   ├── winget-mcp.json
-│   │   └── quicker.json        # kind=launcher
+│   │   ├── quicker.json        # kind=launcher
+│   │   └── utools.json         # kind=launcher
 ├── src/
 │   ├── server.py               # MCP Server 入口：协议装配 + 薄分发 + 生命周期
 │   ├── tool_specs.py           # 对外 MCP 工具声明式注册表（SSOT：15 条 spec + handlers）
@@ -448,7 +463,7 @@ awam-tool-manager/
 │   ├── store.py                # JSON 存储层（tools 走仓库，缓存走 runtime dir）
 │   ├── registry.py             # 工具注册中心
 │   ├── backend_client.py       # 后端 MCP 客户端与连接池（stdio）
-│   ├── launcher_client.py      # 启动器适配器（非 MCP：Quicker）
+│   ├── launcher_client.py      # 启动器适配器（非 MCP：Quicker / uTools）
 │   ├── runtime_paths.py        # 运行时目录解析 + 旧路径迁移（A14）
 │   └── schema.py               # 两层数据的 JSON Schema 校验 + **文档生成源**
 ├── scripts/
@@ -474,7 +489,8 @@ awam-tool-manager/
 │   ├── everything-search-mcp.json
 │   └── winget-mcp.json
 ├── launcher-actions/       # 启动器动作清单缓存（自动生成）
-│   └── quicker.json
+│   ├── quicker.json
+│   └── utools.json
 └── backend_desired_state.json  # 后端启动意图（A10 跨世代自愈用）
 ```
 
