@@ -129,11 +129,20 @@ TOOL_ENTRY_SCHEMA: dict[str, Any] = {
             "properties": {
                 "type": {
                     "type": "string",
-                    "enum": ["quicker"],
-                    "description": "适配器类型",
+                    "enum": ["quicker", "utools"],
+                    "description": (
+                        "适配器类型：`quicker` 走 QuickerStarter 命令行（有 stdout 回传）；"
+                        "`utools` 走 utools:// 协议唤起（fire-and-forget，无回传，结果只在 uTools UI）"
+                    ),
                 },
-                "command": {"type": "string", "description": "启动器可执行文件路径（如 QuickerStarter.exe）"},
-                "dataDir": {"type": "string", "description": "启动器数据目录（Quicker 的 states 所在目录）"},
+                "command": {"type": "string", "description": "启动器可执行文件路径（如 QuickerStarter.exe；utools 协议调用不需要）"},
+                "dataDir": {
+                    "type": "string",
+                    "description": (
+                        "启动器数据目录（Quicker 的 states 所在目录；uTools 的插件 asar 所在目录，"
+                        "utools 适配器会展开 %APPDATA% 等环境变量）"
+                    ),
+                },
                 "timeout": {
                     "type": "number",
                     "exclusiveMinimum": 0,

@@ -1,0 +1,31 @@
+{
+  "id": "utools",
+  "name": "uTools",
+  "displayName": "uTools 效率启动器",
+  "kind": "launcher",
+  "description": "uTools 效率启动器：列出/搜索本机 uTools 插件功能（解析 plugins/*.asar 的 plugin.json），并通过 utools:// 协议唤起执行",
+  "version": "7.8.0",
+  "status": "installed",
+  "publisher": "uTools",
+  "website": "https://u.tools",
+  "tags": ["启动器", "效率工具", "插件", "自动化"],
+  "launcher": {
+    "type": "utools",
+    "dataDir": "%APPDATA%\\uTools\\plugins",
+    "timeout": 10
+  },
+  "actions": ["list", "search", "run"],
+  "capabilities": ["launch", "search"],
+  "readOnly": false,
+  "destructive": true,
+  "metadata": {
+    "notes": "调用走 utools:// 协议（cmd start）；fire-and-forget 无返回，结果在 uTools UI",
+    "caveatNoResult": "无结果回传：协议唤起是「唤起并填入」，没有 stdout 可读，执行结果只在 uTools UI。要结果只有两条路：a) 该插件恰好声明了 MCP 工具（本机 25 个，走 http://127.0.0.1:3501/mcp）；b) 后续给 awam 的 BackendClient 加 HTTP MCP 传输（架构评审 ARC-P2-05 相关面，另立项）",
+    "caveatPayload": "payload 仅文本：经 URL 只能传 text 型 payload，文件类功能（超级面板的 files/img）不可达",
+    "requiresRunning": "uTools 需在运行中（否则协议会拉起它，首调慢）",
+    "caveatMcpKey": "MCP key 会变：用户在 uTools 设置里重置 MCP 服务会换 key；awam 侧若将来接 HTTP MCP，key 需可配置（AWAM_UTOOLS_MCP_KEY 或条目配置）",
+    "caveatMarket": "插件市场动态：用户装/卸插件会改变目录；A13 的 300s TTL + refresh=true 已覆盖"
+  },
+  "createdAt": "2026-10-18T02:00:00Z",
+  "updatedAt": "2026-10-18T02:00:00Z"
+}
