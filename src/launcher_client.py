@@ -35,6 +35,7 @@ import struct
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import anyio
 
@@ -70,6 +71,16 @@ QUICKER_FAILURE_MARKERS = ("未能成功启动动作", "未能找到该动作", 
 
 # Quicker 在中文 Windows 上输出 GBK；按 UTF-8 解会得到乱码。
 QUICKER_OUTPUT_ENCODING = "gbk"
+
+# uTools 协议调用是 fire-and-forget：`cmd /c start` 只负责把 utools://
+# 投递给系统，没有 stdout 可读。wait 参数因此改为「投递后观察窗口」——
+# 等 renderer 进程起来（uTools 已运行时实测 ~0.5s 内，未运行时的冷启动
+# 更久），封顶 5s：调用方给个 wait=600 也不该把 MCP 调用堵死十分钟。
+UTOOLS_MAX_OBSERVE_SECONDS = 5.0
+
+# `cmd /c start` 本身应秒退（ShellExecute 不等待被拉起的应用）；超过这个
+# 时间说明 start 卡住了，按超时杀掉不留孤儿。
+UTOOLS_SPAWN_TIMEOUT = 10.0
 
 
 class LauncherError(Exception):
@@ -441,7 +452,8 @@ class LauncherClient:
         param: str | None = None,
         wait: float | None = None,
     ) -> dict[str, Any]:
-        if not self.command:
+        if not self.command and self.adapter != "utools":
+            # utools 走 utools:// 协议唤起，不需要可执行文件路径
             raise LauncherError("未配置 launcher.command，无法调用动作")
         if not action_id and not action_name:
             raise LauncherError("必须指定 action_id 或 action_name")
@@ -451,6 +463,9 @@ class LauncherClient:
         action = self.find_action(action_id, action_name)
         target = action["id"] if action else (action_id or action_name or "")
         resolved_name = (action or {}).get("name") or ""
+
+        if self.adapter == "utools":
+            return await self._run_utools(target, resolved_name, param, wait)
 
         wait_seconds = max(1, int(wait if wait is not None else self.timeout))
         argument = f"runaction:{target}" + (f"?{param}" if param else "")
@@ -489,6 +504,80 @@ class LauncherClient:
             result["stderr"] = error_output
         if not ok:
             result["error"] = output or "启动器返回失败（无输出）"
+        return result
+
+    async def _run_utools(
+        self,
+        target: str,
+        resolved_name: str,
+        param: str | None,
+        wait: float | None,
+    ) -> dict[str, Any]:
+        """utools:// 协议唤起（fire-and-forget）。
+
+        成功判定：`cmd /c start` 退出码 0 = 协议已被系统接收并投递；
+        **没有结果回传**——执行结果只在 uTools UI 里，返回体的
+        `fireAndForget: true` 就是在说这件事。
+        """
+        plugin_name, separator, keyword = target.partition("/")
+        if not separator or not plugin_name.strip() or not keyword.strip():
+            raise LauncherError(
+                f"utools 动作 ID 必须为 <插件名>/<关键词> 格式（收到: {target!r}）；"
+                "可先 list_launcher_actions(tool_id='utools') 查可用动作"
+            )
+        # 路径段全编码：uTools 主进程对整串 decodeURIComponent 后按第一个
+        # "/" 拆 label，把名字里的 "/" 编码掉才能保证拆出正确的两组分；
+        # 参数段 quote(safe='') 连 ? / & # 一起编码（payload 里这些字符
+        # 本就安全，编码更稳；空格 → %20 已实测）
+        url = f"utools://{quote(plugin_name, safe='')}/{quote(keyword, safe='')}"
+        if param:
+            url += f"?{quote(param, safe='')}"
+        command = ["cmd", "/c", "start", "", url]
+
+        # wait 语义：投递后的观察窗口（默认取条目 timeout，封顶
+        # UTOOLS_MAX_OBSERVE_SECONDS），只用于等 renderer 起来
+        observe = wait if wait is not None else self.timeout
+        observe = max(0.0, min(float(observe), UTOOLS_MAX_OBSERVE_SECONDS))
+
+        _log(self.tool_id, "info", f"唤起 uTools 功能: {resolved_name or target}")
+        process = None
+        try:
+            with anyio.fail_after(UTOOLS_SPAWN_TIMEOUT):
+                process = await asyncio.create_subprocess_exec(
+                    *command,
+                    stdin=asyncio.subprocess.DEVNULL,  # A8：绝不继承 server 的 stdin 管道
+                    stdout=asyncio.subprocess.DEVNULL,  # fire-and-forget，无可读输出
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await process.communicate()
+        except TimeoutError:
+            if process is not None:
+                process.kill()  # 超时不留孤儿
+            raise LauncherError(
+                f"utools:// 协议投递超时（等待 {UTOOLS_SPAWN_TIMEOUT}s start 未返回）"
+            ) from None
+        except OSError as exc:
+            raise LauncherError(f"无法启动 cmd（utools:// 协议投递失败）: {exc}") from exc
+
+        result: dict[str, Any] = {
+            "success": process.returncode == 0,
+            "toolId": self.tool_id,
+            "actionId": target,
+            "actionName": resolved_name,
+            "exitCode": process.returncode,
+            "command": " ".join(command),
+            # 明示无结果回传：结果只在 uTools UI，调用方别等 stdout
+            "fireAndForget": True,
+        }
+        if not result["success"]:
+            result["error"] = f"utools:// 协议投递失败（start 退出码 {process.returncode}）"
+            return result
+        if observe > 0:
+            # 观察窗口：给 renderer 一点起来的时间（实测 ~0.5s 内）
+            await asyncio.sleep(observe)
+        result["message"] = (
+            "已通过 utools:// 协议唤起（fire-and-forget，无结果回传，结果只在 uTools UI）"
+        )
         return result
 
 
