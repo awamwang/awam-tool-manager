@@ -162,12 +162,12 @@
       `执行动作：<名称> id=<uuid>`（含轮转日志 .1~.5），只补空不覆盖；本机实测补全
       16 个名称（144 → 160 / 212）。另排查 `*_searchhistory.db`（仅 34 条、带二进制
       噪音，是搜索历史不是全量索引），未采用
-- [x] `tests/test_launcher_client.py`（49 用例）- 启动器动作清单解析（含「必须解析 JSON
+- [x] `tests/test_launcher_client.py`（55 用例）- 启动器动作清单解析（含「必须解析 JSON
       再取字符串」的回归）、关键词搜索、调用命令构造（`-cN` / `runaction:` / `?参数` /
       stdin 隔离）、GBK 解码与「退出码为 0 但输出说失败」的判定、执行确认门禁、
       A13 自动刷新 7 例（陈旧一律改写 `lastSynced` 制造，不依赖时钟刻度）、
-      uTools 适配器 22 例（asar Pickle 封包现场构造与解析 / 协议 URL 编码 /
-      fire-and-forget 语义 / 观察窗口封顶）
+      uTools 适配器 26 例（U4 22 例：asar Pickle 封包现场构造与解析 / 协议 URL 编码 /
+      fire-and-forget 语义 / 观察窗口封顶；QA 加固 4 例：URL 斜杠编码 / asar 对齐 pad）
 - [x] `tests/test_runtime_paths.py`（10 用例）- 运行时目录解析：默认
       `%LOCALAPPDATA%\.awam-tool-manager`、`AWAM_RUNTIME_DIR` 覆盖、旧路径数据
       一次性迁移（含目标已存在时不重复搬）、迁移失败不炸启动
@@ -203,6 +203,13 @@
 - **当前 6 个场景**：① 起服 + `tools/list` ≡ golden、② 只读工具真调、
   ③ 仓内假后端全链路（含无残留子进程断言）、④ resources / prompts 往返、
   ⑤ policy deny 端到端（后端零调用）、⑥ install 门禁未授权不执行。
+- **场景② 取证加固（QA #29，2026-10-18）**：原写法用「不存在的 exe 探针」验证
+  `launch_tool` 只返回不执行，但违约子进程从未真正 spawn，正常与违约两条路都
+  「零证据」——测试实际什么都没验。根因：子进程继承 server stdio 管道 + Windows
+  mcp 客户端 Job Object `KILL_ON_JOB_CLOSE` + 本沙箱子进程慢 ~10x。改为**双轨取证**：
+  快通道（宽限窗口内 marker 文件出现 = 命令真被执行）+ 慢通道（marker 没出现再
+  WMI 扫进程表补刀）；探针脚本与被跑证据文件都复制进 tmp、绝不落仓库。
+  自然（继承管道）与重定向两种违约形态均已验证破坏即红
 - **口径**：`pytest tests/ -q` = 254 passed / **6 deselected**；
   `pytest -m e2e -q` = 6 passed / 254 deselected。说「254」时要带上
   「另有 6 个 e2e 默认不收集」，否则会被误读成总数。
@@ -267,6 +274,9 @@
       URL 与勘察验证样例逐字一致）。限制：无结果回传 / payload 仅文本 / 依赖 uTools
       运行 / MCP key 会变 / 插件市场动态由 A13 TTL 覆盖（详见
       `docs/utools_integration_findings_2026-10-18.md` §4/§5）
+- [x] **uTools 提交序列**（2026-10-18）：`99ceb25`(U1 条目) → `b90f147`(U2 asar 解析)
+      → `88c0b2a`(U3 协议唤起) → `0e597e7`(U4 22 用例) → `82871e5`(U5 文档 + 实调记录)
+      → `383385d`(QA 遗留加固 4 例) → `000aeec`(用例口径 250→254 同步)；每步后全量回归
 
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
@@ -313,6 +323,10 @@
 - [x] .gitignore 配置（测试脚本、缓存文件排除）
 
 ### 已知边界（非缺陷，记录备查）
+- **uTools 协议投递成功但 UI 不呈现**：本机 uTools 只剩托盘、零可见顶层窗口时，
+  `utools://` 投递（`start` 退出码 0）成功但界面不渲染；用原始协议直接唤起重现，
+  同现象——判为会话状态问题而非集成缺陷。待办：在可见桌面会话里单跑一次
+  `run_launcher_action` 做 UI 级实调确认（勘察报告 §5 已留痕）
 - 真正的「后端永不重启」需要外部 supervisor（后端生命周期移出网关控制的进程），
   当前只能做到「跨网关回收自愈」（A10），列为架构演进
 - 硬杀 server 会孤儿化后端子进程（下一代自动恢复会另起一个，stdio 无端口冲突可共存）
