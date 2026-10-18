@@ -133,7 +133,12 @@ def _lookup_action_type(
 async def _handle_search_tools(arguments: dict, ctx: ToolContext) -> dict:
     keyword = arguments.get("keyword", "")
     kind = arguments.get("kind")
-    tools = ctx.registry.search_tools(keyword, kind)
+    tools = ctx.registry.search_tools(
+        keyword,
+        kind,
+        arguments.get("status"),
+        arguments.get("publisher"),
+    )
     return {
         "success": True,
         "keyword": keyword,
@@ -144,7 +149,10 @@ async def _handle_search_tools(arguments: dict, ctx: ToolContext) -> dict:
                 "name": t.get("displayName", t["name"]),
                 "kind": t.get("kind", "unknown"),
                 "description": t.get("description", "")[:100],
-                "status": t.get("status", "installed")
+                "status": t.get("status", "installed"),
+                # 可筛选的维度必须同时可见：只让按 publisher 筛却不返回它，
+                # 调用方就只能猜发布者写法
+                "publisher": t.get("publisher", "")
             }
             for t in tools
         ]
@@ -153,7 +161,11 @@ async def _handle_search_tools(arguments: dict, ctx: ToolContext) -> dict:
 
 async def _handle_list_tools(arguments: dict, ctx: ToolContext) -> dict:
     kind = arguments.get("kind")
-    tools = ctx.registry.list_all_tools(kind)
+    tools = ctx.registry.list_all_tools(
+        kind,
+        arguments.get("status"),
+        arguments.get("publisher"),
+    )
     return {
         "success": True,
         "count": len(tools),
@@ -163,7 +175,8 @@ async def _handle_list_tools(arguments: dict, ctx: ToolContext) -> dict:
                 "name": t.get("displayName", t["name"]),
                 "kind": t.get("kind", "unknown"),
                 "description": t.get("description", "")[:100],
-                "status": t.get("status", "installed")
+                "status": t.get("status", "installed"),
+                "publisher": t.get("publisher", "")
             }
             for t in tools
         ]
@@ -471,7 +484,7 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
     ServerToolSpec(
         name="search_tools",
         handler=_handle_search_tools,
-        description="搜索已注册的工具，按关键词匹配名称、描述、标签",
+        description="搜索已注册的工具，按关键词匹配名称、描述、标签，可按类型、安装状态、发布者筛选",
         input_schema={
             "type": "object",
             "properties": {
@@ -483,6 +496,15 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
                     "type": "string",
                     # NE-5：driver 历史漂移已于 2026-10-17 修正为 launcher（§3.1 #20；golden 同步重新基线）
                     "description": "可选，按工具类型筛选（如 app、mcp、launcher）"
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["installed", "not_installed", "unknown"],
+                    "description": "可选，按安装状态精确筛选（条目未写 status 时按 installed 计）"
+                },
+                "publisher": {
+                    "type": "string",
+                    "description": "可选，按发布者筛选（子串匹配、大小写不敏感；条目没写 publisher 一律不命中）"
                 }
             },
             "required": ["keyword"]
@@ -492,7 +514,7 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
     ServerToolSpec(
         name="list_tools",
         handler=_handle_list_tools,
-        description="列出所有已注册的工具，可按类型筛选",
+        description="列出所有已注册的工具，可按类型、安装状态、发布者筛选",
         input_schema={
             "type": "object",
             "properties": {
@@ -500,6 +522,15 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
                     "type": "string",
                     # NE-5：driver 历史漂移已于 2026-10-17 修正为 launcher（§3.1 #20；golden 同步重新基线）
                     "description": "可选，按工具类型筛选（如 app、mcp、launcher）"
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["installed", "not_installed", "unknown"],
+                    "description": "可选，按安装状态精确筛选（条目未写 status 时按 installed 计）"
+                },
+                "publisher": {
+                    "type": "string",
+                    "description": "可选，按发布者筛选（子串匹配、大小写不敏感；条目没写 publisher 一律不命中）"
                 }
             }
         },

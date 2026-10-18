@@ -69,6 +69,32 @@ def test_config_error_surfaces_over_protocol():
     assert json.loads(result.content[0].text)["errorType"] == "config_error"
 
 
+def test_status_enum_rejects_typos_over_protocol():
+    """`status` 的 enum 不是装饰：拼错的值在校验层就报错，不会静默返回空列表
+
+    没有这层的话，`status="isntalled"` 会让调用方以为「本机没装任何工具」，
+    而真实原因是参数打错了——静默空集是筛选类接口最坏的一种失败。
+    """
+    result = run(_call("list_tools", {"status": "isntalled"}))
+
+    assert result.isError, f"拼错的 status 没有在校验层被拒: {result.content}"
+    assert "is not one of" in result.content[0].text
+
+
+def test_new_filter_dimensions_narrow_real_results():
+    """筛选维度在真实协议链路上确实生效：带 publisher 的调用返回的是收窄后的名单"""
+    everything = run(_call("list_tools", {}))
+    voidtools = run(_call("list_tools", {"publisher": "VOID"}))
+
+    assert not everything.isError and not voidtools.isError
+    all_ids = {t["id"] for t in json.loads(everything.content[0].text)["tools"]}
+    hit = json.loads(voidtools.content[0].text)["tools"]
+
+    assert len(all_ids) >= 2, "名单太窄，这条测试失去意义"
+    assert [t["id"] for t in hit] == ["everything"], f"子串+大小写不敏感没生效: {hit}"
+    assert hit[0]["status"] == "installed"
+
+
 def test_tools_list_carries_annotations():
     """客户端在 tools/list 里应能读到 annotations"""
 

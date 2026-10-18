@@ -52,21 +52,68 @@ class ToolRegistry:
             valid.append(tool)
         return valid
 
-    def list_all_tools(self, kind: str | None = None) -> list[dict[str, Any]]:
-        """列出所有工具，可按类型筛选"""
+    def _apply_filters(
+        self,
+        tools: list[dict[str, Any]],
+        status: str | None = None,
+        publisher: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """按 `kind` 之外的维度筛选（空串/None 一律视为「不设该筛选」）。
+
+        `status` 用与对外投影同一个归一化值（缺省按 `installed`）——否则
+        「列表里显示 installed、按 installed 却筛不到」会自相矛盾。
+        `publisher` 是子串、大小写不敏感：发布者写法多样（如 "voidtools"
+        与 "voidtools (Everything)"），精确匹配等于要求调用方抄准原文。
+
+        两个维度都**先归一化再判空**：只写 `if status:` 时 `status="  "` 依然是
+        truthy，会拿空串去精确匹配把整张名单筛空，而同样输入的 `publisher` 因为
+        子串语义反而成了 no-op——一类输入两种结果，调用方只会当成筛选不可信。
+        """
+        want = (status or "").strip().lower()
+        if want:
+            tools = [
+                t
+                for t in tools
+                if str(t.get("status") or "installed").strip().lower() == want
+            ]
+        want_pub = (publisher or "").strip().lower()
+        if want_pub:
+            tools = [
+                t
+                for t in tools
+                if want_pub in str(t.get("publisher") or "").strip().lower()
+            ]
+        return tools
+
+    def list_all_tools(
+        self,
+        kind: str | None = None,
+        status: str | None = None,
+        publisher: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """列出所有工具，可按类型 / 安装状态 / 发布者筛选"""
         tools = self._valid_tools(self.store.list_tools())
         if kind:
             tools = [t for t in tools if t.get("kind") == kind]
-        return tools
+        return self._apply_filters(tools, status, publisher)
 
-    def search_tools(self, keyword: str, kind: str | None = None) -> list[dict[str, Any]]:
+    def search_tools(
+        self,
+        keyword: str,
+        kind: str | None = None,
+        status: str | None = None,
+        publisher: str | None = None,
+    ) -> list[dict[str, Any]]:
         """按关键词搜索工具
 
         匹配范围包含 `id`：`tool_id` 是文档中让用户传的主要标识
         （`everything-search-mcp` 这种 ID 里带关键词的情况很常见），
         只匹配 name/description/tags 会导致"搜到了工具却搜不到它的 ID"。
+
+        `status` / `publisher` 在关键词命中之后二次收窄（筛选与搜索正交：
+        「搜『搜索』且只看已装好的」是真实诉求）。
         """
-        all_tools = self.list_all_tools(kind)
+        all_tools = self.list_all_tools(kind, status, publisher)
         keyword_lower = keyword.lower()
 
         results = []
