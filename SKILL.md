@@ -18,6 +18,8 @@ description: 统一工具管理器，维护本机工具名单，提供统一的�
 - **进程管理**：管理后端 MCP 子进程的启停、状态、日志
 - **目录同步**：拉取后端 MCP 的子工具清单并缓存到本地
 - **依赖自装**：启动命令缺失时按 `install` 元数据安装（**默认不执行，需显式授权**，见「安全约定」；服务启动时后台预热已退化为纯检测）
+- **帮助查看**：汇总工具的文档链接与能力清单；`kind=app` 显式 `run=true` 才执行
+  帮助命令并捕获输出（默认只读数据，不 spawn）
 
 ## 目录结构
 
@@ -41,7 +43,7 @@ awam-tool-manager/
 │   └── schema.py             # 两层数据的 JSON Schema 校验 + 文档生成源
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 254 个用例（另有 6 个真实 e2e 用例默认不收集，
+└── tests/                    # 303 个用例（另有 8 个真实 e2e 用例默认不收集，
                               # `pytest -m e2e` 显式跑；含真实 MCP 会话与文档漂移检测）
 ```
 
@@ -141,7 +143,8 @@ CallToolResult 透传；生产环境 pyenv 3.12 即 1.29.0）。
 
 - 工具条目里的 `readOnly` / `destructive` 会映射到 MCP Tool annotations
 - **破坏性门禁**（`call_backend_tool` 转发前 / `run_launcher_action` 执行前 /
-  `launch_tool` 的 `execute=true` 启动前）：
+  `launch_tool` 的 `execute=true` 启动前 / `get_tool_help` 的 `run=true` 执行帮助
+  命令前）：
   条目未标 `destructive` → 不拦；标了之后命中判定才需显式传
   `allowDestructive=true`，否则返回 `destructive_blocked`。
   - mcp：配 `destructiveTools` 时只拦清单内的子工具（精确匹配），未配则整个后端都拦；
@@ -160,8 +163,8 @@ CallToolResult 透传；生产环境 pyenv 3.12 即 1.29.0）。
 - **`install.command` 默认不被自动执行**（P0 修复）：它写在进版本库的数据文件里、
   且会经 shell 执行，旧逻辑让它在「服务启动预热」和 `start_backend` 两条路径上
   无条件运行——病根是「没有调用方意图」的执行，与本技能「副作用须由显式调用触发」
-  的取舍正好相反（对照：`launch_tool` 默认只返回命令，只有显式 `execute=true`
-  才真正 spawn 进程）。
+  的取舍正好相反（对照：`launch_tool` 默认只返回命令、`get_tool_help` 默认只取数，
+  只有显式 `execute=true` / `run=true` 才真正 spawn 进程）。
   现在必须显式授权才执行，授权有两个来源（任一即可）：
   1. 环境变量 `AWAM_AUTO_INSTALL=1` —— 部署者在 MCP 客户端配置里显式打开；
   2. 条目 `install.auto: true` —— 逐工具 opt-in。
@@ -178,7 +181,9 @@ CallToolResult 透传；生产环境 pyenv 3.12 即 1.29.0）。
 ## 新增工具步骤
 
 1. 在 `data/tools/` 下新建 `{tool_id}.json`（字段见 `docs/format.md`）
-2. 普通应用写 `kind=app` + `launch`；MCP 工具写 `kind=mcp` + `connection`
+2. 普通应用写 `kind=app` + `launch`；MCP 工具写 `kind=mcp` + `connection`。
+   帮助命令与默认 `--help` 不同的应用（GUI 程序常为 `/?`）再补可选 `help`
+   （`command` / `args` / `timeout`），`get_tool_help` 会优先按它取
 3. 启动器写 `kind=launcher` + `launcher` 配置（`type=quicker`/`utools`、数据目录、
    超时；uTools 的 `dataDir` 可写 `%APPDATA%` 等环境变量，由适配器展开），
    动作清单由 `sync_launcher_actions` 从启动器本地数据自动生成

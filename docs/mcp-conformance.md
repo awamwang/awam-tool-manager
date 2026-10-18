@@ -202,7 +202,7 @@ MCP Tool 支持 `annotations`（`title` / `readOnlyHint` / `destructiveHint` / `
 |---|---|---|
 | 只读 | `search_tools` / `list_tools` / `get_tool_info` / `list_backend_tools` / `get_backend_status` / `get_backend_logs` | `readOnlyHint=true`、`destructiveHint=false` |
 | 幂等 | `start_backend` / `stop_backend` / `sync_backend_tools` | `idempotentHint=true` |
-| 副作用静态不可知 | `call_backend_tool` / `launch_tool` | `openWorldHint=true`（**不谎报 readOnly**） |
+| 副作用静态不可知 | `call_backend_tool` / `launch_tool` / `get_tool_help` | `openWorldHint=true`（**不谎报 readOnly**） |
 
 `call_backend_tool` 只标 `openWorldHint` 是刻意的：它转发到任意后端子工具，
 副作用取决于运行时的 `tool_name`，静态断言只读会误导客户端。真正的防护落在
@@ -212,6 +212,11 @@ MCP Tool 支持 `annotations`（`title` / `readOnlyHint` / `destructiveHint` / `
 `launch_tool` 走同一条判定：默认只返回命令（零副作用），显式 `execute=true` 才
 spawn 进程，条目 `destructive` 时同样需 `allowDestructive=true`；正因为多了这条
 执行路径，它的 `readOnlyHint` 已撤下、改标 `openWorldHint`。
+
+`get_tool_help` 是同一个形状的第三条执行路径：默认只组装数据（文档链接 / 后端
+能力清单 / 动作清单 / 命令预览，零 spawn），`kind=app` 显式 `run=true` 才执行
+帮助命令——图形程序不认 `--help` 时会把它当普通启动参数跑起来，所以这条路径也
+接进了 destructive 门禁（审计与拒绝文案按 `get_tool_help` 入口标注）。
 
 ### 2.5 异常兜底
 
@@ -232,7 +237,7 @@ MCP **不规定** Server 内部如何持久化数据，因此 `data/tools/`（�
 ### 3.2 `inputSchema` 合法性 ✅
 
 协议要求每个 Tool 的 `inputSchema` 是合法 JSON Schema（Draft 2020-12 子集）。
-本项目 15 个工具全部为：
+本项目 16 个工具全部为：
 
 ```json
 { "type": "object", "properties": { ... }, "required": [...] }

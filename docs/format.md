@@ -224,6 +224,7 @@
 | `sync_launcher_actions` | `tool_id`(必填) | 手动同步启动器动作清单 |
 | `list_launcher_actions` | `tool_id`(必填)、`keyword`、`limit`、`refresh` | 列出/搜索启动器动作（缓存超过 5 分钟自动重扫） |
 | `run_launcher_action` | `tool_id`(必填)、`action_id`/`action_name`(至少一个)、`param`、`wait`、`allowDestructive` | 执行启动器动作（条目或目标标记 `destructive` 时需 `allowDestructive=true`；配 `destructiveActions` 时按动作 id/name/type 的 glob 判定，仅命中的动作需确认） |
+| `get_tool_help` | `tool_id`(必填)、`run`、`timeout`、`allowDestructive` | 取工具帮助信息：文档链接 + 能力清单（`kind=mcp` 子工具 / `kind=launcher` 动作）+ 帮助命令预览。**默认只读数据、不 spawn**；`kind=app` 显式 `run=true` 才执行 `help.command`/`launch.command` + `help.args`（缺省 `--help`）并捕获输出（条目 `destructive` 时需 `allowDestructive=true`；`timeout` 默认 5s、封顶 30s） |
 
 ### Resources
 

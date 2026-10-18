@@ -30,6 +30,7 @@
 - [x] `list_tools` - 列出所有工具
 - [x] `get_tool_info` - 查看工具详情
 - [x] `launch_tool` - 返回启动命令信息；2026-10-18 起支持显式 `execute=true` 真正执行启动（默认仍只返回命令）
+- [x] `get_tool_help` - 工具帮助信息：文档链接 + 能力清单（mcp 子工具 / launcher 动作）+ 帮助命令预览；2026-10-18 新增，`kind=app` 显式 `run=true` 才执行 `--help` 并捕获输出（默认零副作用）
 - [x] `call_backend_tool` - 路由调用后端 MCP 的子工具
 - [x] `list_backend_tools` - 列出后端子工具（含完整参数 schema）
 - [x] `start_backend` / `stop_backend` / `get_backend_status` - 后端进程管理
@@ -200,10 +201,11 @@
   收集会让日常回归从 6s 变成 30s，还会把本机环境差异带进每次提交。
   默认排除由 `pytest.ini` 的 `addopts = -m "not e2e"` 实现，命令行的 `-m e2e`
   会覆盖它。
-- **当前 7 个场景**：① 起服 + `tools/list` ≡ golden、② 只读工具真调、
+- **当前 8 个场景**：① 起服 + `tools/list` ≡ golden、② 只读工具真调、
   ③ 仓内假后端全链路（含无残留子进程断言）、④ resources / prompts 往返、
   ⑤ policy deny 端到端（后端零调用）、⑥ install 门禁未授权不执行、
-  ⑦ `launch_tool` 的 `execute=true` 真启动（含 destructive 门禁双向）。
+  ⑦ `launch_tool` 的 `execute=true` 真启动（含 destructive 门禁双向）、
+  ⑧ `get_tool_help` 的默认零副作用 / 显式 `run=true` 才 spawn。
 - **场景② 取证加固（QA #29，2026-10-18）**：原写法用「不存在的 exe 探针」验证
   `launch_tool` 只返回不执行，但违约子进程从未真正 spawn，正常与违约两条路都
   「零证据」——测试实际什么都没验。根因：子进程继承 server stdio 管道 + Windows
@@ -218,10 +220,23 @@
   **当场**取证 marker 不出现（门禁在 spawn 之前），显式确认后放行并真执行。
   红绿验证：拆掉 destructive 门禁 → 场景⑦ 红（`:171`）；把默认路径改成也
   spawn → 场景②与⑦同时红（默认只返回命令的硬契约由两处双重锁定）；还原后全绿
-- **口径**：`pytest tests/ -q` = 271 passed / **7 deselected**；
-  `pytest -m e2e -q` = 7 passed / 271 deselected。说「271」时要带上
-  「另有 7 个 e2e 默认不收集」，否则会被误读成总数。
-- **手工脚本**（不在上面 6 个里）：
+- **场景⑧ 新增（2026-10-18，配合 P1「工具帮助文档查看」）**：`get_tool_help`
+  是第三条能 spawn 的路径，取证形状与⑦同款——探针脚本 `tests/e2e/help_probe.py`
+  既打 stdout（证明输出真被捕获回传）又写 marker（证明进程真诞生）；默认路径当场
+  断言 marker 不出现；destructive 条目拦截时断言 marker 不出现**且**拒绝文案说的是
+  「执行帮助命令」；另外覆盖两种不 spawn 的分支（`kind=launcher` 只回数据层 + note、
+  无 `launch`/`help` 来源 → `config_error`）。
+  红绿验证：默认路径改成也执行 → 场景②⑦⑧ 同时红（3 条单测一并红）；
+  「帮助参数回落 `launch.args`」的变异 **e2e ⑧ 抓不到**（该条目显式配了
+  `help.args`，走的是另一分支）→ 补单测
+  `test_resolve_help_command_falls_back_to_double_dash_not_launch_args` 后红→绿。
+  destructive 门禁摘除的变异本轮被权限策略拦下未跑（同款摘除已在场景⑦验过，
+  help 路径的门禁由单测 `test_handler_destructive_entry_blocks_run_until_allowed`
+  与场景⑧的断言锁定）
+- **口径**：`pytest tests/ -q` = 303 passed / **8 deselected**；
+  `pytest -m e2e -q` = 8 passed / 303 deselected。说「303」时要带上
+  「另有 8 个 e2e 默认不收集」，否则会被误读成总数。
+- **手工脚本**（不在上面 8 个里）：
   `"<pyenv 3.12 python>" tests/e2e/manual_install_gate.py`——验「已授权时
   install.command 真的被提交给 shell」，依赖本机 npm，故保留手工。
 
@@ -320,6 +335,55 @@
       golden 已同步重基线，diff 仅此一条；② 显式 `execute=true` 的调用会产生本地
       子进程（新副作用面，由参数本身与 destructive 门禁双重显式化）
 
+### 工具帮助文档查看（P1，2026-10-18）
+- [x] **新增 `src/tool_help.py`（256 行）** - 帮助信息的**分层取数**底座，
+      刻意与「执行」解耦：`entry_help()`（description / docUrl / website +
+      将要执行的命令预览）、`backend_summary()`（后端子工具的名字/描述/参数名/
+      必填项，**不下发整份 inputSchema**——那是 `list_backend_tools` 的职责）、
+      `launcher_summary()`（动作 id/name/type，截断 50）三条都是纯函数，零副作用
+- [x] **`resolve_help_command()` 的参数来源** - `help.command` > `launch.command`，
+      `help.args` > `--help`（图形程序常为 `/?`），timeout 归一化（默认 5s、封顶
+      30s，调用方本次传参优先于条目）。**绝不回落 `launch.args`**：那是正常启动
+      参数，「想看帮助却把应用真跑了」（`video.exe 片源.mp4 --help`）正是本功能
+      最容易踩的坑，两条单测分别锁定显式覆盖与缺省回落两种形态
+- [x] **`run_help_command()` 的执行细节** - `shutil.which` 预检（缺失 →
+      `config_error`，不 spawn）→ `create_subprocess_exec` **不经 shell** →
+      stdout/stderr PIPE 捕获（UTF-8 严格 → GBK → replace 三级解码，中文 Windows
+      控制台程序常见）；`anyio.fail_after` 超时必 kill 并回传超时前输出；输出
+      > 20000 字符截断（返回体要进 MCP 消息）；**退出码非 0 但有文本仍算成功**
+      （不少程序 `--help` 也返回非 0，文本才是调用方要的），非 0 且无输出才报错。
+      `executed` 字段语义钉死为「是否真的 spawn 过」：预检失败 False，跑起来但
+      没拿到输出/超时被杀一律 True
+- [x] **新增第 16 个对外工具 `get_tool_help`**（`tool_specs.py`）- 参数
+      `tool_id`(必填) / `run` / `timeout` / `allowDestructive`；**默认只返回数据、
+      绝不 spawn**（与 `launch_tool` 同款硬契约），`kind=app` 才认 `run=true`，
+      `kind=mcp`/`launcher` 传 `run=true` 也只回数据层 + note（缓存里已有的就是
+      它的全部「帮助」，没有 `--help` 这回事）；annotations 标 `openWorldHint`
+      （有执行路径就不谎报只读）
+- [x] **门禁复用同一判定入口**（`policy.py`）- `run=true` 同样先过
+      `decide_destructive("app", ...)`，判定在 spawn **之前**（图形程序不认
+      `--help` 时会把它当普通启动参数跑起来，不是过度设防）。app 种由此有了
+      **两个执行入口**，故审计 `action` 与拒绝文案都跟随实际入口：help 的判定
+      记成 `launch_tool`/「才会执行启动」属于审计失真与误导调用方，已修正并由
+      `test_app_gate_audit_action_follows_execution_entry` +
+      `test_handler_gate_audit_row_labels_help_entry` 双处锁定
+- [x] **schema 增可选 `help` 字段**（`src/schema.py`）- `help.command` /
+      `help.args` / `help.timeout`（> 0，缺省 5）；`docs/format.md` 的字段表由
+      生成器同步（手改生成区块会被 `test_docs_sync.py` 拦下）
+- [x] **测试** - `tests/test_tool_help.py` 31 用例（模块层 21 + handler 层 10，
+      探针脚本现场写 tmp：打印型/静默型/挂住型/写 marker 型，覆盖超时必杀、
+      三级解码、截断、`launch.args` 不复用）+ `tests/test_policy_gate.py` 判定
+      表与审计标注 + **e2e 场景⑧** `tests/e2e/test_e2e_tool_help.py`（真实 stdio
+      会话验默认零副作用 / 执行并回传输出 / destructive 拦截与放行 / 非 app 不
+      spawn / 无来源 `config_error`，红绿双向见上节）；golden 重基线 15→16，
+      全量口径 **303 passed**（+8 个 e2e 默认不收集，见上节）
+- [x] **非等价点 NE-7**（行为变更申报）- ① `tools/list` 多出一个工具
+      （15→16），golden 已重基线（纯追加，16 条 diff 只在末尾，5 字段其余条目
+      逐字节不变）；② 显式 `run=true` 的调用会产生本地子进程并捕获其输出（新增
+      副作用面，由参数本身与 destructive 门禁双重显式化）；③ `policy.py` 的 app
+      种审计 `action` 与拒绝文案跟随执行入口——**旧数据无影响**（`launch_tool`
+      路径 `sub_op` 为 `{}`，文案与审计行逐字不变），只有 help 路径新增标注
+
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
 - [x] Everything Search MCP（`kind=mcp`，已实测连接、调用、启停跑通）
@@ -351,7 +415,7 @@
       → M02 `d2b4cd2` → M03 `019713d` → M04 `c3b2b08` → M05 `738b843`；M06（本文档 +
       `docs/architecture.md` 同步）与 M07（SKILL.md 工具表守卫 + 全量回归 + 真实 stdio 冒烟
       + P0 install 门禁 e2e 复跑）为收尾两步，哈希见 `git log`
-- [x] **非等价点（显式标注 NE-1~NE-6，U6 要求对用户可见）**：NE-1 `json.dumps` 统一带
+- [x] **非等价点（显式标注 NE-1~NE-7，U6 要求对用户可见）**：NE-1 `json.dumps` 统一带
       `default=str`（5 → 15 个工具；可达输入上的 no-op，单向放宽，不启用 `strict_dumps`
       回退）；NE-2 未知工具失败时机改为查表未命中即失败（错误消息与 errorType 逐字相同，
       完全等价）；NE-3 `validate_specs()` import 期自检（对合法输入零差异，spec 表损坏时
@@ -360,7 +424,11 @@
       举例漂移已于 2026-10-17 漂移清理批次修正为 `launcher`（§3.1 #20，行为变更：tools/list
       两处 description 文案变更，golden 同步重新基线）；NE-6 `launch_tool` 增
       `execute` / `wait` / `allowDestructive`（2026-10-18 P0 落地，详见「`launch_tool`
-      真正执行启动」小节：tools/list 三字段变更 + 显式调用产生本地子进程）
+      真正执行启动」小节：tools/list 三字段变更 + 显式调用产生本地子进程）；
+      NE-7 新增第 16 个对外工具 `get_tool_help`（2026-10-18 P1 落地，详见「工具
+      帮助文档查看」小节：golden 纯追加重基线 15→16 + 显式 `run=true` 产生本地
+      子进程；`policy.py` 的 app 种审计 action/文案跟随执行入口，`launch_tool`
+      路径逐字不变）
 
 ### 其他
 - [x] Git 仓库初始化，代码版本管理
@@ -379,6 +447,14 @@
   transport 关闭仍会 kill 掉仍在运行的子进程——与后端子进程同一条边界。要「启动后
   独立于 server 存活」需外部 supervisor 或 `CREATE_NEW_PROCESS_GROUP`+detach 一类的
   进程分离方案（未做，属架构演进）
+- **`--help` 不是通用约定**：`get_tool_help` 的 `run=true` 只是「按条目配置跑一条
+   命令并把输出交回」。命令行程序普遍成立；GUI 程序多数不认 `--help`（会把参数当
+   普通输入甚至直接启动自己），所以要靠条目 `help.args` 显式写对（`/?` 之类），
+   且这条路径同样吃 destructive 门禁。缺省输出为空即报 `runtime_error`——不猜、
+   不粉饰成「这个工具没有帮助」
+- **帮助输出封顶**：单次回传最多 20000 字符（`truncated=true` 明示被截），超时上限
+   30s（`anyio.fail_after` 到点必 kill，不留孤儿）——返回体要进 MCP 消息，不能塞
+   进整本手册；`kind=mcp`/`launcher` 没有可执行帮助命令，只回数据层 + `note`
 - ~~`data/backend-tools/*.json` 是自动生成的缓存却受 git 跟踪，多实例在跑时
   `lastSynced` 会被反复改写~~ → 已解决（A14）：运行时缓存整体迁到
   `%LOCALAPPDATA%\.awam-tool-manager`，仓库里只剩人工维护的 `data/tools/`
@@ -403,7 +479,7 @@
 ### P1 - 体验完善
 - [ ] 工具自动发现：检测本机已安装哪些可作为 MCP 后端接入的工具
 - [ ] 工具标签分类和筛选优化（`kind` / `tags` 之外的维度）
-- [ ] 工具帮助文档查看（--help 输出）
+      （「工具帮助文档查看」已于 2026-10-18 完成，见上节 P1）
 
 ### P2 - 生态扩展
 - [ ] 接入 Scoop（写 CLI 适配器）— 本机已装（`S:\Libs\Scoop`），可实测
@@ -475,6 +551,9 @@
 
 - `kind`：`app`（普通应用）/ `mcp`（MCP 工具）/ `launcher`（启动器，非 MCP），决定是否可建立后端连接、决定 `get_tool_info` 的返回形状
 - `launch`：仅 `kind=app` 有意义，`launch_tool` 据此返回启动命令；显式 `execute=true` 时按此 spawn 进程
+- `help`：可选，`get_tool_help` 的帮助命令来源（`help.command` 缺省回落
+  `launch.command`，`help.args` 缺省 `--help`、**绝不回落 `launch.args`**，
+  `help.timeout` 封顶 30s）；只在显式 `run=true` 时执行
 - `connection`：仅 `kind=mcp` 有意义，`BackendClient` 据此拉起子进程；目前只支持 `stdio`
 - `install`：仅 `kind=mcp` 有意义，`start_backend` 检测到启动命令缺失时会自动执行一次 `install.command`
 
@@ -520,7 +599,7 @@ awam-tool-manager/
 │   │   └── utools.json         # kind=launcher
 ├── src/
 │   ├── server.py               # MCP Server 入口：协议装配 + 薄分发 + 生命周期
-│   ├── tool_specs.py           # 对外 MCP 工具声明式注册表（SSOT：15 条 spec + handlers）
+│   ├── tool_specs.py           # 对外 MCP 工具声明式注册表（SSOT：16 条 spec + handlers）
 │   ├── policy.py               # 破坏性门禁统一判定 + 部署策略（data/policy.json）
 │   ├── errors.py               # 业务错误出口（ToolError / fail / ensure_success）
 │   ├── store.py                # JSON 存储层（tools 走仓库，缓存走 runtime dir）
@@ -528,11 +607,12 @@ awam-tool-manager/
 │   ├── backend_client.py       # 后端 MCP 客户端与连接池（stdio）
 │   ├── launcher_client.py      # 启动器适配器（非 MCP：Quicker / uTools）
 │   ├── app_launcher.py         # kind=app 启动执行（launch_tool 的 execute=true 路径）
+│   ├── tool_help.py            # 帮助信息分层取数 + 帮助命令执行（get_tool_help 底座）
 │   ├── runtime_paths.py        # 运行时目录解析 + 旧路径迁移（A14）
 │   └── schema.py               # 两层数据的 JSON Schema 校验 + **文档生成源**
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                      # 15 个 test_*.py（271 passed）+ 7 个 e2e 场景（默认不收集）
+└── tests/                      # 16 个 test_*.py（303 passed）+ 8 个 e2e 场景（默认不收集）
     ├── test_store.py
     ├── test_registry.py
     ├── test_registry_policy.py
@@ -545,6 +625,7 @@ awam-tool-manager/
     ├── test_backend_client.py
     ├── test_launcher_client.py
     ├── test_app_launcher.py          # kind=app 启动执行（execute 路径底座）
+    ├── test_tool_help.py             # 帮助取数分层 + help 命令执行（run 才 spawn）
     ├── test_runtime_paths.py     # 运行时目录解析与迁移（A14）
     ├── test_protocol_roundtrip.py   # 真实 MCP 会话，不 mock SDK
     ├── test_docs_sync.py            # 文档/示例/data 与 schema 的一致性
@@ -554,6 +635,7 @@ awam-tool-manager/
         │   test_e2e_backend_lifecycle.py / test_e2e_resources_prompts.py /
         │   test_e2e_policy_deny.py / test_e2e_install_gate.py（场景①–⑥）
         ├── test_e2e_launch_execute.py   # 场景⑦：execute=true 真启动 + 门禁双向
+        ├── test_e2e_tool_help.py        # 场景⑧：get_tool_help 默认零副作用 / run 才 spawn
         └── manual_install_gate.py       # 手工脚本（依赖本机 npm，不进 pytest）
 ```
 
