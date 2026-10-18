@@ -326,9 +326,11 @@ def test_app_gate_audit_line(capsys):
 
 def test_app_gate_audit_action_follows_execution_entry(capsys):
     """app 种的两个执行入口各自标注：help 的判定不能记成 launch_tool"""
-    _decide("app", _APP_DESTRUCTIVE, {"action": "get_tool_help"})
+    decision = _decide("app", _APP_DESTRUCTIVE, {"action": "get_tool_help"})
 
     lines = _audit_lines(capsys)
     assert len(lines) == 1, f"应每次判定一行审计，实际 {len(lines)} 行"
     assert lines[0]["action"] == "get_tool_help"
     assert lines[0]["decision"] == "block"
+    # 拒绝文案也要跟着入口走：help 被拦时说「才会执行启动」会误导调用方
+    assert decision["reason"].endswith("需显式传 allowDestructive=true 才会执行帮助命令")

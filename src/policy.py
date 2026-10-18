@@ -231,21 +231,22 @@ def _decide_launcher(
 def _decide_app(
     tool: dict | None, sub_op: dict
 ) -> tuple[bool, str, str, str]:
-    """app 判定表（`launch_tool` 的 execute=true 路径）。返回四元组同
-    `_decide_mcp` / `_decide_launcher`。
+    """app 判定表（两个执行入口：`launch_tool` 执行启动 / `get_tool_help` 跑帮助
+    命令）。返回四元组同 `_decide_mcp` / `_decide_launcher`。
 
-    启动就是唯一的子操作，没有子工具/动作那种细分粒度：条目标了
-    `destructive` 就连「启动它」也要显式确认。`sub_op` 参数保留是为与
-    另外两个 `_decide_*` 同签名（decide_destructive 统一传 {}）。
+    app 没有子工具/动作那种细分粒度：条目标了 `destructive` 就连「对它做执行
+    动作」也要显式确认。`sub_op` 只用于把拒绝文案与审计标注对齐到实际入口
+    （帮助命令被拒时说「才会执行启动」会误导调用方）。
     """
     tool_id = (tool or {}).get("id") or ""
     if not tool or not tool.get("destructive"):
         return False, RULE_NOT_DESTRUCTIVE, "目标应用未标记 destructive，放行", ""
+    verb = "执行帮助命令" if sub_op.get("action") == "get_tool_help" else "执行启动"
     return (
         True,
         RULE_ENTRY_LEVEL,
         f"目标应用 '{tool_id}' 被标记为 destructive",
-        "，需显式传 allowDestructive=true 才会执行启动",
+        f"，需显式传 allowDestructive=true 才会{verb}",
     )
 
 
