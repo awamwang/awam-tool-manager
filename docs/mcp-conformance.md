@@ -73,7 +73,7 @@ MCP 规范定义了标准的 `logging` 能力（`logging/setLevel` + `notificati
 ### 1.4 分页 ⚠️
 
 `tools/list`、`resources/list`、`prompts/list` 都支持 `cursor` / `nextCursor` 游标分页。
-本项目 handler 签名不含 cursor，SDK 会返回不带 `nextCursor` 的结果 —— 当前 18 个工具规模下完全够用，
+本项目 handler 签名不含 cursor，SDK 会返回不带 `nextCursor` 的结果 —— 当前 22 个工具规模下完全够用，
 属于**有意不为**，不是缺陷。
 
 ---
@@ -200,9 +200,10 @@ MCP Tool 支持 `annotations`（`title` / `readOnlyHint` / `destructiveHint` / `
 
 | 类别 | 工具 | hints |
 |---|---|---|
-| 只读 | `search_tools` / `list_tools` / `get_tool_info` / `list_backend_tools` / `get_backend_status` / `get_backend_logs` / `get_usage_stats` | `readOnlyHint=true`、`destructiveHint=false` |
+| 只读 | `search_tools` / `list_tools` / `get_tool_info` / `list_backend_tools` / `get_backend_status` / `get_backend_logs` / `get_usage_stats` / `list_packages` / `search_packages` | `readOnlyHint=true`、`destructiveHint=false` |
 | 幂等 | `start_backend` / `stop_backend` / `sync_backend_tools` | `idempotentHint=true` |
-| 副作用静态不可知 | `call_backend_tool` / `launch_tool` / `get_tool_help` / `discover_tools` | `openWorldHint=true`（**不谎报 readOnly**） |
+| 副作用静态不可知 | `call_backend_tool` / `launch_tool` / `get_tool_help` / `discover_tools` / `launch_package` | `openWorldHint=true`（**不谎报 readOnly**） |
+| 副作用静态可知且破坏性 | `install_package` | `openWorldHint=true`、`destructiveHint=true` |
 
 `call_backend_tool` 只标 `openWorldHint` 是刻意的：它转发到任意后端子工具，
 副作用取决于运行时的 `tool_name`，静态断言只读会误导客户端。真正的防护落在
@@ -225,11 +226,30 @@ spawn 进程，条目 `destructive` 时同样需 `allowDestructive=true`；正�
 spawn，声明只读等于把「它可以跑命令」对客户端藏起来。返回体的 `run` 报的是
 「这一维真的跑过没有」，不是调用方传了什么标志位。
 
+`list_packages` / `search_packages` 是**真的只读**（读安装器落在盘上的
+`apps/*/manifest.json` 与 `buckets/*/*.json`，一次 `scoop list` 都不跑），所以照常
+声明 `readOnlyHint=true`。`launch_package` / `install_package` 各有一条执行路径，
+与 `launch_tool` 同款标 `openWorldHint`；两者的差别写在注解里而非仅写在文案里：
+`install_package` 会下载并执行 bucket 里的安装脚本、改本机已装清单，因此静态声明
+`destructiveHint=true`，运行时还要过 `policy` 的 `kind=package` 门禁（fail-closed：
+不在 `PACKAGE_CONFIRMED_OPS` 白名单里的包操作一律要 `allowDestructive=true`；
+`launch_package` 因「起的是用户早就装好的程序」在白名单内，与 `launch_tool` 同级）。
+
 ### 2.5 异常兜底
 
 SDK 已自带 `except Exception`，所以单个工具抛异常不会让 Server 崩溃。
 本项目额外加了一层：非 `ToolError` 的意外异常转成 JSON 载荷的内部错误，
 保证客户端拿到的仍是结构化内容而非裸异常文本。
+
+但这句话的适用范围要划清，它是 2026-10-19 真机会话实测出来的边界：
+**入参校验失败根本进不了 handler**。SDK 先按 `inputSchema` 校验，越界就回一段
+SDK 自己的文本，本项目无法把它转成 JSON——`search_packages limit=0` 得到
+`Input validation error: 0 is less than the minimum of 1`，
+`list_packages manager=winget` 得到 `'winget' is not one of ['scoop']`。
+所以「结构化错误载荷」指的是 **handler 层**的约定，不是整条调用链的不变式。
+两条边界因此是叠加而不是重复：schema 的 `minimum` / `enum` 是第一道（拦在门外，
+形态不受控），`pkgman._clamp_int` 与 `resolve_root` 的 `invalid_params` 是第二道
+（只有绕过 schema 的路径——直调 handler、或经 `call_backend_tool` 转发——才会走到）。
 
 ---
 
@@ -244,7 +264,7 @@ MCP **不规定** Server 内部如何持久化数据，因此 `data/tools/`（�
 ### 3.2 `inputSchema` 合法性 ✅
 
 协议要求每个 Tool 的 `inputSchema` 是合法 JSON Schema（Draft 2020-12 子集）。
-本项目 18 个工具全部为：
+本项目 22 个工具全部为：
 
 ```json
 { "type": "object", "properties": { ... }, "required": [...] }

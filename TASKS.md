@@ -25,7 +25,7 @@
 - [x] MCP Server 入口（server.py）：stdio 模式
 - [x] 日志系统（输出到 stderr，不污染协议通道）
 
-### 对外 MCP 工具（18 个）
+### 对外 MCP 工具（22 个）
 - [x] `search_tools` - 搜索工具（关键词 + `kind` / `status` / `publisher` 筛选）
 - [x] `list_tools` - 列出所有工具（同上三个筛选维度，见「筛选维度增强」）
 - [x] `get_tool_info` - 查看工具详情
@@ -33,6 +33,7 @@
 - [x] `get_tool_help` - 工具帮助信息：文档链接 + 能力清单（mcp 子工具 / launcher 动作）+ 帮助命令预览；2026-10-18 新增，`kind=app` 显式 `run=true` 才执行 `--help` 并捕获输出（默认零副作用）
 - [x] `get_usage_stats` - 调用使用统计：2026-10-18 新增（P3），只读 `<runtime>/usage.log` 并按窗口聚合，见「工具使用统计」小节
 - [x] `discover_tools` - 本机工具发现：2026-10-18 新增（P1），按 `data/discovery.json` 声明的候选清单做只读探测，见「工具自动发现」小节
+- [x] `list_packages` / `search_packages` / `launch_package` / `install_package` - 包管理面：2026-10-19 新增（P2-07），直接读安装器落盘清单（当前 `scoop`），列已装 / 搜可装**纯读盘**，启动与安装都要显式 `execute=true`（安装额外要 `allowDestructive=true`），见「包管理适配」小节
 - [x] `call_backend_tool` - 路由调用后端 MCP 的子工具
 - [x] `list_backend_tools` - 列出后端子工具（含完整参数 schema）
 - [x] `start_backend` / `stop_backend` / `get_backend_status` - 后端进程管理
@@ -184,7 +185,7 @@
 - [x] 合计 **168 passed**（`c40d80d` 时点签署，9 个贡献用例的文件；P0 修复后为 183，见下节）；
      真实后端子进程启停 + 调用回归通过
 
-> 文件数口径（2026-10-18 更新）：`tests/` 下有 **18 个** `test_*.py`（贡献 pytest
+> 文件数口径（2026-10-19 更新）：`tests/` 下有 **20 个** `test_*.py`（贡献 pytest
 > 用例），另有 `tests/e2e/` 下的 **9 个** e2e 用例文件（9 个场景）——它们**默认不收集**
 > （`pytest.ini` 的 `addopts = -m "not e2e"`），须 `pytest -m e2e` 显式跑。
 > `tests/e2e/manual_install_gate.py`（原 `tests/test_e2e_install_gate.py`，C 期
@@ -247,16 +248,18 @@
     就是这个 verdict；同时打一行 `StdinGuardProbe 1.2.3`，用来证明版本号确实是从
     **子进程 stdout** 经 `version_pattern` 取回来的。
   - 四条断言：默认路径当场不 spawn、`run_commands=true` 取到 `version=1.2.3`、
-    verdict 恒为 `EOF`、**调用之后 `list_tools()` 仍返回 18 个工具**（传输通道活着）。
-    最后一条才是本场景的存在理由——前三条在单测层用桩就能验。
+    verdict 恒为 `EOF`、**调用之后 `list_tools()` 仍一张工具定义不少**（期望值取自
+    `conftest.EXPECTED_TOOL_NAMES`，不写死数字；传输通道活着）。最后一条才是本场景的
+    存在理由——前三条在单测层用桩就能验。
   - 红绿：摘掉 `stdin=subprocess.DEVNULL` → 场景⑨ 9.33s 内红（客户端先断），
     单测 `test_run_commands_executes_and_parses_version` 同时红；还原后全绿
-- **口径**：`pytest tests/ -q` = 441 passed / **9 deselected**；
-  `pytest -m e2e -q` = 9 passed / 441 deselected。说「441」时要带上
+- **口径**：`pytest tests/ -q` = 517 passed / **9 deselected**；
+  `pytest -m e2e -q` = 9 passed / 517 deselected。说「517」时要带上
   「另有 9 个 e2e 默认不收集」，否则会被误读成总数。
   （本行随每次落地更新：NE-8 时为 314，NE-9「工具使用统计」落地后为 343，
   NE-10「工具自动发现」落地后为 411，真机端到端 + 发现层三处修复后为 425，
-  Steam 假阴性纠正（`registry_value` 探针）后为 441）
+  Steam 假阴性纠正（`registry_value` 探针）后为 441，
+  P2-07「包管理适配」落地（适配层 + handler + 门禁）后为 517）
 - **手工脚本**（不在上面 9 个里）：
   `"<pyenv 3.12 python>" tests/e2e/manual_install_gate.py`——验「已授权时
   install.command 真的被提交给 shell」，依赖本机 npm，故保留手工。
@@ -582,6 +585,9 @@
       真实子进程与 stdout 通道不被污染；这两点分别由「清单里只写 `{ENV}` token」的
       静态守卫 + 协议回环用例（真实会话、PATH 换成 tmp bin、`subprocess.run` 换成
       记录型桩）在更低成本上锁定。Scoop 适配器（P2）落地时再补 e2e 场景
+      —— **P2-07 已落地（2026-10-19），但提交级 e2e 场景仍未补**：真机验证走的是
+      e2e 基建（`stdio_session` + `call_tool`）的一次性脚本，见
+      「包管理适配（P2-07，2026-10-19）」；仓内 e2e 套数照旧是 9 个场景
       - **后续（2026-10-18 晚）场景⑨ 已补**：真机跑 `run_commands=true` 时暴露出
         「子进程继承 server stdio 管道 → 偷走 inbound JSON-RPC → 整个网关死」，
         这一条**桩级用例结构上抓不到**（桩不真的创建子进程，管道就不会被读走），
@@ -710,6 +716,84 @@
       且单测同时红；把 PATH 重扫改成后缀外层 → `python` 解析到商店占位符、用例红；
       去掉注册表回退 → `ProgramFiles` 类候选回到 unknown、用例红。还原后
       `425 passed / 9 deselected`、`9 passed / 425 deselected` 全绿
+
+### 包管理适配（P2-07，2026-10-19）
+能力问题先回答：「接了 Scoop 能不能装软件 / 查已装 / 打开已装」——**三个都能**，
+但按副作用分级：查询纯读盘、启动与安装都要显式表态，安装额外过破坏性门禁。
+形态按用户选定：**新增通用包管理工具面**（不是把 scoop 包登记成一个个 `kind=app` 条目），
+当前后端只有 `scoop`（`pkgman.BACKENDS = ("scoop",)`），`winget` / `npm` 未接线。
+
+- [x] **适配层 `src/pkgman.py`（644 行）** - 一律**直读安装器落盘清单**，不跑
+      `scoop list`（那条命令要拉 PowerShell，冷启 3~6s，且它读的东西盘上本来就写着）。
+      真机（`S:\Libs\Scoop`）勘察钉出六个坑，每个都对应一处实现：
+      ① `apps/<名>/current` 是 junction，本机 14 个包里 **6 个已断链**成空目录 →
+      回落读残留版本目录，状态报 `current_broken` 而不是假装 `ok`；
+      ② 有 2 个包**根本没有 manifest**（`scoop` 自己就是）→ `no_manifest` 是合法态；
+      ③ 桶与包的对应关系在 `install.json` 的 `bucket`，不在 manifest；
+      ④ manifest 的 `bin` 写成字符串时按字符迭代产出垃圾路径（真机表现为「bw.exe 有 6 个 bin」）
+      → `_as_entries` 归一化；
+      ⑤ manifest 不声明 `bin` 但 `shims/<包名>.exe` 能跑（真机 `bayes`）→ shim 候选；
+      ⑥ **扩展名决定能不能直接 spawn**（`.exe` / `.cmd` / `.bat` 可，`.ps1` 抛
+      `OSError [WinError 193]`，`.vbs` 不可）→ 候选带 `runnable`，`launchable` 与
+      `launch_target` 由同一批候选算出，避免一行数据两种答案
+- [x] **4 个对外工具（18 → 22）** - `list_packages` / `search_packages` 纯读盘、
+      零 spawn；`launch_package` 默认只回「会起哪个入口、为什么是它」（候选带
+      `exists` / `runnable`），显式 `execute=true` 才起，起法复用 `app_launcher.launch_app`
+      （保活注册表键用 `scoop/<包名>`，与人工登记条目不同命名空间）；
+      `install_package` 默认只回 argv，真的装要 `execute=true` **且** `allowDestructive=true`。
+      `docs/architecture.md` §4.5 记的是**别人写在盘上的东西**，所以没有 schema、没有校验器，
+      只有实测结论
+- [x] **门禁：`policy` 增 `package` 分支，fail-closed** -
+      `PACKAGE_CONFIRMED_OPS = frozenset({"launch_package"})` 是**免授权白名单**，
+      不是黑名单：`install_package` 以及任何将来新增的包操作，只要没登记进去就默认要
+      `allowDestructive`。方向选反一次，以后加操作就是默认放行。
+      `destructive.mode=deny` 时报 `permission_denied`（客户端无法自行解除），
+      文案也不再提示「传 allowDestructive=true」
+- [x] **整数边界口径** - 刻意不写 `int(value or DEFAULT)`：那会把显式 `0` 当「没传」
+      悄悄放大成默认值。改成 `_clamp_int`——只有 `None` / 空串才是缺省，传了就越界夹取，
+      非整数抛 `invalid_params`；夹取只在 `pkgman` 一处做，handler 不再二次换算（两处口径迟早分家）
+- [x] **真机端到端（2026-10-19，真实 stdio MCP 会话）** - 复用 `tests/e2e/helpers.py`
+      的 `stdio_session` + `call_tool` 对 `src/server.py` 起真会话（这一步是必要的绕路：
+      上一轮 `manage_mcp retry` 后 `query_mcp list_tools` 已报 22 个，但**本会话的工具路由
+      快照仍钉在会话开始时的 18 个**，`mcp_call` 报「No connected MCP server offers a tool
+      named …」——那是客户端快照，不是服务端缺陷）。实测 9 次调用：
+      `tools/list` = **22 个**，4 个包管理工具全部可见；
+      `list_packages` = 14 个包 / `ok 6` / `current_broken 6` / `no_manifest 2` / `launchable 12`，
+      `rootSource` = 「进程环境 SCOOP」；`state=current_broken` 筛出 6 条而 `count` 仍是 14；
+      `search_packages keyword=yt limit=5` = 扫 4 个 bucket / **4287 份清单**、返回 5 条；
+      `launch_package 7zip` 预览挑中 `kind=shortcut` 的 `7zFM.exe`（`executed=false`）；
+      `launch_package scoop entry=scoop.ps1` → `code=not_spawnable` + 候选里
+      `scoop.cmd runnable=true` / `scoop.ps1 runnable=false`（坑⑥ 在真机上的正面兑现）；
+      `install_package yt-dlp` 预览回 argv 且 `alreadyInstalled=false`；
+      `install_package yt-dlp execute=true`（不给授权）→ `errorType=destructive_blocked`，
+      stderr 同步落审计行 `{"action":"install_package","kind":"package","sub_op":"yt-dlp",
+      "tool":"scoop:yt-dlp","decision":"block","rule_hit":"package_destructive",
+      "client_declared":false,"policy_mode":"require_confirm"}`——**没有下载、没有改本机清单**
+      （审计的 `sub_op` 记包名，与 mcp 分支记子工具名同位不同义，读日志时按 `kind` 分派）
+- [x] **两条真机才看得出的边界事实** - `search_packages limit=0` 与
+      `list_packages manager=winget` 都在**进 handler 之前**被 SDK 按 inputSchema 拦下，
+      返回的是裸文本 `Input validation error: 0 is less than the minimum of 1` /
+      `'winget' is not one of ['scoop']`（不是本项目的 JSON 错误载荷）。
+      含义有两层：schema 声明的 `minimum` / `enum` 是第一道真边界，`_clamp_int`
+      与 `resolve_root` 的 `invalid_params` 是第二道（直调 handler、以及从 `call_backend_tool`
+      之类不经 schema 的路径进来时才生效）；同时说明**协议级校验失败的载荷形态不受我们控制**，
+      文档不再宣称「所有错误都是结构化 JSON」
+- [x] **未跑的路径（明确留白）** - `launch_package execute=true` 真起进程这唯一一条没在真机跑：
+      它会拉起 7zFM 这样的 GUI，属于对用户机器的可见副作用，需要用户在场确认。
+      该路径由单测钉住参数传递（`seen["tool_id"] == "scoop/goodpkg"`），
+      底层 `launch_app` 本身早在「`launch_tool` 真正执行启动」一节真机验证过。
+      本次探针脚本在 `.scratch/p2-probe/`（gitignore），**没有升格成提交级 e2e 场景**：
+      它读的是真机 scoop 布局，数字不可复现；可复现的部分（三态、入口挑选、门禁、
+      错误码）已经全部在 `test_pkgman*` 的合成树里钉住
+- [x] **测试 425 → 517** - 新增 `tests/test_pkgman.py`（51 条，全部 `tmp_path` 合成 scoop 树，
+      **不碰真机 scoop**）、`tests/test_pkgman_handlers.py`（22 条：默认零 spawn /
+      门禁位置 / 错误分类不靠猜文案——把执行器 patch 成「一调就炸」的协程来钉「默认不 spawn」）；
+      `tests/test_policy_gate.py` 决策表补 5 行 package + 新增第 6 节 fail-closed 与审计标签；
+      golden `tools_list.json` 重基线为 22 个（`git diff --stat` = 190 insertions / 0 deletions，
+      证明 18 条既有声明逐字节未变）。守卫全部兑现：漏改 `EXPECTED_TOOL_NAMES` / SKILL.md
+      工具表 / 文档计数任一处都会红。口径 `517 passed / 9 deselected`，`-m e2e` = `9 passed / 517 deselected`
+- [x] **顺带纠一个会腐烂的字面量** - e2e 场景⑨ 里 `assert tools_after == 18` 改成
+      `== len(EXPECTED_TOOL_NAMES)`：写死数字的用例每次加工具都要跟着改，等于没在断言任何东西
 
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
@@ -891,11 +975,11 @@
       （「工具帮助文档查看」「筛选维度增强」已于 2026-10-18 完成，见上节 P1）
 
 ### P2 - 生态扩展
-- [ ] 接入 Scoop（写 CLI 适配器）— 本机已装（`S:\Libs\Scoop`），可实测
-      （2026-10-18 真机 `discover_tools` 已确认：`{SCOOP}` 由注册表回退解析成功，
-      `installed` / 高信心，`scoop --version` = 0.5.3，`dir_count` 实测
-      **14 个包 / 4 个 bucket**（extras、Faustvii、main、versions）——
-      适配器要列的清单规模已经有了）
+- [x] 接入 Scoop — ✅ 已完成（2026-10-19，见「包管理适配（P2-07，2026-10-19）」）：
+      形态是**通用包管理工具面**（`list_packages` / `search_packages` / `launch_package` /
+      `install_package`），不是把每个包登记成一条工具条目；直读安装器落盘清单，
+      真机 `S:\Libs\Scoop` 实测 14 个包 / 4 个 bucket / 4287 份清单，
+      查询零 spawn、启动与安装要显式 `execute=true`（安装再要 `allowDestructive=true`）
 - [x] 接入 WeGame（腾讯平台）— ⛔ **本机确实没装主程序，无法实测**（2026-10-19 只读勘察，
       结论与本轮 Steam 那次相反，这次是真的没有）：
       ① 全盘限深扫描 `wegame*.exe` 只命中 1 个残留
@@ -1039,13 +1123,14 @@ awam-tool-manager/
 │   │   ├── everything.json
 │   │   ├── everything-search-mcp.json
 │   │   ├── winget-mcp.json
+│   │   ├── powertoys.json      # kind=app
 │   │   ├── quicker.json        # kind=launcher
 │   │   └── utools.json         # kind=launcher
 │   ├── policy.json             # 部署策略（ARC-P1-05 Phase 2，AWAM_POLICY_FILE 可覆盖）
 │   └── discovery.json          # 发现候选清单（discover_tools 的声明源，NE-10）
 ├── src/
 │   ├── server.py               # MCP Server 入口：协议装配 + 薄分发 + 生命周期
-│   ├── tool_specs.py           # 对外 MCP 工具声明式注册表（SSOT：18 条 spec + handlers）
+│   ├── tool_specs.py           # 对外 MCP 工具声明式注册表（SSOT：22 条 spec + handlers）
 │   ├── policy.py               # 破坏性门禁统一判定 + 部署策略（data/policy.json）
 │   ├── errors.py               # 业务错误出口（ToolError / fail / ensure_success）
 │   ├── store.py                # JSON 存储层（tools 走仓库，缓存走 runtime dir）
@@ -1055,12 +1140,13 @@ awam-tool-manager/
 │   ├── app_launcher.py         # kind=app 启动执行（launch_tool 的 execute=true 路径）
 │   ├── tool_help.py            # 帮助信息分层取数 + 帮助命令执行（get_tool_help 底座）
 │   ├── discovery.py            # 本机工具发现（声明清单 + 只读探测，默认零 spawn）
+│   ├── pkgman.py               # 包管理器适配层（scoop：读盘列包 / 搜 bucket / 解析入口 / 构造安装命令）
 │   ├── usage.py                # 调用使用统计：dispatch 出口记 usage.log + 按窗口聚合
 │   ├── runtime_paths.py        # 运行时目录解析 + 旧路径迁移（A14）
 │   └── schema.py               # 两层数据的 JSON Schema 校验 + **文档生成源**
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                      # 18 个 test_*.py（441 passed）+ 9 个 e2e 场景（默认不收集）
+└── tests/                      # 20 个 test_*.py（517 passed）+ 9 个 e2e 场景（默认不收集）
     ├── test_store.py
     ├── test_registry.py
     ├── test_registry_policy.py
@@ -1075,6 +1161,9 @@ awam-tool-manager/
     ├── test_app_launcher.py          # kind=app 启动执行（execute 路径底座）
     ├── test_tool_help.py             # 帮助取数分层 + help 命令执行（run 才 spawn）
     ├── test_discovery.py             # 发现清单校验 + 三态折叠 + 默认零 spawn
+    ├── test_pkgman.py                # 包管理适配层：合成 scoop 树 + 三态 + 入口挑选 + 只构造命令
+    ├── test_pkgman_handlers.py       # 包管理四个工具：默认零 spawn + 门禁位置 + 错误分类
+    ├── test_usage.py                 # 使用统计：日志形状 + 日历日窗口 + dispatch 出口埋点
     ├── test_runtime_paths.py     # 运行时目录解析与迁移（A14）
     ├── test_protocol_roundtrip.py   # 真实 MCP 会话，不 mock SDK
     ├── test_docs_sync.py            # 文档/示例/data 与 schema 的一致性

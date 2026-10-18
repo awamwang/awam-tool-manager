@@ -11,7 +11,7 @@ async def _handle_xxx」，`build_mcp_tools()` / `dispatch_tool` /
 `conftest.EXPECTED_TOOL_NAMES` 的守卫测试全部自动跟随。
 
 与 `schema.py` 的分工：schema.py 管辖**数据条目**（`data/tools/*.json`），
-本模块管辖**对外 MCP 工具**（协议层暴露的 18 个 `tools/call` 入口）。
+本模块管辖**对外 MCP 工具**（协议层暴露的 22 个 `tools/call` 入口）。
 两者字段名有重叠但语义不同，互不 import、互不引用。
 """
 
@@ -31,6 +31,10 @@ from app_launcher import launch_app
 # 单测用 monkeypatch.setenv("AWAM_DISCOVERY_FILE", ...) 换清单，不需要打补丁。
 from discovery import DiscoveryError, discover, load_manifest, note_for, resolve_discovery_path
 from launcher_client import LauncherError
+# 包管理面**按模块引用**（同 `usage` 的先例）：单测要把 scoop 根指到 tmp_path，
+# `monkeypatch.setattr(pkgman, "resolve_root", ...)` 只有模块引用才打得住；
+# 按值 import 会把 handler 焊死在 import 那一刻的函数对象上。
+import pkgman
 from policy import decide_destructive
 # 统计模块**按模块引用**：`usage.USAGE_LOG` 要在调用时取当前值，
 # 按值 import 会让单测的 monkeypatch 打不中（policy.AUDIT_LOG 踩过一次）。
@@ -547,6 +551,254 @@ async def _handle_discover_tools(arguments: dict, ctx: ToolContext) -> dict:
     return payload
 
 
+# ---- 包管理面（P2-07）：scoop 先行，四个工具共用一个根目录解析 ----
+
+
+def _resolve_pkg_root(arguments: dict) -> tuple[str, str]:
+    """四个包管理工具共用：定位安装器根目录。
+
+    定不出来一律 `install_required`：话术必须区分「这台机器上没有这个安装器」
+    和「这个安装器里没装包」——后者是空清单，是正常结果（`list_packages` 走那条）。
+    """
+    manager = str(arguments.get("manager") or "scoop")
+    try:
+        root, reason = pkgman.resolve_root(manager)
+    except pkgman.PackageError as exc:
+        fail(str(exc), error_type=exc.error_type)
+    if root is None:
+        fail(
+            f"定位不到 {manager} 的安装根目录：{reason}",
+            error_type=ErrorType.INSTALL_REQUIRED,
+            manager=manager,
+        )
+    return root, reason
+
+
+async def _handle_list_packages(arguments: dict, ctx: ToolContext) -> dict:
+    """列已安装的包：**纯读盘**（读 apps 下的 manifest / install.json，不跑 scoop list）"""
+    root, root_reason = _resolve_pkg_root(arguments)
+    state = str(arguments.get("state") or "").strip()
+    rows = pkgman.list_installed(root)
+    states: dict[str, int] = {}
+    for r in rows:
+        states[r["state"]] = states.get(r["state"], 0) + 1
+    selected = [r for r in rows if r["state"] == state] if state else rows
+    payload = {
+        "success": True,
+        "manager": "scoop",
+        "root": root,
+        "rootSource": root_reason,
+        "count": len(rows),
+        "returned": len(selected),
+        "states": states,
+        "launchable": sum(1 for r in rows if r["launchable"]),
+        "packages": [pkgman.brief(r) for r in selected],
+    }
+    if state:
+        # 与 discover_tools 的 status 过滤同口径：count 永远是整份清单的，
+        # 不标筛选条件就会被读成「筛完还剩这么多」
+        payload["stateFilter"] = state
+    if not rows:
+        payload["note"] = (
+            f"{root}\\apps 下没有任何包目录。这是「这个安装器还没装东西」，"
+            "不是「读不到」——读不到的路径会在 rootSource 里说明"
+        )
+    elif states.get(pkgman.STATE_CURRENT_BROKEN) or states.get(pkgman.STATE_NO_MANIFEST):
+        payload["note"] = (
+            "state 说明：ok=current 连接点正常；current_broken=current 已断链"
+            "（数据取自残留的版本目录，包可能实际不可用）；no_manifest=目录存在"
+            "但没有 manifest（scoop 自身就是这种）。三种都用同一组字段，"
+            "差别在 state 与 currentAlive"
+        )
+    return payload
+
+
+async def _handle_search_packages(arguments: dict, ctx: ToolContext) -> dict:
+    """在已添加 bucket 的清单里搜可安装的包：**纯读盘**，命中按文件名筛后再读 JSON"""
+    root, _ = _resolve_pkg_root(arguments)
+    try:
+        result = pkgman.search_packages(
+            root,
+            str(arguments.get("keyword") or ""),
+            arguments.get("limit"),
+        )
+    except pkgman.PackageError as exc:
+        fail(str(exc), error_type=exc.error_type, manager="scoop")
+    payload = {
+        "success": True,
+        "manager": "scoop",
+        "root": root,
+        "keyword": str(arguments.get("keyword") or "").strip(),
+        "count": len(result["rows"]),
+        "scannedBuckets": result["scannedBuckets"],
+        "scannedManifests": result["scannedManifests"],
+        "limit": result["limit"],
+        "packages": result["rows"],
+    }
+    if not result["rows"]:
+        payload["note"] = (
+            f"在 {result['scannedBuckets']} 个已添加 bucket 的 "
+            f"{result['scannedManifests']} 份清单里没有匹配项。"
+            "这是「已知 bucket 里没有」，不是「装不了」——scoop 还能 bucket add / checkver"
+        )
+    return payload
+
+
+async def _handle_launch_package(arguments: dict, ctx: ToolContext) -> dict:
+    """启动一个已安装的包。
+
+    默认路径**不 spawn**：只回「会起哪个入口、为什么是它」（候选带 exists /
+    runnable 两个标记）。显式 `execute=true` 才真的起，起法与 `launch_tool`
+    同一条路（`app_launcher.launch_app`，stdio 全 DEVNULL + 保活注册表）。
+    """
+    root, root_reason = _resolve_pkg_root(arguments)
+    try:
+        name = pkgman.validate_name(arguments.get("package"))
+        row = pkgman.find_installed(root, name)
+        if row is None:
+            fail(
+                f"scoop 里没有安装 '{name}'（{root}\\apps\\{name} 不存在）。"
+                "先用 search_packages 确认可装包名，再 install_package",
+                error_type=ErrorType.NOT_FOUND,
+                manager="scoop",
+                package=name,
+            )
+        entry = arguments.get("entry")
+        target = pkgman.launch_target(row, str(entry) if entry else None)
+    except pkgman.PackageError as exc:
+        fail(str(exc), error_type=exc.error_type, manager="scoop")
+    if not target["ok"]:
+        # 连预览都挑不出可起的入口：把 code / reason / 候选一起回，
+        # 调用方看到的是「差在哪」，不是一个光秃秃的失败
+        fail(
+            f"无法确定 '{row['name']}' 的可启动入口：{target['reason']}",
+            error_type=ErrorType.RUNTIME_ERROR,
+            manager="scoop",
+            package=row["name"],
+            state=row["state"],
+            code=target["code"],
+            candidates=target["candidates"],
+        )
+
+    payload = {
+        "success": True,
+        "manager": "scoop",
+        "root": root,
+        "package": row["name"],
+        "state": row["state"],
+        "version": row["version"],
+        "kind": target["kind"],
+        "path": target["path"],
+        "candidates": target["candidates"],
+        "rootSource": root_reason,
+    }
+    if not arguments.get("execute"):
+        payload["executed"] = False
+        payload["note"] = (
+            "未执行：传 execute=true 才会真的启动。入口按 快捷方式 → bin → shim 取，"
+            "指定某个入口用 entry（候选里的 name 或文件名）"
+        )
+        return payload
+
+    decision = decide_destructive(
+        "package", {"id": f"scoop:{row['name']}"},
+        {"action": "launch_package", "package": row["name"]}, arguments,
+    )
+    if decision["blocked"]:
+        fail(decision["reason"], error_type=decision["error_type"],
+             package=row["name"])
+    if decision["required_confirm"]:
+        ctx.log(f"⚠️ 已确认执行包启动: {row['name']}")
+
+    ctx.log(f"执行包启动: {row['name']} -> {target['path']}")
+    exec_res = await launch_app(
+        {"type": "executable", "command": target["path"]},
+        f"scoop/{row['name']}",
+        row["name"],
+        arguments.get("wait"),
+    )
+    payload.update(exec_res)
+    return ensure_success(payload)
+
+
+async def _handle_install_package(arguments: dict, ctx: ToolContext) -> dict:
+    """安装一个包。
+
+    默认路径**不执行**：只回将要跑的命令（argv）。真的装要同时满足两件事——
+    显式 `execute=true`（意图）+ `allowDestructive=true`（授权）：安装会下载并跑
+    bucket 里的安装脚本、改本机已装清单，属 `policy` 判定表里的破坏性操作，
+    策略 `destructive.mode=deny` 时客户端无法自行解除。
+    """
+    root, root_reason = _resolve_pkg_root(arguments)
+    try:
+        name = pkgman.validate_name(arguments.get("package"))
+        argv = pkgman.install_argv(root, name)
+        already = pkgman.find_installed(root, name)
+    except pkgman.PackageError as exc:
+        fail(str(exc), error_type=exc.error_type, manager="scoop")
+
+    payload = {
+        "success": True,
+        "manager": "scoop",
+        "root": root,
+        "package": name,
+        "argv": argv,
+        "rootSource": root_reason,
+        "alreadyInstalled": bool(already),
+    }
+    if already:
+        payload["state"] = already["state"]
+        payload["version"] = already["version"]
+
+    if not arguments.get("execute"):
+        payload["executed"] = False
+        payload["note"] = (
+            "未执行：安装会改动本机。要真的装，需同时传 execute=true 与 "
+            "allowDestructive=true"
+        )
+        return payload
+
+    decision = decide_destructive(
+        "package", {"id": f"scoop:{name}"},
+        {"action": "install_package", "package": name}, arguments,
+    )
+    if decision["blocked"]:
+        fail(decision["reason"], error_type=decision["error_type"], package=name)
+    ctx.log(f"⚠️ 已确认执行包安装: {name}（{argv}）")
+
+    try:
+        run = await pkgman.run_argv(argv, arguments.get("timeout"))
+    except pkgman.PackageError as exc:
+        fail(str(exc), error_type=exc.error_type, package=name, argv=argv)
+
+    after = pkgman.find_installed(root, name)
+    payload.update(
+        {
+            "executed": True,
+            "exitCode": run["exitCode"],
+            "timedOut": run["timedOut"],
+            "stdout": run["stdout"],
+            "stderr": run["stderr"],
+            "installed": after,
+        }
+    )
+    if not run["ok"]:
+        payload["success"] = False
+        payload["errorType"] = ErrorType.RUNTIME_ERROR
+        payload["error"] = (
+            f"scoop install 未成功（退出码 {run['exitCode']}"
+            + ("，已超时终止" if run["timedOut"] else "")
+            + "）；stdout/stderr 见本载荷"
+        )
+        return payload
+    if after is None:
+        payload["note"] = (
+            "命令退出码 0，但 apps 目录下仍读不到这个包——装到了别处"
+            "（如 --global 装的目录）或清单尚未落盘，不要当成安装成功"
+        )
+    return payload
+
+
 # 顺序即 tools/list 对外可见顺序（golden 按列表逐位锁定，保序即保行为）。
 SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
     ServerToolSpec(
@@ -964,6 +1216,139 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
         # 声明只读等于把「它会跑命令」对客户端藏起来（与 get_tool_help 同判例）
         annotations={"openWorldHint": True, "destructiveHint": False},
     ),
+    ServerToolSpec(
+        name="list_packages",
+        handler=_handle_list_packages,
+        description=(
+            "列出本机包管理器（当前支持 scoop）已安装的包：只读盘上的 apps 清单，"
+            "不执行安装器命令；每个包给出 state（ok / current_broken / no_manifest）"
+            "与是否可启动"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "manager": {
+                    "type": "string",
+                    "enum": ["scoop"],
+                    "description": "可选，默认 scoop"
+                },
+                "state": {
+                    "type": "string",
+                    "enum": ["ok", "current_broken", "no_manifest"],
+                    "description": "可选，只返回该状态的包（count/states 仍是整份清单的口径）"
+                }
+            }
+        },
+        # 全程只读文件，不 spawn、不碰注册表写
+        annotations={"readOnlyHint": True, "destructiveHint": False},
+    ),
+    ServerToolSpec(
+        name="search_packages",
+        handler=_handle_search_packages,
+        description=(
+            "在包管理器已添加的仓库清单里搜可安装的包（只读，按包名匹配；"
+            "命中为空只说明已添加的清单里没有，不代表装不了）"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "manager": {
+                    "type": "string",
+                    "enum": ["scoop"],
+                    "description": "可选，默认 scoop"
+                },
+                "keyword": {
+                    "type": "string",
+                    "description": "包名关键词（匹配 bucket 清单里的包名）"
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "description": "可选，最多返回多少条，默认 20"
+                }
+            },
+            "required": ["keyword"]
+        },
+        annotations={"readOnlyHint": True, "destructiveHint": False},
+    ),
+    ServerToolSpec(
+        name="launch_package",
+        handler=_handle_launch_package,
+        description=(
+            "启动包管理器已安装的某个包：默认只解析可执行入口并预览（不 spawn），"
+            "传 execute=true 才真的启动（入口按 快捷方式 → bin → shim 取，可用 entry 指定）"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "manager": {
+                    "type": "string",
+                    "enum": ["scoop"],
+                    "description": "可选，默认 scoop"
+                },
+                "package": {
+                    "type": "string",
+                    "description": "包名（须已安装，如 7zip）"
+                },
+                "entry": {
+                    "type": "string",
+                    "description": "可选，指定入口的名字或文件名（如 7zFM.exe）；缺省按优先级自动挑"
+                },
+                "execute": {
+                    "type": "boolean",
+                    "description": "可选，默认 false。true 才真的启动进程；false 只回预览"
+                },
+                "wait": {
+                    "type": "number",
+                    "description": "可选，execute=true 时观察多少秒判定早退（默认 5，上限 30；<=0 不等待）"
+                }
+            },
+            "required": ["package"]
+        },
+        # 能力面包含 spawn 进程，按 get_tool_help / discover_tools 的判例挂
+        # openWorldHint 且不声明 readOnlyHint
+        annotations={"openWorldHint": True, "destructiveHint": False},
+    ),
+    ServerToolSpec(
+        name="install_package",
+        handler=_handle_install_package,
+        description=(
+            "用包管理器安装一个包：默认只回将要执行的命令预览，不改动本机；"
+            "真要装必须同时传 execute=true 与 allowDestructive=true"
+            "（安装会下载并运行仓库里的安装脚本，属破坏性操作）"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "manager": {
+                    "type": "string",
+                    "enum": ["scoop"],
+                    "description": "可选，默认 scoop"
+                },
+                "package": {
+                    "type": "string",
+                    "description": "包名（只允许字母/数字/点/下划线/短横/加号，不接受路径分隔符）"
+                },
+                "execute": {
+                    "type": "boolean",
+                    "description": "可选，默认 false。true 才真的执行安装命令"
+                },
+                "allowDestructive": {
+                    "type": "boolean",
+                    "description": "execute=true 时必须显式传 true，否则按破坏性门禁拒绝"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 600,
+                    "description": "可选，安装命令最长等待秒数，默认 120、上限 600"
+                }
+            },
+            "required": ["package"]
+        },
+        annotations={"openWorldHint": True, "destructiveHint": True},
+    ),
 )
 
 # ToolAnnotations 的合法键（MCP 协议 hints 全集）。validate_specs 用它拦
@@ -980,7 +1365,7 @@ def build_mcp_tools() -> list[Tool]:
     - `if ToolAnnotations is not None and spec.annotations:` —— 可选导入的
       真值判断都原样保留（`{}` 取假，不挂注解）；
     - `tool.outputSchema = spec.output_schema or SHARED_OUTPUT_SCHEMA` ——
-      本期 18 条全部回落共享 schema。
+      本期 22 条全部回落共享 schema。
     """
     tools: list[Tool] = []
     for spec in SERVER_TOOL_SPECS:

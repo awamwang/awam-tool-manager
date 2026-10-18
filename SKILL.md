@@ -36,6 +36,14 @@ description: 统一工具管理器，维护本机工具名单，提供统一的�
   才判 `unknown`。声明式路径穷举不出「装在非常规盘」——Steam 装 `S:\Program Files (x86)`
   时只声明 `C:\Program Files` 的清单把它判成了 `not_installed`，所以每个候选都该有
   一条**不依赖盘符**的证据（`registry_value` 读安装器自己写的登记值）
+- **包管理适配**：`list_packages` / `search_packages` / `launch_package` /
+  `install_package` 直接读安装器落在盘上的清单（当前后端：`scoop`），**不跑
+  `scoop list`**——列已装包读 `apps/*/current/manifest.json`（`current` 断链时
+  回落版本目录并如实标 `current_broken`）、搜可装包读 `buckets/*/*.json` 的文件名、
+  挑启动入口看 `shortcuts` / `bin` / `shims/<包名>`。启动与安装都要显式
+  `execute=true`；安装额外要 `allowDestructive=true`（`kind=package` 门禁是
+  fail-closed 的，见「安全约定」）。`winget` / `npm` 没有可靠的纯读盘来源，
+  属执行面，尚未接线
 
 ## 目录结构
 
@@ -57,11 +65,12 @@ awam-tool-manager/
 │   ├── backend_client.py     # 后端 MCP 客户端与连接池
 │   ├── launcher_client.py    # 启动器适配器（非 MCP：Quicker / uTools）
 │   ├── discovery.py          # 本机工具发现（声明清单 + 只读探测，默认零 spawn）
+│   ├── pkgman.py             # 包管理器适配层（scoop：读盘列包 / 搜 bucket / 解析入口 / 构造安装命令）
 │   ├── runtime_paths.py      # 运行时目录解析 + 旧路径迁移
 │   └── schema.py             # 两层数据的 JSON Schema 校验 + 文档生成源
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 441 个用例（另有 9 个真实 e2e 用例默认不收集，
+└── tests/                    # 517 个用例（另有 9 个真实 e2e 用例默认不收集，
                               # `pytest -m e2e` 显式跑；含真实 MCP 会话与文档漂移检测）
 ```
 
@@ -102,6 +111,10 @@ awam-tool-manager/
 | `get_tool_help` | `tool_id`(必填)、`run`、`timeout`、`allowDestructive` | 取工具帮助信息：文档链接 + 能力清单（mcp 子工具 / launcher 动作）+ 帮助命令预览；**默认只读数据、不 spawn**，`kind=app` 显式 `run=true` 才执行帮助命令（`--help` / 条目 `help.args`）并捕获输出 |
 | `get_usage_stats` | `days`、`tool_id` | 查询调用使用统计（只读 `<runtime>/usage.log`，不碰任何工具）：按天 / 按对外工具 / 按目标 `tool_id` 聚合调用量、成败与耗时；`days` 按日历日含今天、默认 7、越界收敛到 1~365，`tool_id` 按记录里的 `target` 精确匹配 |
 | `discover_tools` | `run_commands`、`status` | 按 `data/discovery.json` 声明的候选清单发现本机工具：`path_exists` / `registry_value` / `dir_count` / 命令是否在 PATH 四类**只读**探测，对照已登记工具输出 `status`（installed / not_installed / unknown）+ `confidence` + `registered`；**默认不 spawn**，`run_commands=true` 才执行清单里的版本命令取版本号（Windows 上按可执行后缀解析出真目标再无 shell 执行，子进程 `stdin=DEVNULL` 以保证不污染服务通道）；`status` 只裁剪返回的候选，`summary` 仍是整份清单的计数 |
+| `list_packages` | `manager`、`state` | 列出包管理器（当前支持 `scoop`）已装的包：**纯读盘**，不跑 `scoop list`——`current` 断链时回落版本目录、bucket 取自 `install.json`、`manifest.bin` 缺失时用 `shims/<包名>` 兜底，三种情况如实标成 `state`（ok / current_broken / no_manifest）并给 `launchable`；`count`/`states` 恒为整份清单口径，`state` 只裁剪 `packages` |
+| `search_packages` | `keyword`(必填)、`manager`、`limit` | 在已添加 bucket 的清单里搜可安装的包：按 manifest 文件名筛（本机 4 个 bucket / 4287 份清单），命中才读 JSON，**纯读盘、不 spawn**；排序为完全同名 → 前缀 → 包含，`limit` 默认 20、越界收敛到 1~100；无命中要说「已知 bucket 里没有」而不是「装不了」 |
+| `launch_package` | `manager`、`package`(必填)、`entry`、`execute`、`wait` | 启动已安装的包：入口按 **快捷方式 → bin → shim** 取，只挑「文件在盘上且扩展名可直接 spawn」的候选（真机实测 `.ps1` 抛 WinError 193，不可直接起）；**默认只预览**（回 `path` / `kind` / 全部候选及其 `exists`/`runnable`），显式 `execute=true` 才与 `launch_tool` 走同一条 spawn 路径；不改动已装清单，故不要求 `allowDestructive`（但留门禁审计行） |
+| `install_package` | `manager`、`package`(必填)、`execute`、`allowDestructive`、`timeout` | 安装一个包：默认只回将要执行的 `argv` 与 `alreadyInstalled`；真的装要**同时**传 `execute=true`（意图）+ `allowDestructive=true`（授权）——门禁 `kind=package` 是 fail-closed 的（不看条目标记，名单外操作一律要确认；策略 `destructive.mode=deny` 时客户端无法自解）；命令跑完再读回 `apps/<包>`，退出码 0 却读不到时明示「不要当成安装成功」 |
 
 > `kind=launcher`（启动器，如 Quicker / uTools）不是 MCP：没有长连接，调用是一次性的。
 > - **Quicker**：`QuickerStarter.exe -c<秒> "runaction:<ID或名称>?参数"`，stdout 回传动作
@@ -166,7 +179,7 @@ CallToolResult 透传；生产环境 pyenv 3.12 即 1.29.0）。
 - 工具条目里的 `readOnly` / `destructive` 会映射到 MCP Tool annotations
 - **破坏性门禁**（`call_backend_tool` 转发前 / `run_launcher_action` 执行前 /
   `launch_tool` 的 `execute=true` 启动前 / `get_tool_help` 的 `run=true` 执行帮助
-  命令前）：
+  命令前 / `install_package` 的 `execute=true` 装包前）：
   条目未标 `destructive` → 不拦；标了之后命中判定才需显式传
   `allowDestructive=true`，否则返回 `destructive_blocked`。
   - mcp：配 `destructiveTools` 时只拦清单内的子工具（精确匹配），未配则整个后端都拦；
@@ -174,6 +187,12 @@ CallToolResult 透传；生产环境 pyenv 3.12 即 1.29.0）。
     `id`/`name`/`type` 任一）时只拦命中的动作，未配则所有动作都拦。默认不启用——
     启用该字段等于放宽安全属性（未命中的动作由拦转放），须部署者按实际动作清单
     核对后显式配置。
+  - package（`install_package` / `launch_package`）：**没有条目可标**，破坏性由操作
+    本身定且方向是 fail-closed——只有一张「不需要授权」白名单
+    `policy.PACKAGE_CONFIRMED_OPS`（当前仅 `launch_package`：起的是用户早就装好的
+    程序，与 `launch_tool` 同级），名单外（`install_package` 及一切未登记的操作）
+    一律要 `allowDestructive=true`。将来新增卸载 / 更新工具时忘了登记，代价是多一次
+    确认，而不是静默免检。
 - **部署策略（`data/policy.json`，ARC-P1-05 Phase 2）**：部署者的显式决定，随仓库分发、
   可评审；`AWAM_POLICY_FILE` 环境变量可覆盖。`tools.deny` 拒绝任意工具的调用、`tools.allow`
   非 null 时进入白名单模式（deny 优先）；`destructive.mode` 三态——`require_confirm`（默认，
@@ -185,8 +204,8 @@ CallToolResult 透传；生产环境 pyenv 3.12 即 1.29.0）。
 - **服务内任何 spawn 都必须 `stdin=DEVNULL`**：本服务通过 stdio 管道与上游网关通信，
   子进程若继承这条 stdin（Windows 上 `.cmd` / `.bat` 垫片经 cmd.exe 尤其如此），
   会**从协议通道里读走字节**，等价于吞掉入站 JSON-RPC——真机实测整个 server 随即退出。
-  `backend_client.py` / `app_launcher.py` / `tool_help.py` / `discovery.py` 四条 spawn
-  路径都按这条纪律走，新增第五条时不要漏
+  `backend_client.py` / `app_launcher.py` / `tool_help.py` / `discovery.py` /
+  `pkgman.py` 五条 spawn 路径都按这条纪律走，新增第六条时不要漏
 - **改完服务端代码要用 MCP 客户端验证前，先重启那条连接**：stdio server 是常驻进程，
   Python 只在 import 期读源码，不重启则拿到的仍是旧行为的结论
 - **`install.command` 默认不被自动执行**（P0 修复）：它写在进版本库的数据文件里、

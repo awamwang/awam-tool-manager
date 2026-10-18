@@ -1,0 +1,395 @@
+"""包管理四个对外工具的 handler 守卫（P2-07，`src/tool_specs.py` 的 `_handle_*pkg*`）。
+
+钉的是三件事，都不是适配层能自己证明的：
+
+1. **默认零 spawn**：`list/search` 不跑任何命令，`launch_package` / `install_package`
+   不给 `execute` 只回预览——把 `launch_app` / `run_argv` 打成「一调就炸」来证明，
+   而不是断言返回里没有某个字段；
+2. **门禁位置**：`install_package` 的 `execute=true` 必须过 `decide_destructive`
+   （默认要 `allowDestructive`，策略 `deny` 时客户端自解无效），且拒绝发生在
+   `run_argv` 之前；`launch_package` 在放行名单内，不要求这个参数；
+3. **错误分类不靠猜文案**：`install_required`（没有这个安装器 / 没有 scoop 入口）、
+   `not_found`（包没装）、`invalid_params`（未接线的 manager、空关键词、非法包名）、
+   `runtime_error`（挑不出入口、命令非零退出）各归各位。
+
+直接调 handler 而不走 `server.dispatch_tool`：dispatch 用的是仓库真实 `data/tools/`
+与真实运行目录，而这里的「scoop 根」是 `tmp_path` 里的合成树，中间那层只会把
+monkeypatch 的靶子遮住（协议层与 dispatch 层的覆盖在 e2e 场景里）。
+"""
+import asyncio
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+import pkgman  # noqa: E402
+import policy as policy_mod  # noqa: E402
+import tool_specs  # noqa: E402
+from errors import ToolError  # noqa: E402
+from registry import ToolRegistry  # noqa: E402
+from store import JsonStore  # noqa: E402
+from test_pkgman import make_app, make_shim, write_json  # noqa: E402
+from tool_specs import ToolContext  # noqa: E402
+
+
+def run(coro):
+    return asyncio.run(coro)
+
+
+def _ctx(tmp_path: Path) -> ToolContext:
+    store = JsonStore(tmp_path)
+    return ToolContext(
+        registry=ToolRegistry(store),
+        backend_manager=None,
+        launcher_manager=None,
+        store=store,
+        log=lambda _msg: None,
+    )
+
+
+def _err(excinfo) -> dict:
+    return json.loads(str(excinfo.value))
+
+
+def _spawn_forbidden(monkeypatch, module, name):
+    """把执行入口打成「一调就炸」：默认路径一旦 spawn 就是红，而不是靠读返回猜"""
+
+    async def _boom(*_args, **_kwargs):
+        raise AssertionError(f"{name} 被调用了：默认路径必须零 spawn")
+
+    monkeypatch.setattr(module, name, _boom)
+
+
+@pytest.fixture()
+def fake_root(tmp_path: Path, monkeypatch) -> Path:
+    """合成一棵 scoop 树并把 `resolve_root` 指过去（handler 经模块属性取值才打得住）"""
+    root = tmp_path / "scoop"
+    make_app(
+        root,
+        "goodpkg",
+        manifest={"version": "1.2.3", "bin": "good.exe", "description": "好包"},
+        install={"bucket": "main", "architecture": "64bit"},
+        exe_names=("good.exe",),
+    )
+    make_app(
+        root,
+        "brokenpkg",
+        version="2.0.0",
+        current=False,
+        manifest={"version": "2.0.0", "bin": ["a.exe"], "shortcuts": [["a.exe", "界面 A"]]},
+        install={"bucket": "extras"},
+        exe_names=("a.exe",),
+    )
+    make_app(root, "nomanifest", manifest=None)
+    make_shim(root, "nomanifest.exe")
+    make_shim(root, "goodpkg.ps1")
+    monkeypatch.setattr(
+        pkgman, "resolve_root", lambda manager="scoop": (str(root), "test: 单测指定的根")
+    )
+    return root
+
+
+# ---- 只读的两个工具 ----
+
+
+def test_list_packages_is_read_only(tmp_path, fake_root, monkeypatch):
+    _spawn_forbidden(monkeypatch, pkgman, "run_argv")
+    res = run(tool_specs._handle_list_packages({}, _ctx(tmp_path)))
+    assert res["success"] is True
+    assert res["root"] == str(fake_root)
+    assert res["rootSource"] == "test: 单测指定的根"
+    assert res["count"] == 3 == res["returned"]
+    assert res["states"] == {"ok": 1, "current_broken": 1, "no_manifest": 1}
+    # 断链包的 bin 在残留版本目录里、no_manifest 包靠 shim，三种都挑得出可起入口
+    assert res["launchable"] == 3
+    assert {p["name"] for p in res["packages"]} == {"goodpkg", "brokenpkg", "nomanifest"}
+
+
+def test_list_packages_state_filter_keeps_full_count(tmp_path, fake_root):
+    res = run(tool_specs._handle_list_packages({"state": pkgman.STATE_CURRENT_BROKEN}, _ctx(tmp_path)))
+    assert res["count"] == 3, "count 是整份清单的，筛选条件只体现在 returned"
+    assert res["returned"] == 1 and res["stateFilter"] == "current_broken"
+    assert [p["name"] for p in res["packages"]] == ["brokenpkg"]
+
+
+def test_list_packages_empty_apps_is_not_a_failure(tmp_path, fake_root):
+    """装了 0 个包是正常结果：成功 + 说明，而不是报「读不到」"""
+    import shutil
+
+    for name in ("goodpkg", "brokenpkg", "nomanifest"):
+        shutil.rmtree(fake_root / "apps" / name)
+    res = run(tool_specs._handle_list_packages({}, _ctx(tmp_path)))
+    assert res["success"] is True and res["count"] == 0
+    assert "还没装东西" in res["note"]
+
+
+def test_search_packages_reads_bucket(tmp_path, fake_root, monkeypatch):
+    write_json(
+        fake_root / "buckets" / "main" / "bucket" / "yt-dlp.json",
+        {"version": "2025.1.1", "description": "downloader"},
+    )
+    _spawn_forbidden(monkeypatch, pkgman, "run_argv")
+    res = run(tool_specs._handle_search_packages({"keyword": "yt-dlp", "limit": 5}, _ctx(tmp_path)))
+    assert res["count"] == 1 and res["scannedManifests"] == 1
+    assert res["packages"][0]["bucket"] == "main"
+    assert res["limit"] == 5
+
+
+def test_search_packages_empty_keyword_is_invalid_params(tmp_path, fake_root):
+    with pytest.raises(ToolError) as exc:
+        run(tool_specs._handle_search_packages({"keyword": "  "}, _ctx(tmp_path)))
+    assert _err(exc)["errorType"] == "invalid_params"
+
+
+def test_search_packages_no_match_explains_scope(tmp_path, fake_root):
+    write_json(fake_root / "buckets" / "main" / "bucket" / "git.json", {"description": "d"})
+    res = run(tool_specs._handle_search_packages({"keyword": "zzznotapackage"}, _ctx(tmp_path)))
+    assert res["count"] == 0
+    assert "已知 bucket 里没有" in res["note"], "要说「这个 bucket 里没有」，不能说「装不了」"
+
+
+# ---- 根目录与 manager 的分类 ----
+
+
+def test_unresolved_root_is_install_required(tmp_path, monkeypatch):
+    """定位不到根要说「这台机器没这个安装器」，不许降级成空清单（那是「装了 0 个」）"""
+    monkeypatch.setattr(
+        pkgman,
+        "resolve_root",
+        lambda manager="scoop": (None, "环境变量与注册表里都没有 SCOOP"),
+    )
+    for handler, args in (
+        (tool_specs._handle_list_packages, {}),
+        (tool_specs._handle_search_packages, {"keyword": "git"}),
+        (tool_specs._handle_launch_package, {"package": "goodpkg"}),
+        (tool_specs._handle_install_package, {"package": "yt-dlp"}),
+    ):
+        with pytest.raises(ToolError) as exc:
+            run(handler(args, _ctx(tmp_path)))
+        payload = _err(exc)
+        assert payload["errorType"] == "install_required", payload
+        assert "环境变量与注册表里都没有 SCOOP" in payload["error"]
+
+
+def test_unsupported_manager_is_invalid_params(tmp_path):
+    """winget 未接线：走真实 resolve_root，报 invalid_params 而不是「定位不到根」"""
+    with pytest.raises(ToolError) as exc:
+        run(tool_specs._handle_list_packages({"manager": "winget"}, _ctx(tmp_path)))
+    payload = _err(exc)
+    assert payload["errorType"] == "invalid_params"
+    assert "winget" in payload["error"]
+
+
+def test_launch_bad_package_name_is_invalid_params(tmp_path, fake_root):
+    with pytest.raises(ToolError) as exc:
+        run(tool_specs._handle_launch_package({"package": "../evil"}, _ctx(tmp_path)))
+    assert _err(exc)["errorType"] == "invalid_params"
+
+
+# ---- launch_package ----
+
+
+def test_launch_preview_never_spawns(tmp_path, fake_root, monkeypatch):
+    _spawn_forbidden(monkeypatch, tool_specs, "launch_app")
+    res = run(tool_specs._handle_launch_package({"package": "goodpkg"}, _ctx(tmp_path)))
+    assert res["executed"] is False
+    assert res["kind"] == "bin"
+    assert res["path"] == str(fake_root / "apps" / "goodpkg" / "current" / "good.exe")
+    assert "execute=true" in res["note"]
+
+
+def test_launch_missing_package_is_not_found(tmp_path, fake_root):
+    with pytest.raises(ToolError) as exc:
+        run(tool_specs._handle_launch_package({"package": "nope"}, _ctx(tmp_path)))
+    payload = _err(exc)
+    assert payload["errorType"] == "not_found"
+    assert "search_packages" in payload["error"]
+
+
+def test_launch_unspawnable_entry_carries_code_and_candidates(tmp_path, fake_root, monkeypatch):
+    """挑不出入口时把 code / 候选一起回：调用方看到「差在哪」，不是一个光秃秃的失败"""
+    _spawn_forbidden(monkeypatch, tool_specs, "launch_app")
+    with pytest.raises(ToolError) as exc:
+        run(tool_specs._handle_launch_package(
+            {"package": "goodpkg", "entry": "goodpkg.ps1"}, _ctx(tmp_path)
+        ))
+    payload = _err(exc)
+    assert payload["errorType"] == "runtime_error"
+    assert payload["code"] == pkgman.NOT_SPAWNABLE
+    assert any(
+        c["name"] == "goodpkg.ps1" and c["runnable"] is False for c in payload["candidates"]
+    )
+
+
+def test_launch_execute_needs_no_destructive_flag(tmp_path, fake_root, monkeypatch):
+    """launch_package 在放行名单内：起的是用户早就装好的程序，与 launch_tool 同级"""
+    seen = {}
+
+    async def _fake_launch(launch, tool_id, tool_name, wait):
+        seen.update({"launch": launch, "tool_id": tool_id, "name": tool_name, "wait": wait})
+        return {"executed": True, "pid": 4321, "alive": True}
+
+    monkeypatch.setattr(tool_specs, "launch_app", _fake_launch)
+    res = run(tool_specs._handle_launch_package(
+        {"package": "goodpkg", "execute": True, "wait": 1}, _ctx(tmp_path)
+    ))
+    assert res["success"] is True and res["pid"] == 4321
+    assert seen["launch"] == {
+        "type": "executable",
+        "command": str(fake_root / "apps" / "goodpkg" / "current" / "good.exe"),
+    }
+    assert seen["tool_id"] == "scoop/goodpkg", "保活注册表的键要能区分是哪个包"
+    assert seen["name"] == "goodpkg"
+    assert seen["wait"] == 1
+
+
+# ---- install_package ----
+
+
+def test_install_preview_never_executes(tmp_path, fake_root, monkeypatch):
+    make_shim(fake_root, "scoop.cmd")
+    _spawn_forbidden(monkeypatch, pkgman, "run_argv")
+    res = run(tool_specs._handle_install_package({"package": "yt-dlp"}, _ctx(tmp_path)))
+    assert res["executed"] is False
+    assert res["argv"] == [str(fake_root / "shims" / "scoop.cmd"), "install", "yt-dlp"]
+    assert res["alreadyInstalled"] is False
+    assert "allowDestructive=true" in res["note"]
+
+
+def test_install_reports_already_installed(tmp_path, fake_root):
+    make_shim(fake_root, "scoop.cmd")
+    res = run(tool_specs._handle_install_package({"package": "goodpkg"}, _ctx(tmp_path)))
+    assert res["alreadyInstalled"] is True
+    assert res["state"] == "ok" and res["version"] == "1.2.3"
+
+
+def test_install_execute_blocks_without_allow(tmp_path, fake_root, monkeypatch):
+    make_shim(fake_root, "scoop.cmd")
+    _spawn_forbidden(monkeypatch, pkgman, "run_argv")
+    with pytest.raises(ToolError) as exc:
+        run(tool_specs._handle_install_package({"package": "yt-dlp", "execute": True}, _ctx(tmp_path)))
+    payload = _err(exc)
+    assert payload["errorType"] == "destructive_blocked"
+    assert "改动本机已装清单" in payload["error"]
+
+
+def test_install_deny_mode_wins_over_client(tmp_path, fake_root, monkeypatch):
+    make_shim(fake_root, "scoop.cmd")
+    _spawn_forbidden(monkeypatch, pkgman, "run_argv")
+    monkeypatch.setattr(
+        policy_mod, "_POLICY", {**policy_mod.get_policy(), "destructive": {"mode": "deny"}}
+    )
+    with pytest.raises(ToolError) as exc:
+        run(tool_specs._handle_install_package(
+            {"package": "yt-dlp", "execute": True, "allowDestructive": True}, _ctx(tmp_path)
+        ))
+    assert _err(exc)["errorType"] == "permission_denied"
+
+
+def test_install_allowed_runs_command_and_reads_back(tmp_path, fake_root, monkeypatch):
+    make_shim(fake_root, "scoop.cmd")
+    calls = []
+
+    async def _fake_run(argv, timeout=None):
+        calls.append((argv, timeout))
+        return {
+            "ok": True,
+            "exitCode": 0,
+            "timedOut": False,
+            "stdout": "Installing 'yt-dlp'",
+            "stderr": "",
+            "argv": argv,
+            "timeout": 120,
+        }
+
+    monkeypatch.setattr(pkgman, "run_argv", _fake_run)
+    res = run(tool_specs._handle_install_package(
+        {"package": "yt-dlp", "execute": True, "allowDestructive": True, "timeout": 60},
+        _ctx(tmp_path),
+    ))
+    assert calls == [(res["argv"], 60)]
+    assert res["executed"] is True and res["exitCode"] == 0
+    assert res["installed"] is None
+    # 退出码 0 但 apps 下读不到：明说「不要当成安装成功」，别让调用方自己脑补
+    assert "不要当成安装成功" in res["note"]
+
+
+def test_install_nonzero_exit_is_business_failure_not_tool_error(tmp_path, fake_root, monkeypatch):
+    """命令跑完但没装上，是这次执行的结果：载荷里带退出码与输出，不抛协议层错误"""
+    make_shim(fake_root, "scoop.cmd")
+
+    async def _fake_run(argv, timeout=None):
+        return {
+            "ok": False,
+            "exitCode": 1,
+            "timedOut": False,
+            "stdout": "",
+            "stderr": "not found",
+            "argv": argv,
+            "timeout": 120,
+        }
+
+    monkeypatch.setattr(pkgman, "run_argv", _fake_run)
+    res = run(tool_specs._handle_install_package(
+        {"package": "no-such-pkg", "execute": True, "allowDestructive": True}, _ctx(tmp_path)
+    ))
+    assert res["success"] is False
+    assert res["errorType"] == "runtime_error"
+    assert res["exitCode"] == 1 and res["stderr"] == "not found"
+
+
+def test_install_timeout_is_passed_through_unconverted(tmp_path, fake_root, monkeypatch):
+    """封顶只在 `run_argv` 一处：handler 再换算一次，两处口径迟早分家"""
+    make_shim(fake_root, "scoop.cmd")
+    seen = {}
+
+    async def _fake_run(argv, timeout=None):
+        seen["timeout"] = timeout
+        return {
+            "ok": True,
+            "exitCode": 0,
+            "timedOut": False,
+            "stdout": "",
+            "stderr": "",
+            "argv": argv,
+            "timeout": 600,
+        }
+
+    monkeypatch.setattr(pkgman, "run_argv", _fake_run)
+    run(tool_specs._handle_install_package(
+        {"package": "yt-dlp", "execute": True, "allowDestructive": True, "timeout": 99999},
+        _ctx(tmp_path),
+    ))
+    assert seen["timeout"] == 99999
+
+
+def test_install_without_scoop_entry_is_install_required(tmp_path, fake_root):
+    """apps 目录在、shims/scoop.cmd 不在：报 install_required，而不是「包不存在」"""
+    with pytest.raises(ToolError) as exc:
+        run(tool_specs._handle_install_package({"package": "yt-dlp"}, _ctx(tmp_path)))
+    assert _err(exc)["errorType"] == "install_required"
+
+
+def test_install_gate_audit_row_labels_package_op(tmp_path, fake_root, monkeypatch):
+    """审计 action 记 install_package、sub_op 记包名：记成通用工具名就查不出是谁装的哪个包"""
+    log_path = tmp_path / "audit.log"
+    monkeypatch.setattr(policy_mod, "AUDIT_LOG", log_path)
+    make_shim(fake_root, "scoop.cmd")
+    with pytest.raises(ToolError):
+        run(tool_specs._handle_install_package(
+            {"package": "yt-dlp", "execute": True}, _ctx(tmp_path)
+        ))
+    rows = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if '"destructive_gate"' in line
+    ]
+    assert len(rows) == 1, f"应恰好一行门禁审计，实际 {len(rows)} 行"
+    assert rows[0]["action"] == "install_package"
+    assert rows[0]["sub_op"] == "yt-dlp"
+    assert rows[0]["kind"] == "package"
+    assert rows[0]["tool"] == "scoop:yt-dlp"
+    assert rows[0]["decision"] == "block"

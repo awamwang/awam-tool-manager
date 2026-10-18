@@ -48,6 +48,10 @@ EXPECTED_TOOL_NAMES = {
     "get_tool_help",
     "get_usage_stats",
     "discover_tools",
+    "list_packages",
+    "search_packages",
+    "launch_package",
+    "install_package",
 }
 
 

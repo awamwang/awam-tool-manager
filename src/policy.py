@@ -1,8 +1,9 @@
 """破坏性门禁判定与部署策略（ARC-P1-05 Phase 1 方案 A，Phase 2 方案 C）。
 
-唯一判定入口 `decide_destructive(kind, tool, sub_op, args)`——三个执行类
+唯一判定入口 `decide_destructive(kind, tool, sub_op, args)`——执行类
 handler（`call_backend_tool` / `run_launcher_action` / `launch_tool` 的
-execute 路径）只调它，不再各自维护判定逻辑。Phase 2 起策略
+execute 路径 / `install_package` / `launch_package`）只调它，不再各自维护
+判定逻辑。Phase 2 起策略
 （`data/policy.json`）参与判定：
 
 - `check_call(name)`：`dispatch_tool` 前置的工具级策略（deny 名单优先于
@@ -23,6 +24,9 @@ execute 路径）只调它，不再各自维护判定逻辑。Phase 2 起策略
   无该字段 → 回退条目级全拦（现语义，不回退放宽）。
 - app：条目未标 `destructive` → 放行；标了 → 执行启动需
   `allowDestructive=true`（启动即子操作，无更细粒度可言）。
+- package（P2-07 包管理面）：**没有条目可标**，破坏性由操作本身定且 fail-closed——
+  不在 `PACKAGE_CONFIRMED_OPS`（目前只有 `launch_package`）里的包操作都要
+  `allowDestructive=true`；`launch_package` 放行但仍留审计行。
 
 审计（Q4 裁决：Phase 1 只 stderr）：每次判定（放行/拒绝/确认放行）产出
 一行结构化 JSON 到 stderr，字段 `ts / tool / kind / sub_op / decision /
@@ -117,7 +121,16 @@ RULE_DESTRUCTIVE_TOOLS_MATCH = "destructive_tools_match"
 RULE_DESTRUCTIVE_TOOLS_MISS = "destructive_tools_miss"
 RULE_DESTRUCTIVE_ACTIONS_MATCH = "destructive_actions_match"
 RULE_DESTRUCTIVE_ACTIONS_MISS = "destructive_actions_miss"
+RULE_PACKAGE_DESTRUCTIVE = "package_destructive"
 RULE_UNKNOWN_KIND = "unknown_kind"
+
+# 包管理里「不改动已装清单」的对外工具名白名单，其余一律按破坏性处理。
+# 方向是刻意反着写的：新增 `uninstall_package` / `update_package` 时**默认就要
+# 授权**（fail-closed），忘了登记只会多一次确认；反过来维护「破坏性名单」
+# 才是危险的那一侧——漏一个就静默免检。
+# `launch_package` 在放行名单内：它起的是用户早已装好的程序，与 `launch_tool`
+# 同一等级，门禁是「必须显式传 execute=true」，不是 allowDestructive。
+PACKAGE_CONFIRMED_OPS = frozenset({"launch_package"})
 
 
 def _utc_now_iso() -> str:
@@ -228,6 +241,43 @@ def _decide_launcher(
     )
 
 
+def _decide_package(
+    tool: dict | None, sub_op: dict
+) -> tuple[bool, str, str, str]:
+    """包管理执行面判定表（P2-07）。返回四元组同其他 `_decide_*`。
+
+    与 app / mcp / launcher 的**根本差别**：那三类判的是「这个条目有没有被人工标成
+    destructive」，包操作没有条目可标——`install_package` 会把「改这台机器」的授权点
+    从条目配置搬进一次运行时调用，配置里看不到它。所以破坏性由**操作本身**定，
+    且方向是 fail-closed：只有一张「不需要授权」白名单（`PACKAGE_CONFIRMED_OPS`），
+    名单外一律要 `allowDestructive=true`；将来新增卸载 / 更新工具时忘了登记，
+    代价是多一次确认，而不是静默免检。
+
+    - `launch_package`（名单内）：起的是**用户早就装好**的程序，与 `launch_tool`
+      同一等级 → 放行，但仍留审计行（谁在什么时候起了哪个包，和启动登记应用一样该有记录）；
+    - 其余（`install_package` 及一切未登记的操作）：下载并执行 bucket 里的安装脚本、
+      写 apps 目录、生成 shim → 需要 `allowDestructive=true`（策略 `deny` 模式下直接拒）。
+
+    `tool` 只用于把审计的 `tool` 字段填成 `scoop:<包名>` 这类可定位的标识，
+    本判定表不读它的 `destructive`——包名不是登记条目，标不标由不得它。
+    """
+    action = str(sub_op.get("action") or "")
+    package = str(sub_op.get("package") or "")
+    if action in PACKAGE_CONFIRMED_OPS:
+        return (
+            False,
+            RULE_NOT_DESTRUCTIVE,
+            f"包管理操作 '{action}' 不改动已装清单，放行",
+            "",
+        )
+    return (
+        True,
+        RULE_PACKAGE_DESTRUCTIVE,
+        f"包管理操作 '{action}' 会改动本机已装清单（包 '{package}'）",
+        "，需显式传 allowDestructive=true 才会执行",
+    )
+
+
 def _decide_app(
     tool: dict | None, sub_op: dict
 ) -> tuple[bool, str, str, str]:
@@ -332,8 +382,8 @@ def decide_destructive(
     """破坏性门禁的唯一判定入口。
 
     Args:
-        kind: `"mcp"` / `"launcher"` / `"app"`（其他值放行——新增 kind 必须显式接入
-            判定表，默认不拦以免拖垮未知类型）。
+        kind: `"mcp"` / `"launcher"` / `"app"` / `"package"`（其他值放行——
+            新增 kind 必须显式接入判定表，默认不拦以免拖垮未知类型）。
         tool: 工具条目（`registry.get_tool()` 的返回）；None 表示工具不存在。
         sub_op: 子操作标识。mcp → `{"tool_name": str}`；launcher →
             `{"action_id", "action_name", "action_type"}`；app → `{}` 或
@@ -370,6 +420,10 @@ def decide_destructive(
         # app 种有两个执行入口（launch_tool 执行启动 / get_tool_help 跑帮助命令），
         # 审计里的 action 跟着实际入口走，否则 help 的判定被记成启动
         audit_action = str(sub_op.get("action") or "launch_tool")
+    elif kind == "package":
+        required, rule_hit, subject, tail = _decide_package(tool, sub_op)
+        sub_op_label = str(sub_op.get("package") or "")
+        audit_action = str(sub_op.get("action") or "")
     else:
         required, rule_hit, tail = False, RULE_UNKNOWN_KIND, ""
         subject = f"未知 kind '{kind}'，放行"

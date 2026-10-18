@@ -682,5 +682,195 @@
       ],
       "additionalProperties": true
     }
+  },
+  {
+    "name": "list_packages",
+    "description": "列出本机包管理器（当前支持 scoop）已安装的包：只读盘上的 apps 清单，不执行安装器命令；每个包给出 state（ok / current_broken / no_manifest）与是否可启动",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "manager": {
+          "type": "string",
+          "enum": [
+            "scoop"
+          ],
+          "description": "可选，默认 scoop"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "current_broken",
+            "no_manifest"
+          ],
+          "description": "可选，只返回该状态的包（count/states 仍是整份清单的口径）"
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "search_packages",
+    "description": "在包管理器已添加的仓库清单里搜可安装的包（只读，按包名匹配；命中为空只说明已添加的清单里没有，不代表装不了）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "manager": {
+          "type": "string",
+          "enum": [
+            "scoop"
+          ],
+          "description": "可选，默认 scoop"
+        },
+        "keyword": {
+          "type": "string",
+          "description": "包名关键词（匹配 bucket 清单里的包名）"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "可选，最多返回多少条，默认 20"
+        }
+      },
+      "required": [
+        "keyword"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "launch_package",
+    "description": "启动包管理器已安装的某个包：默认只解析可执行入口并预览（不 spawn），传 execute=true 才真的启动（入口按 快捷方式 → bin → shim 取，可用 entry 指定）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "manager": {
+          "type": "string",
+          "enum": [
+            "scoop"
+          ],
+          "description": "可选，默认 scoop"
+        },
+        "package": {
+          "type": "string",
+          "description": "包名（须已安装，如 7zip）"
+        },
+        "entry": {
+          "type": "string",
+          "description": "可选，指定入口的名字或文件名（如 7zFM.exe）；缺省按优先级自动挑"
+        },
+        "execute": {
+          "type": "boolean",
+          "description": "可选，默认 false。true 才真的启动进程；false 只回预览"
+        },
+        "wait": {
+          "type": "number",
+          "description": "可选，execute=true 时观察多少秒判定早退（默认 5，上限 30；<=0 不等待）"
+        }
+      },
+      "required": [
+        "package"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "install_package",
+    "description": "用包管理器安装一个包：默认只回将要执行的命令预览，不改动本机；真要装必须同时传 execute=true 与 allowDestructive=true（安装会下载并运行仓库里的安装脚本，属破坏性操作）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "manager": {
+          "type": "string",
+          "enum": [
+            "scoop"
+          ],
+          "description": "可选，默认 scoop"
+        },
+        "package": {
+          "type": "string",
+          "description": "包名（只允许字母/数字/点/下划线/短横/加号，不接受路径分隔符）"
+        },
+        "execute": {
+          "type": "boolean",
+          "description": "可选，默认 false。true 才真的执行安装命令"
+        },
+        "allowDestructive": {
+          "type": "boolean",
+          "description": "execute=true 时必须显式传 true，否则按破坏性门禁拒绝"
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600,
+          "description": "可选，安装命令最长等待秒数，默认 120、上限 600"
+        }
+      },
+      "required": [
+        "package"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
   }
 ]

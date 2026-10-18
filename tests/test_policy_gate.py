@@ -1,10 +1,11 @@
 """ARC-P1-05 Phase 1：破坏性门禁统一判定（src/policy.py）的守卫。
 
-四组：
+六组：
 
 1. **判定表逐行**：mcp 四分支（未标 / 无清单 / 清单命中 / 清单未中）与
    launcher 四分支（未标 / 无 destructiveActions 回退条目级 / glob 命中 /
-   glob 未中）+ 未知 kind；
+   glob 未中）+ app 两入口 + package 两种操作（名单内放行 / 名单外要确认）
+   + 未知 kind；
 2. **glob 匹配**：按动作 id/name/type 三属性、大小写不敏感、通配位置、
    空值不误命中（partial 清单里 name/type 缺失时 `*` 不能命中一切）；
 3. **等价性**：未配置 `destructiveActions` 时与接入前逐字一致——照 P1-04
@@ -13,7 +14,10 @@
    不是只断言「没报错」；判定表本身另以字面期望表（`_DECISION_TABLE`）
    作快照；
 4. **审计行格式**：每次判定输出一行 JSON，`decision` / `rule_hit` /
-   `client_declared` 三字段齐全且取值正确（allow / block / confirm 三态）。
+   `client_declared` 三字段齐全且取值正确（allow / block / confirm 三态）；
+5. **app 种**：条目 destructive 决定执行面，两个执行入口各自标注审计；
+6. **package 种**：没有条目可标，破坏性由操作本身定且 fail-closed
+   （见 `PACKAGE_CONFIRMED_OPS` 的方向注释）。
 """
 import json
 import sys
@@ -86,6 +90,39 @@ _DECISION_TABLE = [
     ("app", {"id": "a", "destructive": False}, {}, False, "not_destructive"),
     # app：标了 destructive → 执行启动需 allowDestructive（entry_level）
     ("app", _APP_DESTRUCTIVE, {}, True, "entry_level"),
+    # package：没有条目可标，破坏性由操作本身定（P2-07）
+    # launch_package 在放行名单内：起的是用户早就装好的程序
+    (
+        "package",
+        {"id": "scoop:7zip"},
+        {"action": "launch_package", "package": "7zip"},
+        False,
+        "not_destructive",
+    ),
+    # 名单外一律要确认，且**不读条目的 destructive**（包名不是登记条目）
+    (
+        "package",
+        {"id": "scoop:yt-dlp", "destructive": False},
+        {"action": "install_package", "package": "yt-dlp"},
+        True,
+        "package_destructive",
+    ),
+    (
+        "package",
+        None,
+        {"action": "install_package", "package": "yt-dlp"},
+        True,
+        "package_destructive",
+    ),
+    # 未登记/空 action：fail-closed 走到「要确认」这一支，而不是静默免检
+    (
+        "package",
+        {"id": "scoop:x"},
+        {"action": "uninstall_package", "package": "x"},
+        True,
+        "package_destructive",
+    ),
+    ("package", {"id": "scoop:x"}, {}, True, "package_destructive"),
     # 未知 kind：默认放行（新增 kind 必须显式接入判定表）
     ("unknown-kind", {"id": "x", "destructive": True}, {}, False, "unknown_kind"),
 ]
@@ -142,6 +179,13 @@ def test_default_mode_rejection_messages_are_verbatim():
             {},
             "目标应用 'boom-app' 被标记为 destructive，"
             "需显式传 allowDestructive=true 才会执行启动",
+        ),
+        (
+            "package",
+            {"id": "scoop:yt-dlp"},
+            {"action": "install_package", "package": "yt-dlp"},
+            "包管理操作 'install_package' 会改动本机已装清单（包 'yt-dlp'），"
+            "需显式传 allowDestructive=true 才会执行",
         ),
     ]
     for kind, tool, sub_op, expected in cases:
@@ -334,3 +378,66 @@ def test_app_gate_audit_action_follows_execution_entry(capsys):
     assert lines[0]["decision"] == "block"
     # 拒绝文案也要跟着入口走：help 被拦时说「才会执行启动」会误导调用方
     assert decision["reason"].endswith("需显式传 allowDestructive=true 才会执行帮助命令")
+
+
+# ---- 6. package 种（P2-07 包管理执行面）----
+
+
+def test_package_gate_is_fail_closed(monkeypatch):
+    """包种不读条目 destructive：名单外一律要确认，名单内放行但留审计"""
+    monkeypatch.setattr(policy, "_POLICY", policy.get_policy())
+
+    install = _decide(
+        "package",
+        {"id": "scoop:yt-dlp", "destructive": False},
+        {"action": "install_package", "package": "yt-dlp"},
+    )
+    assert install["required_confirm"] is True
+    assert install["blocked"] is True, "条目没标 destructive 也不能免检"
+    assert install["audit"]["rule_hit"] == "package_destructive"
+
+    allowed = _decide(
+        "package",
+        {"id": "scoop:yt-dlp"},
+        {"action": "install_package", "package": "yt-dlp"},
+        {"allowDestructive": True},
+    )
+    assert allowed["blocked"] is False
+    assert allowed["audit"]["client_declared"] is True
+
+    launch = _decide(
+        "package",
+        {"id": "scoop:7zip"},
+        {"action": "launch_package", "package": "7zip"},
+    )
+    assert launch["blocked"] is False
+    assert launch["required_confirm"] is False
+    assert launch["audit"]["decision"] == "allow", "放行也要有审计行"
+
+    # 策略 deny：客户端传 allowDestructive 也解不开（与 app 种同款语义）
+    monkeypatch.setattr(
+        policy, "_POLICY", {**policy.get_policy(), "destructive": {"mode": "deny"}}
+    )
+    denied = _decide(
+        "package",
+        {"id": "scoop:yt-dlp"},
+        {"action": "install_package", "package": "yt-dlp"},
+        {"allowDestructive": True},
+    )
+    assert denied["blocked"] is True
+    assert denied["error_type"] == "permission_denied"
+    assert "客户端无法自行解除" in denied["reason"]
+    assert "allowDestructive=true" not in denied["reason"], "deny 模式不该再建议自解参数"
+
+
+def test_package_gate_audit_labels_follow_operation(capsys):
+    """审计的 action 记实际操作、sub_op 记包名——记成工具名则审计无法定位包"""
+    _decide("package", {"id": "scoop:7zip"}, {"action": "launch_package", "package": "7zip"})
+    _decide("package", {"id": "scoop:yt-dlp"}, {"action": "install_package", "package": "yt-dlp"})
+
+    lines = _audit_lines(capsys)
+    assert len(lines) == 2, f"应每次判定一行审计，实际 {len(lines)} 行"
+    assert [l["action"] for l in lines] == ["launch_package", "install_package"]
+    assert [l["sub_op"] for l in lines] == ["7zip", "yt-dlp"]
+    assert [l["kind"] for l in lines] == ["package", "package"]
+    assert [l["decision"] for l in lines] == ["allow", "block"]

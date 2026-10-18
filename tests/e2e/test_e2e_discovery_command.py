@@ -7,8 +7,10 @@
 2. **显式开才跑**：`run_commands=true` 真的执行命令并把版本号解析回传；
 3. **子进程 stdin 必须是 DEVNULL**：marker 记 `EOF`。记 `BLOCKED` / `STOLEN=` 就说明
    子进程继承的是网关的 stdio 协议管道——真机实测整个 server 会因此退出；
-4. **跑完会话仍然可用**：再取一次 `tools/list` 拿满 18 个工具。这是对「入站
-   JSON-RPC 被吞」最直接的现场证据，比读日志可靠。
+4. **跑完会话仍然可用**：再取一次 `tools/list`，工具定义一张不少（期望值取自
+   `conftest.EXPECTED_TOOL_NAMES`，不写死数字——本场景要验的是「入站 JSON-RPC
+   被吞」这件事，工具数量每加一个就红一次没有意义）。这是对「入站 JSON-RPC
+   被吞」最直接的现场证据，比读日志可靠。
 
 预算：会话启动 ~2s + 3 次调用（其中 1 次真 spawn，探针自身只等 0.5s）≈ 6~10s。
 """
@@ -27,6 +29,7 @@ from .helpers import (
     has_real_traceback,
     stdio_session,
 )
+from conftest import EXPECTED_TOOL_NAMES
 
 PROBE_SCRIPT = "stdin_guard_probe.py"
 VERSION = "1.2.3"
@@ -125,5 +128,8 @@ def test_e2e_discover_tools_keeps_transport_intact(e2e_repo, e2e_runtime, tmp_pa
         f"stderr 尾部：\n{tail}"
     )
 
-    # 4) 跑完之后会话仍然可用（18 个工具定义拿得回来）
-    assert tools_after == 18, f"执行发现命令后服务会话已不可用（tools/list 返回 {tools_after} 个）"
+    # 4) 跑完之后会话仍然可用（工具定义一张不少）
+    assert tools_after == len(EXPECTED_TOOL_NAMES), (
+        f"执行发现命令后服务会话已不可用（tools/list 返回 {tools_after} 个，"
+        f"应为 {len(EXPECTED_TOOL_NAMES)} 个）"
+    )
