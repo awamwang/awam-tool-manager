@@ -25,7 +25,7 @@
 - [x] MCP Server 入口（server.py）：stdio 模式
 - [x] 日志系统（输出到 stderr，不污染协议通道）
 
-### 对外 MCP 工具（15 个）
+### 对外 MCP 工具（16 个）
 - [x] `search_tools` - 搜索工具（关键词 + kind 筛选）
 - [x] `list_tools` - 列出所有工具
 - [x] `get_tool_info` - 查看工具详情
