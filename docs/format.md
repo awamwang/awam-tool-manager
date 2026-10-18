@@ -43,6 +43,10 @@
 | `launch.type` | `string` | - | 启动方式类型（取值：`executable` / `protocol` / `command`） |
 | `launch.command` | `string` | - | 启动命令或可执行文件路径 |
 | `launch.args` | `array` | - | 启动参数（元素建议统一写字符串） |
+| `help` | `object` | - | 帮助信息获取方式，`get_tool_help` 据此取参数；缺省用 `launch.command` + `--help` |
+| `help.command` | `string` | - | 专用帮助命令（缺省回落 `launch.command`） |
+| `help.args` | `array` | - | 帮助参数（缺省 `--help`；Windows 图形程序常为 `/?`） |
+| `help.timeout` | `number` | - | 执行帮助命令的超时秒数（封顶 30）（缺省 `5`；必须 > 0） |
 | `connection` | `object` | - | **仅 `kind=mcp`**：后端 MCP 连接方式，`BackendClient` 据此拉起子进程 |
 | `connection.type` | `string` | ✅ | 连接类型，目前仅支持 stdio（取值：`stdio`） |
 | `connection.command` | `string` | ✅ | 拉起子进程的命令 |

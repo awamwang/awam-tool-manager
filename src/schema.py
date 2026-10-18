@@ -75,6 +75,26 @@ TOOL_ENTRY_SCHEMA: dict[str, Any] = {
                 "args": {"type": "array", "description": "启动参数（元素建议统一写字符串）"},
             },
         },
+        "help": {
+            "type": "object",
+            "description": "帮助信息获取方式，`get_tool_help` 据此取参数；缺省用 `launch.command` + `--help`",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "专用帮助命令（缺省回落 `launch.command`）",
+                },
+                "args": {
+                    "type": "array",
+                    "description": "帮助参数（缺省 `--help`；Windows 图形程序常为 `/?`）",
+                },
+                "timeout": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "default": 5,
+                    "description": "执行帮助命令的超时秒数（封顶 30）",
+                },
+            },
+        },
         "connection": {
             "type": "object",
             "description": "**仅 `kind=mcp`**：后端 MCP 连接方式，`BackendClient` 据此拉起子进程",
