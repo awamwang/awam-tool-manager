@@ -46,6 +46,7 @@ EXPECTED_TOOL_NAMES = {
     "list_launcher_actions",
     "run_launcher_action",
     "get_tool_help",
+    "get_usage_stats",
 }
 
 

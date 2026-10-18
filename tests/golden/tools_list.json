@@ -609,5 +609,40 @@
       ],
       "additionalProperties": true
     }
+  },
+  {
+    "name": "get_usage_stats",
+    "description": "查询工具调用使用统计：按天、按对外工具、按目标 tool_id 聚合调用量、成功率与耗时（默认最近 7 天）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "days": {
+          "type": "integer",
+          "description": "可选，统计窗口天数（按日历日、含今天；默认 7，越界收敛到 1~365）",
+          "minimum": 1,
+          "maximum": 365
+        },
+        "tool_id": {
+          "type": "string",
+          "description": "可选，只看某个登记工具的调用（与调用记录里的 target 精确匹配）"
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
   }
 ]

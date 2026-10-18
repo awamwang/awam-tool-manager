@@ -190,6 +190,25 @@ def test_successful_call_carries_structured_content():
     assert len(sc["tools"]) == len(payload["tools"])
 
 
+def test_usage_stats_call_carries_boolean_success_over_wire():
+    """P3 使用统计走真实会话：顶层 success 必须是 bool（outputSchema 唯一必填）
+
+    钉的是一个真实踩过的坑：聚合视图里也有个 `success`（成功次数，int），
+    平铺进载荷会把信封的 `success: true` 覆盖成整数——客户端按布尔读就全错。
+    嵌进 `stats` 后信封语义与 outputSchema 的声明恢复一致。
+    """
+    result = run(_call("get_usage_stats", {"days": 30}))
+
+    assert not result.isError, f"统计查询被标成错误: {result.content}"
+    sc = result.structuredContent
+    assert sc["success"] is True
+    assert isinstance(sc["stats"]["success"], int)
+    assert set(sc["stats"]) == {
+        "total", "success", "failed", "byName", "targets", "byDay", "errorTypes"
+    }
+    assert sc["window"]["days"] == 30
+
+
 def test_tools_list_carries_output_schema():
     """outputSchema：客户端在 tools/list 里应读到每个工具的 outputSchema
 

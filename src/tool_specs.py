@@ -11,7 +11,7 @@ async def _handle_xxx」，`build_mcp_tools()` / `dispatch_tool` /
 `conftest.EXPECTED_TOOL_NAMES` 的守卫测试全部自动跟随。
 
 与 `schema.py` 的分工：schema.py 管辖**数据条目**（`data/tools/*.json`），
-本模块管辖**对外 MCP 工具**（协议层暴露的 15 个 `tools/call` 入口）。
+本模块管辖**对外 MCP 工具**（协议层暴露的 17 个 `tools/call` 入口）。
 两者字段名有重叠但语义不同，互不 import、互不引用。
 """
 
@@ -29,6 +29,9 @@ from errors import ErrorType, ToolError, fail, ensure_success  # noqa: F401（ha
 from app_launcher import launch_app
 from launcher_client import LauncherError
 from policy import decide_destructive
+# 统计模块**按模块引用**：`usage.USAGE_LOG` 要在调用时取当前值，
+# 按值 import 会让单测的 monkeypatch 打不中（policy.AUDIT_LOG 踩过一次）。
+import usage
 from tool_help import (
     backend_summary,
     entry_help,
@@ -479,6 +482,34 @@ async def _handle_run_launcher_action(arguments: dict, ctx: ToolContext) -> dict
     return res
 
 
+async def _handle_get_usage_stats(arguments: dict, ctx: ToolContext) -> dict:
+    days = arguments.get("days")
+    only_target = str(arguments.get("tool_id") or "").strip()
+    window = usage.window(days)
+    rows = usage.read_rows(window["days"])
+    if only_target:
+        rows = [r for r in rows if str(r.get("target") or "") == only_target]
+    stats = usage.aggregate(rows)
+    # 聚合视图**嵌在 stats 下**而不是平铺：`aggregate` 自己有一个 `success`
+    # （成功次数，int），平铺会把载荷信封的 `success: true`（bool）覆盖掉——
+    # 那是 SHARED_OUTPUT_SCHEMA 的唯一必填字段，所有工具共用同一条语义。
+    payload = {
+        "success": True,
+        "logPath": str(usage.USAGE_LOG),
+        "window": window,
+        "stats": stats,
+    }
+    if only_target:
+        payload["toolId"] = only_target
+    if stats["total"] == 0:
+        # 空窗口要如实说明覆盖范围，否则「0 次调用」会被读成「这个工具没人用」
+        payload["note"] = (
+            "窗口内没有调用记录。统计只覆盖经本 server 分发的调用："
+            "用户直接启动工具、其他进程或其他日期的历史调用都不在计数内"
+        )
+    return payload
+
+
 # 顺序即 tools/list 对外可见顺序（golden 按列表逐位锁定，保序即保行为）。
 SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
     ServerToolSpec(
@@ -848,6 +879,28 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
         # 默认路径是只读取数，但 run=true 会 spawn 子进程 → 与 launch_tool 同款只标 openWorld
         annotations={"openWorldHint": True},
     ),
+    ServerToolSpec(
+        name="get_usage_stats",
+        handler=_handle_get_usage_stats,
+        description="查询工具调用使用统计：按天、按对外工具、按目标 tool_id 聚合调用量、成功率与耗时（默认最近 7 天）",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": "可选，统计窗口天数（按日历日、含今天；默认 7，越界收敛到 1~365）",
+                    "minimum": 1,
+                    "maximum": 365
+                },
+                "tool_id": {
+                    "type": "string",
+                    "description": "可选，只看某个登记工具的调用（与调用记录里的 target 精确匹配）"
+                }
+            }
+        },
+        # 只读一份本机日志文件，不碰任何工具、不 spawn
+        annotations={"readOnlyHint": True, "destructiveHint": False},
+    ),
 )
 
 # ToolAnnotations 的合法键（MCP 协议 hints 全集）。validate_specs 用它拦
@@ -864,7 +917,7 @@ def build_mcp_tools() -> list[Tool]:
     - `if ToolAnnotations is not None and spec.annotations:` —— 可选导入的
       真值判断都原样保留（`{}` 取假，不挂注解）；
     - `tool.outputSchema = spec.output_schema or SHARED_OUTPUT_SCHEMA` ——
-      本期 15 条全部回落共享 schema。
+      本期 17 条全部回落共享 schema。
     """
     tools: list[Tool] = []
     for spec in SERVER_TOOL_SPECS:

@@ -55,7 +55,7 @@ def _fields(tool):
 
 
 def test_build_mcp_tools_matches_golden():
-    """声明层无损：15 个 Tool 的五字段与 HEAD 采集的 golden 逐位全等（含顺序）"""
+    """声明层无损：全部 Tool 的五字段与 HEAD 采集的 golden 逐位全等（含顺序）"""
     golden = json.loads(GOLDEN_PATH.read_text(encoding="utf-8"))
     actual = [_fields(t) for t in build_mcp_tools()]
     assert actual == golden, "build_mcp_tools() 与 golden 不一致（字段或顺序漂移）"

@@ -7,6 +7,7 @@ import asyncio
 import contextlib
 import json
 import sys
+import time
 from pathlib import Path
 
 from mcp.server import Server
@@ -59,6 +60,9 @@ from tool_specs import (
 # ARC-P1-05 Phase 2：部署策略（data/policy.json）的 dispatch 前置检查。
 # policy 在 import 期加载并校验策略（坏策略快速失败，不在这里处理）。
 from policy import check_call
+# P3 使用统计：dispatch 出口记一行。**按模块引用**（不是 import 函数名），
+# 单测才能 monkeypatch `usage.USAGE_LOG` 把统计写进 tmp。
+import usage
 
 # 数据目录：DATA_DIR 放人写的声明（进版本库），RUNTIME_DIR 放程序生成的
 # 运行时数据（本机应用数据目录）。两者此前混在 data/ 下，导致活实例改写
@@ -161,15 +165,43 @@ async def dispatch_tool(name: str, arguments: dict) -> str:
     # 错误消息与 errorType 逐字一致）。handler 返回载荷对象（dict），
     # 序列化统一在这里做一处（NE-1：default=str 由「5 个工具有」统一为
     # 「15 个都有」——可达输入上的 no-op，方向是更不容易失败）。
+    #
+    # P3 使用统计埋点也放在这里：dispatch_tool 是「协议入口」和「单测直调」
+    # 共同的唯一漏斗，成功/失败/被策略拦下都只在这一处出口，计数才不会漏。
+    # 埋点是旁路（record_call 自己吞掉落盘错误），返回值与异常语义一字未改；
+    # 副作用面只有运行时目录里多一行 usage.log（TASKS 申报 NE-9）。
+    started = time.perf_counter()
+
+    def _record(ok: bool, error_type: str | None = None) -> None:
+        usage.record_call(
+            name,
+            arguments,
+            ok=ok,
+            error_type=error_type,
+            duration_ms=int((time.perf_counter() - started) * 1000),
+        )
+
     spec = get_spec(name)
     if spec is None:
+        _record(False, ErrorType.UNKNOWN_TOOL)
         fail(f"未知工具: {name}", error_type=ErrorType.UNKNOWN_TOOL, toolName=name)
     # ARC-P1-05 Phase 2：策略层先于 handler——deny 名单 / 白名单命中即拒绝
     # （permission_denied），调用参数（含 allowDestructive）一律不看。
     denial = check_call(name)
     if denial is not None:
+        _record(False, ErrorType.PERMISSION_DENIED)
         fail(denial["reason"], error_type=ErrorType.PERMISSION_DENIED, toolName=name)
-    payload = await spec.handler(arguments, _TOOL_CONTEXT)
+    try:
+        payload = await spec.handler(arguments, _TOOL_CONTEXT)
+    except ToolError as e:
+        # errorType 从异常正文里取——那份 JSON 就是客户端看到的载荷，同源不另编
+        _record(False, usage.error_type_from(e))
+        raise
+    except Exception:
+        # 原样再抛：交给 call_tool 转成 internal_error（与埋点前的控制流一致）
+        _record(False, ErrorType.INTERNAL_ERROR)
+        raise
+    _record(True)
     return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 
 

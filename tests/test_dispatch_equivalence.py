@@ -93,7 +93,7 @@ def _probe_managers(monkeypatch):
 
 
 def test_every_spec_name_is_dispatchable(_probe_managers):
-    """15 个 spec 名字各调一次 dispatch_tool：允许业务失败，只禁止 unknown_tool"""
+    """每个 spec 名字各调一次 dispatch_tool：允许业务失败，只禁止 unknown_tool"""
     for spec in SERVER_TOOL_SPECS:
         try:
             run(server.dispatch_tool(spec.name, {"tool_id": "__probe_no_such__"}))
