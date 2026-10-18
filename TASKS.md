@@ -26,8 +26,8 @@
 - [x] 日志系统（输出到 stderr，不污染协议通道）
 
 ### 对外 MCP 工具（16 个）
-- [x] `search_tools` - 搜索工具（关键词 + kind 筛选）
-- [x] `list_tools` - 列出所有工具
+- [x] `search_tools` - 搜索工具（关键词 + `kind` / `status` / `publisher` 筛选）
+- [x] `list_tools` - 列出所有工具（同上三个筛选维度，见「筛选维度增强」）
 - [x] `get_tool_info` - 查看工具详情
 - [x] `launch_tool` - 返回启动命令信息；2026-10-18 起支持显式 `execute=true` 真正执行启动（默认仍只返回命令）
 - [x] `get_tool_help` - 工具帮助信息：文档链接 + 能力清单（mcp 子工具 / launcher 动作）+ 帮助命令预览；2026-10-18 新增，`kind=app` 显式 `run=true` 才执行 `--help` 并捕获输出（默认零副作用）
@@ -233,8 +233,8 @@
   destructive 门禁摘除的变异本轮被权限策略拦下未跑（同款摘除已在场景⑦验过，
   help 路径的门禁由单测 `test_handler_destructive_entry_blocks_run_until_allowed`
   与场景⑧的断言锁定）
-- **口径**：`pytest tests/ -q` = 303 passed / **8 deselected**；
-  `pytest -m e2e -q` = 8 passed / 303 deselected。说「303」时要带上
+- **口径**：`pytest tests/ -q` = 314 passed / **8 deselected**；
+  `pytest -m e2e -q` = 8 passed / 314 deselected。说「314」时要带上
   「另有 8 个 e2e 默认不收集」，否则会被误读成总数。
 - **手工脚本**（不在上面 8 个里）：
   `"<pyenv 3.12 python>" tests/e2e/manual_install_gate.py`——验「已授权时
@@ -376,13 +376,64 @@
       表与审计标注 + **e2e 场景⑧** `tests/e2e/test_e2e_tool_help.py`（真实 stdio
       会话验默认零副作用 / 执行并回传输出 / destructive 拦截与放行 / 非 app 不
       spawn / 无来源 `config_error`，红绿双向见上节）；golden 重基线 15→16，
-      全量口径 **303 passed**（+8 个 e2e 默认不收集，见上节）
+      落地时全量口径 **303 passed**（现口径见上节：NE-8 之后 314，另有 8 个 e2e
+      默认不收集）
 - [x] **非等价点 NE-7**（行为变更申报）- ① `tools/list` 多出一个工具
       （15→16），golden 已重基线（纯追加，16 条 diff 只在末尾，5 字段其余条目
       逐字节不变）；② 显式 `run=true` 的调用会产生本地子进程并捕获其输出（新增
       副作用面，由参数本身与 destructive 门禁双重显式化）；③ `policy.py` 的 app
       种审计 `action` 与拒绝文案跟随执行入口——**旧数据无影响**（`launch_tool`
       路径 `sub_op` 为 `{}`，文案与审计行逐字不变），只有 help 路径新增标注
+
+### 筛选维度增强（P1，2026-10-18）
+- [x] **维度选型：`status` + `publisher`** - TASKS 里这条原本写的是「`kind` / `tags`
+      之外的维度」。盘点条目已有字段后选定这两个：`tags` 已经参与关键词匹配（`search_tools`
+      搜 tags 就是筛选），`version` / `website` 拿来筛没有真实诉求，
+      「装了没」「谁出的」才是用户会问的两件事。**没有新增字段**，`schema.py` 零改动
+- [x] **单一筛选入口 `registry._apply_filters`** - `list_all_tools` 与 `search_tools`
+      共用，`kind` 保持原样（它决定的是「按类型切」，语义与 `tags` 重叠，不动）；
+      `search_tools` 是「先关键词命中、再按维度收窄」，两者正交叠加。
+      `status` 精确匹配、`publisher` 子串且大小写不敏感（发布者写法多样：
+      `voidtools` vs `Some Corp (Beta)`，精确匹配等于要求调用方抄准原文）
+- [x] **缺省口径与对外投影对齐** - 条目未写 `status` 时筛选用 `installed`，
+      与 `list_tools` 投影的 `t.get("status", "installed")` 同一个值。
+      不对齐就会出现「列表里显示 installed、按 installed 却筛不到」的自相矛盾。
+      （`get_tool_info` 的缺省是 `unknown`，属历史遗留，见「已知边界」）
+- [x] **能筛的维度必须能看见** - `list_tools` / `search_tools` 的每条结果补
+      `publisher` 键（条目没写投影成空串而不是缺键）。只加筛选参数却不返回该字段，
+      调用方等于要凭猜测填发布者写法——这是把功能做一半
+- [x] **`status` 带 `enum`，顺带查实了 SDK 的校验行为**（新事实，值得留痕）：
+      走协议入口时 **SDK 确实按 `inputSchema` 校验**——`{"status":"isntalled"}` →
+      `isError` + `Input validation error: ... is not one of [...]`，
+      缺 `keyword` → `Input validation error: 'keyword' is a required property`。
+      旧评审文档（`docs/architecture_review_2026-10-16.md` §评审项、
+      `docs/architecture_incremental_p1-04_*.md`）说的「inputSchema 声明但不校验」
+      只对**直接调 `dispatch_tool`** 成立（handler 用 `.get()` 兜底）；
+      经协议通道时 `required` 与 `enum` 都会被拦。enum 由此不是装饰而是
+      「拼错的筛选值不会静默返回空集」的护栏，已由协议回环测试锁定
+- [x] **测试：+11 条（303 → 314）** - `tests/test_registry.py` 9 条（筛选语义 6 +
+      参数转发 2 + 投影形状 1，全部 tmp_path 造数据：仓库 `data/tools/` 5 条清一色
+      `status: installed`，拿它筛 `not_installed` 只会得空集，红了也不知道为什么红）；
+      `tests/test_protocol_roundtrip.py` 2 条（enum 拒绝 + 真实名单上筛选确实收窄）
+- [x] **红绿验证（4 个变异，逐个精确打红）** - A `if want:` 退回 `if status:` →
+      「纯空白筛选」1 条红；B `status` 缺省从 `installed` 改空串 → 4 条红
+      （缺省口径守卫是有效的）；C handler 不转发 `status`/`publisher` → 2 条转发测试红；
+      D 返回体去掉 `publisher` → 投影测试红；摘掉 `enum` → enum 协议测试红。
+      **变异 A 顺手抓到一个真 bug**：原写法 `if status:` 对 `"  "` 是 truthy，
+      会拿归一化后的空串去精确匹配把整张名单筛空，而同样输入的 `publisher` 因为子串
+      语义反而成了 no-op——一类输入两种结果。改成「先归一化再判空」并补测试锁定
+- [x] **golden 重基线（NE-8）** - 这次是**修改而非追加**：`search_tools` /
+      `list_tools` 两条的 `description` + `inputSchema` 变更，diff 28+/2-，
+      其余 14 条逐字节不变（`git diff` 已核对只命中这两个条目）。
+      三方名字守卫（`EXPECTED_TOOL_NAMES` / SKILL.md 工具表）无需改动——名字集合没变
+- [x] **文档同步** - `SKILL.md`（核心能力增「筛选查询」、工具表参数列、用例数）、
+      `docs/format.md`（两条契约行 + 投影可见性说明 + enum 边界说明）、
+      `docs/architecture.md`（能力表、模块表 `registry.py` 141→188 / `tool_specs.py`
+      891→922、工具表参数、实现索引新增 `_apply_filters` 行）。
+      顺带清一处 NE-6 留下的陈旧能力表行：「工具启动信息返回（仅返回命令，不执行）
+      ⚠️ 半成品」——`execute=true` 路径 2026-10-18 已落地并由场景⑦实测，改判 ✅
+- [x] **未做 e2e 场景**：纯读路径、无子进程、无副作用；协议回环层已经用真实 SDK
+      会话验过校验与投影，再起一个 stdio 子进程不增加覆盖，故不新增场景⑨
 
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
@@ -415,7 +466,7 @@
       → M02 `d2b4cd2` → M03 `019713d` → M04 `c3b2b08` → M05 `738b843`；M06（本文档 +
       `docs/architecture.md` 同步）与 M07（SKILL.md 工具表守卫 + 全量回归 + 真实 stdio 冒烟
       + P0 install 门禁 e2e 复跑）为收尾两步，哈希见 `git log`
-- [x] **非等价点（显式标注 NE-1~NE-7，U6 要求对用户可见）**：NE-1 `json.dumps` 统一带
+- [x] **非等价点（显式标注 NE-1~NE-8，U6 要求对用户可见）**：NE-1 `json.dumps` 统一带
       `default=str`（5 → 15 个工具；可达输入上的 no-op，单向放宽，不启用 `strict_dumps`
       回退）；NE-2 未知工具失败时机改为查表未命中即失败（错误消息与 errorType 逐字相同，
       完全等价）；NE-3 `validate_specs()` import 期自检（对合法输入零差异，spec 表损坏时
@@ -428,7 +479,11 @@
       NE-7 新增第 16 个对外工具 `get_tool_help`（2026-10-18 P1 落地，详见「工具
       帮助文档查看」小节：golden 纯追加重基线 15→16 + 显式 `run=true` 产生本地
       子进程；`policy.py` 的 app 种审计 action/文案跟随执行入口，`launch_tool`
-      路径逐字不变）
+      路径逐字不变）；
+      NE-8 `search_tools` / `list_tools` 增 `status` / `publisher` 筛选维度
+      （2026-10-18 P1 落地，详见「筛选维度增强」小节：**两处既有条目的 description +
+      inputSchema 变更**（golden 是修改而非追加，diff 28+/2-），返回体每条新增
+      `publisher` 键；无新工具、无新副作用）
 
 ### 其他
 - [x] Git 仓库初始化，代码版本管理
@@ -455,6 +510,15 @@
 - **帮助输出封顶**：单次回传最多 20000 字符（`truncated=true` 明示被截），超时上限
    30s（`anyio.fail_after` 到点必 kill，不留孤儿）——返回体要进 MCP 消息，不能塞
    进整本手册；`kind=mcp`/`launcher` 没有可执行帮助命令，只回数据层 + `note`
+- **`kind` 没有 `enum`、`status` 有**（NE-8 留下的刻意不一致）：新维度带了 enum，
+   拼错的值在 SDK 校验层就 `isError`；`kind` 传错值仍是空列表。给 `kind` 补 enum
+   同样要改下发 schema，还会把「外部客户端一直这么传」的调用直接判死，属独立改动，
+   本期有意不做，不是遗漏
+- **`status` 缺省口径两处不同**：列表/搜索投影与本期筛选都按「条目未写 = `installed`」
+   （`tool_specs.py` 的 `t.get("status", "installed")`），`get_tool_info` 却按
+   「条目未写 = `unknown`」（`tool.get("status", "unknown")`）。改任一侧都会动既有条目
+   之外的对外返回体，本期只做筛选、不动它；`data/tools/` 现有 5 条都显式写了 status，
+   实机无差异。要对齐时应当**一起对齐**并申报独立 NE
 - ~~`data/backend-tools/*.json` 是自动生成的缓存却受 git 跟踪，多实例在跑时
   `lastSynced` 会被反复改写~~ → 已解决（A14）：运行时缓存整体迁到
   `%LOCALAPPDATA%\.awam-tool-manager`，仓库里只剩人工维护的 `data/tools/`
@@ -478,8 +542,7 @@
 
 ### P1 - 体验完善
 - [ ] 工具自动发现：检测本机已安装哪些可作为 MCP 后端接入的工具
-- [ ] 工具标签分类和筛选优化（`kind` / `tags` 之外的维度）
-      （「工具帮助文档查看」已于 2026-10-18 完成，见上节 P1）
+      （「工具帮助文档查看」「筛选维度增强」已于 2026-10-18 完成，见上节 P1）
 
 ### P2 - 生态扩展
 - [ ] 接入 Scoop（写 CLI 适配器）— 本机已装（`S:\Libs\Scoop`），可实测
@@ -614,7 +677,7 @@ awam-tool-manager/
 │   └── schema.py               # 两层数据的 JSON Schema 校验 + **文档生成源**
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                      # 16 个 test_*.py（303 passed）+ 8 个 e2e 场景（默认不收集）
+└── tests/                      # 16 个 test_*.py（314 passed）+ 8 个 e2e 场景（默认不收集）
     ├── test_store.py
     ├── test_registry.py
     ├── test_registry_policy.py

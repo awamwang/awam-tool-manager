@@ -209,8 +209,8 @@
 
 | 工具名 | 参数 | 说明 |
 |---|---|---|
-| `search_tools` | `keyword`(必填)、`kind` | 按关键词搜索工具（匹配 `id` / 名称 / 描述 / 标签） |
-| `list_tools` | `kind` | 列出所有工具 |
+| `search_tools` | `keyword`(必填)、`kind`、`status`、`publisher` | 按关键词搜索工具（匹配 `id` / 名称 / 描述 / 标签），三个筛选维度取交集 |
+| `list_tools` | `kind`、`status`、`publisher` | 列出所有工具（`status` 精确匹配、条目未写时按 `installed` 计；`publisher` 子串、大小写不敏感；空值/纯空白等于不设筛选） |
 | `get_tool_info` | `tool_id`(必填) | 查看工具详情 |
 | `launch_tool` | `tool_id`(必填)、`execute`、`wait`、`allowDestructive` | 返回启动命令；**默认只返回、不执行**，显式 `execute=true` 才启动进程（条目 `destructive` 时需 `allowDestructive=true`；`wait` 是执行后的早退观察窗口，默认 5s、封顶 30s） |
 | `call_backend_tool` | `tool_id`、`tool_name`(必填)、`arguments`、`allowDestructive` | 路由调用后端子工具（目标标记 `destructive` 时需 `allowDestructive=true`） |
@@ -225,6 +225,15 @@
 | `list_launcher_actions` | `tool_id`(必填)、`keyword`、`limit`、`refresh` | 列出/搜索启动器动作（缓存超过 5 分钟自动重扫） |
 | `run_launcher_action` | `tool_id`(必填)、`action_id`/`action_name`(至少一个)、`param`、`wait`、`allowDestructive` | 执行启动器动作（条目或目标标记 `destructive` 时需 `allowDestructive=true`；配 `destructiveActions` 时按动作 id/name/type 的 glob 判定，仅命中的动作需确认） |
 | `get_tool_help` | `tool_id`(必填)、`run`、`timeout`、`allowDestructive` | 取工具帮助信息：文档链接 + 能力清单（`kind=mcp` 子工具 / `kind=launcher` 动作）+ 帮助命令预览。**默认只读数据、不 spawn**；`kind=app` 显式 `run=true` 才执行 `help.command`/`launch.command` + `help.args`（缺省 `--help`）并捕获输出（条目 `destructive` 时需 `allowDestructive=true`；`timeout` 默认 5s、封顶 30s） |
+
+> **`status` 带 `enum`，拼错的值在校验层就是 `isError`**（`Input validation error: ... is not one of [...]`），
+> 不会静默返回空列表——筛选类接口最坏的一种失败是让调用方把「参数打错」读成「本机没装」。
+> `kind` 目前没有 `enum`（历史契约，`NE-5` 只修过它的文案），传错值仍是空列表；
+> 给 `kind` 补 `enum` 会让下发 schema 变化并要求外部客户端改正，属独立改动，本期未做。
+>
+> **能筛的维度都能看见**：`list_tools` / `search_tools` 的每条结果都投影
+> `id` / `name` / `kind` / `description` / `status` / `publisher`（条目没写的投影成
+> 缺省值 `installed` / 空串，不是缺键），调用方可以直接把看到的值回填给筛选参数。
 
 ### Resources
 

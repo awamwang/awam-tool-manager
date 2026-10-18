@@ -13,6 +13,9 @@ description: 统一工具管理器，维护本机工具名单，提供统一的�
 ## 核心能力
 
 - **工具注册**：以 JSON 文件为单位登记工具元数据（`data/tools/`）
+- **筛选查询**：`list_tools` / `search_tools` 除 `kind` 外还可按 `status`（安装状态，
+  精确匹配，条目未写时按 `installed` 计）与 `publisher`（发布者，子串、大小写不敏感）
+  收窄，多个维度取交集
 - **MCP 服务**：作为 MCP Server 暴露给 AI 客户端（stdio 模式）
 - **路由调用**：把调用转发给 `kind=mcp` 工具对应的后端 MCP Server
 - **进程管理**：管理后端 MCP 子进程的启停、状态、日志
@@ -43,7 +46,7 @@ awam-tool-manager/
 │   └── schema.py             # 两层数据的 JSON Schema 校验 + 文档生成源
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 303 个用例（另有 8 个真实 e2e 用例默认不收集，
+└── tests/                    # 314 个用例（另有 8 个真实 e2e 用例默认不收集，
                               # `pytest -m e2e` 显式跑；含真实 MCP 会话与文档漂移检测）
 ```
 
@@ -66,8 +69,8 @@ awam-tool-manager/
 
 | 工具名 | 参数 | 说明 |
 |---|---|---|
-| `search_tools` | `keyword`(必填)、`kind` | 按关键词搜索工具 |
-| `list_tools` | `kind` | 列出所有工具 |
+| `search_tools` | `keyword`(必填)、`kind`、`status`、`publisher` | 按关键词搜索工具，可按类型/安装状态/发布者收窄 |
+| `list_tools` | `kind`、`status`、`publisher` | 列出所有工具，可按类型/安装状态/发布者筛 |
 | `get_tool_info` | `tool_id`(必填) | 查看工具详情 |
 | `launch_tool` | `tool_id`(必填)、`execute`、`wait`、`allowDestructive` | 返回工具的启动命令；**默认只返回不执行**，显式 `execute=true` 才真正启动进程（条目 `destructive` 时需 `allowDestructive=true`，见「安全约定」） |
 | `call_backend_tool` | `tool_id`、`tool_name`(必填)、`arguments`、`allowDestructive` | 路由调用后端 MCP 的子工具；命中破坏性判定时需显式确认（A12：条目配了 `destructiveTools` 就只拦清单内子工具，未配则整个后端都拦） |

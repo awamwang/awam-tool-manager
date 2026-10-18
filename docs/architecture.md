@@ -31,9 +31,9 @@
 |---|---|---|
 | 工具条目读取（JSON 文件即数据库） | `store.py` | ✅ |
 | 工具搜索（名称 / 显示名 / 描述 / 标签模糊匹配） | `registry.py` | ✅ |
-| 工具列出 + `kind` 筛选 | `registry.py` | ✅ |
+| 工具列出 + `kind` / `status` / `publisher` 筛选 | `registry.py` | ✅ |
 | 工具详情查询（app / mcp 分支） | `server.py` | ✅ |
-| 工具启动信息返回（仅返回命令，不执行） | `registry.py` | ⚠️ 半成品 |
+| 工具启动信息返回（默认只返回命令；`execute=true` 才启动） | `registry.py` + `app_launcher.py` | ✅ |
 | 后端 MCP 路由调用 | `backend_client.py` | ✅ 已实测跑通 |
 | 后端 MCP 子工具列表（带缓存） | `backend_client.py` | ✅ |
 | 后端进程生命周期管理（启停 / 状态 / 日志） | `backend_client.py` | ✅ |
@@ -91,7 +91,7 @@ awam-tool-manager/
 │   └── runtime_paths.py      # 运行时目录解析 + 旧路径迁移
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 16 个用例文件，302 passed（含真实 MCP 会话与文档漂移检测）
+└── tests/                    # 16 个用例文件，314 passed（含真实 MCP 会话与文档漂移检测）
                               # 另有 tests/e2e/ 8 个真实会话用例，默认不收集
     └── e2e/                  # 真实子进程 / 真实 stdio 端到端层（ARC-P3-02）：8 个用例
                               # **默认不收集**（起真实子进程、慢、依赖本机解释器），
@@ -257,13 +257,13 @@ awam-tool-manager/
 | `store.py` | 194 | JSON 文件的读写与目录遍历，读有容错、写走原子替换，无缓存 | 标准库 |
 | `runtime_paths.py` | 93 | 运行时目录解析（`%LOCALAPPDATA%\.awam-tool-manager`，`AWAM_RUNTIME_DIR` 可覆盖）+ 旧路径数据一次性迁移 | 标准库 |
 | `schema.py` | 450 | 两层数据的 JSON Schema 与校验（`jsonschema` 可选，缺失时降级）；**同时是 `docs/format.md` 字段表的唯一生成源** | `jsonschema`(可选) |
-| `registry.py` | 141 | 工具查询语义（列表 / 搜索含 `id` / 详情 / 启动信息），加载时过滤不合规条目 | `store`、`schema` |
+| `registry.py` | 188 | 工具查询语义（列表 / 搜索含 `id` / 详情 / 启动信息），加载时过滤不合规条目；`kind` 之外的筛选维度（`status` 精确、`publisher` 子串，均大小写不敏感、先归一化再判空）集中在 `_apply_filters` | `store`、`schema` |
 | `backend_client.py` | 1593 | 后端 MCP 子进程的连接管理、调用转发、缓存、心跳、日志、**install 执行门禁（P0）** | `mcp`、`store`、`runtime_paths` |
 | `launcher_client.py` | 628 | 启动器适配器（非 MCP，Quicker / uTools）：Quicker 走 states 目录解析 + `runaction:` 命令行回传；uTools 走 `plugins/*.asar` 的 plugin.json 纯 Python 解析（Chromium Pickle 封包）+ `utools://` 协议唤起（fire-and-forget） | `store` |
 | `errors.py` | 92 | 业务错误出口：`ErrorType` 常量枚举 + `ToolError` / `fail` / `ensure_success`（P1-04 从 server.py 原样搬出——tool_specs 的 handlers 要用，留在 server.py 会形成循环 import；server 命名空间继续 re-export；P1-03 补齐枚举至 16 种） | 标准库 |
 | `app_launcher.py` | 188 | `kind=app` 的启动执行（`launch_tool` 的 `execute=true` 路径）：`create_subprocess_exec` 无 shell、stdio 三件套 DEVNULL（A8）、`shutil.which` 预检、观察窗口（默认 5s / 封顶 30s）区分「早退报退出码」与「仍在运行报 running」；运行中进程由模块级注册表强引用保活（CPython transport.close() 会 kill 运行中子进程） | `errors`、`anyio` |
 | `tool_help.py` | 256 | 帮助信息分层（`get_tool_help` 的底座）：`resolve_help_command()`（`help.command` > `launch.command`，`help.args` > `--help`，**永不复用 `launch.args`**；timeout 默认 5s / 封顶 30s）+ `entry_help` / `backend_summary` / `launcher_summary` 纯取数 + `run_help_command()`（`create_subprocess_exec` 无 shell、PIPE 捕获、UTF-8→GBK→replace 三级解码、超时必 kill、>20000 字符截断、非零但有文本仍算成功） | `errors`、`anyio` |
-| `tool_specs.py` | 891 | 对外 MCP 工具声明式注册表（SSOT）：16 条 `ServerToolSpec`（name/description/inputSchema/annotations/handler 同条记录）+ 16 个 handler + `build_mcp_tools()` / `get_spec()` / `validate_specs()`（import 期自检：重名/空 handler/非法注解键快速失败） | `mcp`、`errors`、`launcher_client`、`app_launcher`、`tool_help`、`policy` |
+| `tool_specs.py` | 922 | 对外 MCP 工具声明式注册表（SSOT）：16 条 `ServerToolSpec`（name/description/inputSchema/annotations/handler 同条记录）+ 16 个 handler + `build_mcp_tools()` / `get_spec()` / `validate_specs()`（import 期自检：重名/空 handler/非法注解键快速失败） | `mcp`、`errors`、`launcher_client`、`app_launcher`、`tool_help`、`policy` |
 | `policy.py` | 426 | 破坏性门禁 + 部署策略：`decide_destructive(kind, tool, sub_op, args)`（mcp 子工具精确匹配 / launcher 动作级 glob / 缺省回退条目级；`destructive.mode` 参与判定）+ `check_call(name)`（dispatch 前置 deny/白名单）+ `load_policy()`（import 期校验，坏策略快速失败）+ 结构化审计行（stderr + `<runtime>/audit.log`） | `runtime_paths`、`schema`、标准库 |
 | `server.py` | 464 | MCP 协议入口：协议装配 + 查表薄分发（`dispatch_tool` 约 12 行，含策略前置检查）+ Resources/Prompts + 生命周期（启动预热/状态恢复），启动时后台检测依赖 + 恢复期望状态 | `mcp`、`store`、`registry`、`backend_client`、`runtime_paths`、`launcher_client`、`schema`、`errors`、`tool_specs`、`policy` |
 | `scripts/generate_format_doc.py` | 148 | 读 `schema.py` 渲染字段表并就地替换 `docs/format.md` 的生成区块；`--check` 做漂移检查 | 标准库、`schema` |
@@ -402,8 +402,8 @@ toolport 网关会**周期性整池回收**它拉起的 server 进程（2026-10-
 
 | 工具名 | 参数 | 说明 |
 |---|---|---|
-| `search_tools` | `keyword`(必填)、`kind` | 关键词搜索 |
-| `list_tools` | `kind` | 列出工具 |
+| `search_tools` | `keyword`(必填)、`kind`、`status`、`publisher` | 关键词搜索，三个筛选维度取交集 |
+| `list_tools` | `kind`、`status`、`publisher` | 列出工具（可按类型/安装状态/发布者筛） |
 | `get_tool_info` | `tool_id`(必填) | 工具详情（按 kind 返回不同字段） |
 | `launch_tool` | `tool_id`(必填)、`execute`、`wait`、`allowDestructive` | 返回启动命令（默认不执行）；`execute=true` 才 spawn |
 | `call_backend_tool` | `tool_id`、`tool_name`(必填)、`arguments`、`allowDestructive` | 路由调用（A12：命中 `destructiveTools` 子工具时需确认） |
@@ -574,6 +574,7 @@ python src/server.py
 | `server.py` `main` | stdio 事件循环 + 启动后台预热任务 `_prewarm_backends()`，`finally` 取消预热并关闭全部后端 |
 | `store.py` `load_json` / `save_json` | JSON 读写：读有容错（坏文件跳过），写走 `mkstemp` + `os.replace` 原子替换 |
 | `registry.py` `search_tools` | 关键词匹配 id / name / displayName / description / tags（含 `id`，避免「搜得到工具却搜不到它的 ID」） |
+| `registry.py` `_apply_filters` | `kind` 之外的筛选维度：`status` 精确（缺省口径与投影一致，按 `installed` 计）、`publisher` 子串大小写不敏感；两者**先归一化再判空**，纯空白等于不设筛选。`list_all_tools` / `search_tools` 共用，搜索是「先关键词命中再收窄」 |
 | `backend_client.py` `BackendClient.start` | 子进程启动、连接、预热工具列表、起心跳；spawn 前先 `ensure_installed()`，被门禁拦下时返回 `install_required` / `install_not_allowed` 且不 spawn |
 | `backend_client.py` `BackendClient.ensure_installed` | 依赖安装：剥壳解包启动命令 → `shutil.which` 检测 → **P0 门禁（授权 + 命令白名单）** → 限时装一次（`INSTALL_TIMEOUT`）→ 复检；幂等，装不坏不阻断 |
 | `backend_client.py` `BackendManager.ensure_all_installed` | 启动预热：遍历所有 MCP 工具**只检测**（P0 后不执行安装），单个失败不影响整体；汇总 `blocked` 计数供启动日志报告 |
