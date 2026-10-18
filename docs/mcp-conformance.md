@@ -218,8 +218,9 @@ spawn 进程，条目 `destructive` 时同样需 `allowDestructive=true`；正�
 帮助命令——图形程序不认 `--help` 时会把它当普通启动参数跑起来，所以这条路径也
 接进了 destructive 门禁（审计与拒绝文案按 `get_tool_help` 入口标注）。
 
-`discover_tools` 是第四条：默认路径确实只读文件系统（路径存在 / 目录条目数 /
-`shutil.which` 查 PATH），但清单里的 `command.argv` 在 `run_commands=true` 时会被
+`discover_tools` 是第四条：默认路径确实只读系统状态（路径存在 / 注册表登记值 /
+目录条目数 / `shutil.which` 查 PATH，注册表那一维只 `QueryValueEx` 不写），但清单里的
+`command.argv` 在 `run_commands=true` 时会被
 真的执行去取版本号。**能力面含执行就不声明 `readOnlyHint`**——哪怕默认路径一次都不
 spawn，声明只读等于把「它可以跑命令」对客户端藏起来。返回体的 `run` 报的是
 「这一维真的跑过没有」，不是调用方传了什么标志位。

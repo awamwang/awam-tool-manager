@@ -1,12 +1,12 @@
-"""本机工具自动发现（P1-06）：读声明式候选清单 + 只读文件系统探测。
+r"""本机工具自动发现（P1-06）：读声明式候选清单 + 只读探测（路径 / 注册表登记值 / PATH）。
 
 与 `policy.py` 的分工：两者都是「仓库里的 JSON 声明 + 环境变量覆盖」，但
 失败时机刻意不同——策略判错等于安全约束静默失效，所以 policy 在 import 期
 快速失败；发现清单不是安全面，坏文件只该让 `discover_tools` 这一次调用失败
 （`config_error`），不该把整个 server 拖到起不来。
 
-**默认零执行**：探测只做文件系统读——路径存在、目录条目数、以及命令是否在
-PATH 上（`shutil.which`，同样不 spawn）。跑命令取版本号（`scoop --version`
+**默认零执行**：探测只做只读的系统状态查询——路径存在、目录条目数、注册表登记值、
+以及命令是否在 PATH 上（`shutil.which`，同样不 spawn）。跑命令取版本号（`scoop --version`
 这类）要调用方显式传 `run_commands=true` 才发生，与 `launch_tool` 的
 `execute` / `get_tool_help` 的 `run` 同一条纪律：能跑出子进程的参数永远是显式
 给出来的。
@@ -16,6 +16,11 @@ PATH 上（`shutil.which`，同样不 spawn）。跑命令取版本号（`scoop 
 `not_installed`（中信心），只要有位置没检查成（变量在进程环境和注册表里都取不到）
 就判 `unknown`（无信心）。`status` 复用工具条目的同一套取值，调用方可以把发现结果
 直接回填给 `list_tools` 的 `status` 筛选。
+
+声明式路径穷举不出「装在非常规盘」这件事已被真机证伪过一次：Steam 装在
+`S:\Program Files (x86)\Steam`，清单只声明了 `C:\Program Files` 两处，于是明明装着
+却判成 `not_installed`。`registry_value` 探针就是为这类情况加的——读安装器自己
+维护的登记值，不依赖猜安装位置。**清单里每个候选都该有一条不依赖盘符的证据**。
 """
 
 from __future__ import annotations
@@ -51,7 +56,11 @@ ENTRY_KINDS = ("app", "mcp", "launcher")
 
 PROBE_PATH_EXISTS = "path_exists"
 PROBE_DIR_COUNT = "dir_count"
-PROBE_KINDS = (PROBE_PATH_EXISTS, PROBE_DIR_COUNT)
+PROBE_REGISTRY_VALUE = "registry_value"
+PROBE_KINDS = (PROBE_PATH_EXISTS, PROBE_DIR_COUNT, PROBE_REGISTRY_VALUE)
+
+# registry_value 探针支持的根键（写别的直接判清单非法，不猜）
+REGISTRY_HIVES = ("HKCU", "HKLM")
 
 # 探测结论三态。**inconclusive 不是 miss 的同义词**：声明的位置因为环境变量
 # 没设而没检查成时，说「没装」是假结论，只能说「不知道」。
@@ -148,6 +157,8 @@ def _validate_probe(probe: Any) -> str | None:
     kind = probe.get("probe")
     if kind not in PROBE_KINDS:
         return f"探测类型不支持: {kind!r}（可用: {', '.join(PROBE_KINDS)}）"
+    if kind == PROBE_REGISTRY_VALUE:
+        return _validate_registry_probe(probe)
     paths = _probe_paths(probe)
     if not paths:
         return "至少要给一个 path / paths"
@@ -156,6 +167,20 @@ def _validate_probe(probe: Any) -> str | None:
     limit = probe.get("limit")
     if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int)):
         return "limit 必须是整数"
+    return None
+
+
+def _validate_registry_probe(probe: dict) -> str | None:
+    """registry_value 不写 path，改写 hive / key / value 三件套"""
+    hive = probe.get("hive", "HKCU")
+    if hive not in REGISTRY_HIVES:
+        return f"registry_value 的 hive 取值非法: {hive!r}（应为 {' / '.join(REGISTRY_HIVES)}）"
+    for field in ("key", "value"):
+        if not isinstance(probe.get(field), str) or not probe[field].strip():
+            return f"registry_value 的 {field} 必须是非空字符串"
+    require = probe.get("require_exists")
+    if require is not None and not isinstance(require, bool):
+        return "registry_value 的 require_exists 必须是布尔"
     return None
 
 
@@ -196,25 +221,39 @@ def load_manifest(path: str | Path | None = None) -> dict:
     return data
 
 
-def _reg_value(hive: int, key: str, name: str) -> str | None:
-    """读一个注册表字符串值；`REG_EXPAND_SZ` 展开后仍残留 `%…%` 的按取不到处理"""
+def _read_reg_string(hive: int, key: str, name: str) -> tuple[str | None, str]:
+    """读一个注册表字符串值，并说明「读不到」属于哪一档。
+
+    档位是 `ok` / `absent` / `empty` / `unreadable` / `unexpanded`。分开是必须的：
+    键或值不存在是**事实信号**（这个登记记录没有），权限不足、值不是非空字符串、
+    `REG_EXPAND_SZ` 展开后仍残留 `%…%` 都只是**这次没检查成**。按 `expand_path`
+    「不回退成相对路径」的同一条纪律，后者一律不能伪装成前者。
+    """
     if winreg is None:
-        return None
+        return None, "unreadable"
     try:
         with winreg.OpenKey(hive, key) as handle:
             raw, value_kind = winreg.QueryValueEx(handle, name)
-    except OSError:
-        return None
+    except FileNotFoundError:
+        return None, "absent"
+    except OSError:  # pragma: no cover —— 权限/视图问题与读不到等价
+        return None, "unreadable"
     if not isinstance(raw, str) or not raw.strip():
-        return None
+        return None, "empty"
     if value_kind == winreg.REG_EXPAND_SZ:
         try:
             raw = winreg.ExpandEnvironmentStrings(raw)
-        except OSError:  # pragma: no cover —— 展开失败与读不到等价
-            return None
+        except OSError:  # pragma: no cover
+            return None, "unreadable"
         if "%" in raw:
-            return None
-    return raw
+            return None, "unexpanded"
+    return raw, "ok"
+
+
+def _reg_value(hive: int, key: str, name: str) -> str | None:
+    """环境变量的注册表来源用：取不到就是 None，不关心取不到的是哪一档"""
+    value, _grade = _read_reg_string(hive, key, name)
+    return value
 
 
 def registry_env_value(name: str) -> str | None:
@@ -293,10 +332,63 @@ def _probe_dir_count(path: Path, limit: int) -> dict:
     return {"ok": True, "count": len(entries), "entries": entries}
 
 
-def run_probes(cand: dict) -> tuple[list[dict], str]:
-    """执行一个候选的文件系统探测面，返回 (证据, 结论)。
+def _probe_registry_value(probe: dict) -> tuple[dict, str]:
+    """注册表探针：读安装器自己写的登记值，必要时再验证它指向的路径存在。
 
-    结论只有 `path_exists` 能下：`dir_count` 是补充证据（装了几个包），
+    它补的是 `path_exists` 的**结构盲区**：声明位置是写死的模板，装在非常规盘
+    就全落空——本机 Steam 装在 `S:\\Program Files (x86)\\Steam`，清单原先只声明
+    `C:\\Program Files(X86)\\Steam\\steam.exe` 两处，于是明明装着却判
+    `not_installed`（中信心）。而 `HKCU\\Software\\Valve\\Steam\\SteamExe` 是
+    Steam 自己维护的权威位置，读它就不依赖「装在哪几个盘」这种穷举。
+
+    `require_exists` 默认开：登记值可能是卸载/搬家后留下的僵尸记录，
+    值存在但路径不存在时判 miss 比判 hit 诚实。
+    """
+    hive_name = probe.get("hive", "HKCU")
+    key = probe["key"]
+    value = probe["value"]
+    row: dict[str, Any] = {
+        "probe": PROBE_REGISTRY_VALUE,
+        "label": probe.get("label") or f"{hive_name}\\{key}\\{value}",
+        "key": f"{hive_name}\\{key}",
+        "value": value,
+    }
+    if winreg is None:
+        row.update({"ok": False, "reason": "非 Windows 无注册表"})
+        return row, VERDICT_INCONCLUSIVE
+    hive = winreg.HKEY_CURRENT_USER if hive_name == "HKCU" else winreg.HKEY_LOCAL_MACHINE
+    raw, grade = _read_reg_string(hive, key, value)
+    if grade == "absent":
+        row.update({"ok": False, "reason": "注册表键或值不存在"})
+        return row, VERDICT_MISS
+    if grade == "empty":
+        row.update({"ok": False, "reason": "注册表值不是非空字符串"})
+        return row, VERDICT_MISS
+    if grade == "unexpanded":
+        row.update({"ok": False, "reason": "注册表值里的环境变量未能展开"})
+        return row, VERDICT_INCONCLUSIVE
+    if grade != "ok":
+        row.update({"ok": False, "reason": "注册表不可读"})
+        return row, VERDICT_INCONCLUSIVE
+
+    text = raw.strip()
+    if not probe.get("require_exists", True):
+        row.update({"ok": True, "data": text})
+        return row, VERDICT_HIT
+    # 登记值常是正斜杠（Steam 的 SteamExe 实测为 `s:/program files (x86)/steam/steam.exe`）
+    target = Path(text.replace("/", os.sep).replace("\\", os.sep))
+    row["path"] = str(target)
+    if target.exists():
+        row["ok"] = True
+        return row, VERDICT_HIT
+    row.update({"ok": False, "reason": "登记值指向的路径不存在（登记已失效）"})
+    return row, VERDICT_MISS
+
+
+def run_probes(cand: dict) -> tuple[list[dict], str]:
+    """执行一个候选的只读探测面（文件系统 + 注册表），返回 (证据, 结论)。
+
+    结论只有能证明「存在」的维度能下 hit：`dir_count` 是补充证据（装了几个包），
     目录空不代表没装，所以只 `dir_count` 的候选整体是 inconclusive。
     某个声明位置展开不了（环境变量没设）→ 该次探测没做成 → inconclusive，
     即使别的位置都不存在，也不能判 miss。
@@ -306,6 +398,23 @@ def run_probes(cand: dict) -> tuple[list[dict], str]:
 
     for probe in cand.get("probes", []):
         kind = probe["probe"]
+        if kind == PROBE_REGISTRY_VALUE:
+            row, verdict = _probe_registry_value(probe)
+            evidence.append(row)
+            verdicts.append(verdict)
+            continue
+        if kind not in (PROBE_PATH_EXISTS, PROBE_DIR_COUNT):
+            # 加了新探针类型却忘了在这里接线时，绝不能退化成下面的 path 流程：
+            # `Path("")` 等于当前目录、它存在，于是「没检查成」会被说成命中。
+            # （红绿验证真跑出来过：去掉接线后 Steam 用例照样绿，因为假命中了）
+            evidence.append({
+                "probe": kind,
+                "label": probe.get("label") or kind,
+                "ok": False,
+                "reason": f"探针类型 {kind} 未实现",
+            })
+            verdicts.append(VERDICT_INCONCLUSIVE)
+            continue
         paths = probe.get("paths") or [probe.get("path", "")]
         row: dict[str, Any] = {"probe": kind, "label": probe.get("label") or paths[0]}
 
@@ -536,7 +645,7 @@ def note_for(result: dict) -> str:
     """探测面不是穷举这件事必须在结果里自证，否则「没发现」会被读成「本机没有」"""
     summary = result["summary"]
     return (
-        f"探测面来自 {resolve_discovery_path()}，只覆盖清单里声明的路径与命令："
+        f"探测面来自 {resolve_discovery_path()}，只覆盖清单里声明的路径、注册表值与命令："
         "未声明位置的安装发现不了；未命中只判 not_installed（中信心），"
         "声明位置没能检查成时判 unknown，两者都不是「本机没有」的事实结论。"
         f"本机命中 {summary[STATUS_INSTALLED]} 个候选，其中 {summary['unregistered']} 个"

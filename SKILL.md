@@ -28,12 +28,14 @@ description: 统一工具管理器，维护本机工具名单，提供统一的�
   刻意**不记调用参数**；统计只覆盖经本 server 分发的调用，用户直接启动工具、
   以及其他进程的历史调用都不在计数内
 - **工具发现**：`discover_tools` 按仓库内声明式候选清单（`data/discovery.json`）
-  做**只读**探测（路径存在 / 目录条目数 / 命令是否在 PATH），对照已登记工具给出
+  做**只读**探测（路径存在 / 注册表登记值 / 目录条目数 / 命令是否在 PATH），对照已登记工具给出
   `installed` / `not_installed` / `unknown`；默认不执行任何命令，取版本号要显式传
   `run_commands=true`。探测面是声明出来的、不是穷举，「没发现」不等于「本机没有」；
   `{ENV}` 位置在进程环境取不到时会回退查 Windows 注册表（MCP 客户端拉起 server
   时按白名单剥变量，`ProgramFiles` / `SCOOP` 这类常常不在环境里），两处都取不到
-  才判 `unknown`
+  才判 `unknown`。声明式路径穷举不出「装在非常规盘」——Steam 装 `S:\Program Files (x86)`
+  时只声明 `C:\Program Files` 的清单把它判成了 `not_installed`，所以每个候选都该有
+  一条**不依赖盘符**的证据（`registry_value` 读安装器自己写的登记值）
 
 ## 目录结构
 
@@ -59,7 +61,7 @@ awam-tool-manager/
 │   └── schema.py             # 两层数据的 JSON Schema 校验 + 文档生成源
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 425 个用例（另有 9 个真实 e2e 用例默认不收集，
+└── tests/                    # 441 个用例（另有 9 个真实 e2e 用例默认不收集，
                               # `pytest -m e2e` 显式跑；含真实 MCP 会话与文档漂移检测）
 ```
 
@@ -99,7 +101,7 @@ awam-tool-manager/
 | `sync_launcher_actions` | `tool_id`(必填) | 手动同步启动器动作清单 |
 | `get_tool_help` | `tool_id`(必填)、`run`、`timeout`、`allowDestructive` | 取工具帮助信息：文档链接 + 能力清单（mcp 子工具 / launcher 动作）+ 帮助命令预览；**默认只读数据、不 spawn**，`kind=app` 显式 `run=true` 才执行帮助命令（`--help` / 条目 `help.args`）并捕获输出 |
 | `get_usage_stats` | `days`、`tool_id` | 查询调用使用统计（只读 `<runtime>/usage.log`，不碰任何工具）：按天 / 按对外工具 / 按目标 `tool_id` 聚合调用量、成败与耗时；`days` 按日历日含今天、默认 7、越界收敛到 1~365，`tool_id` 按记录里的 `target` 精确匹配 |
-| `discover_tools` | `run_commands`、`status` | 按 `data/discovery.json` 声明的候选清单发现本机工具：`path_exists` / `dir_count` / 命令是否在 PATH 三类**只读**探测，对照已登记工具输出 `status`（installed / not_installed / unknown）+ `confidence` + `registered`；**默认不 spawn**，`run_commands=true` 才执行清单里的版本命令取版本号（Windows 上按可执行后缀解析出真目标再无 shell 执行，子进程 `stdin=DEVNULL` 以保证不污染服务通道）；`status` 只裁剪返回的候选，`summary` 仍是整份清单的计数 |
+| `discover_tools` | `run_commands`、`status` | 按 `data/discovery.json` 声明的候选清单发现本机工具：`path_exists` / `registry_value` / `dir_count` / 命令是否在 PATH 四类**只读**探测，对照已登记工具输出 `status`（installed / not_installed / unknown）+ `confidence` + `registered`；**默认不 spawn**，`run_commands=true` 才执行清单里的版本命令取版本号（Windows 上按可执行后缀解析出真目标再无 shell 执行，子进程 `stdin=DEVNULL` 以保证不污染服务通道）；`status` 只裁剪返回的候选，`summary` 仍是整份清单的计数 |
 
 > `kind=launcher`（启动器，如 Quicker / uTools）不是 MCP：没有长连接，调用是一次性的。
 > - **Quicker**：`QuickerStarter.exe -c<秒> "runaction:<ID或名称>?参数"`，stdout 回传动作

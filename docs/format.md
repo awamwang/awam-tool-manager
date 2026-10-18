@@ -217,15 +217,32 @@
 | `candidates[].name` | `string` | 是 | 人读名称，非空 |
 | `candidates[].kind` | `string` | - | 取值与工具条目共用词表（`app` / `mcp` / `launcher`），缺省按 `app` |
 | `candidates[].purpose` | `string` | - | 一句话用途，缺省空串 |
-| `candidates[].probes` | `array` | - | 文件系统探测面，至少声明一条路径 |
-| `candidates[].probes[].probe` | `string` | 是 | `path_exists`（能下结论）/ `dir_count`（只补充证据） |
-| `candidates[].probes[].path` / `paths` | `string` / `array` | 是 | `{ENV}` 模板路径，多个位置逐个试，第一个存在即命中 |
-| `candidates[].probes[].label` | `string` | - | 证据行显示名，缺省取第一条路径 |
+| `candidates[].probes` | `array` | - | 只读探测面，至少声明一条 |
+| `candidates[].probes[].probe` | `string` | 是 | `path_exists` / `registry_value`（都能下结论）/ `dir_count`（只补充证据） |
+| `candidates[].probes[].path` / `paths` | `string` / `array` | 是* | `{ENV}` 模板路径，多个位置逐个试，第一个存在即命中（仅 `path_exists` / `dir_count` 用） |
+| `candidates[].probes[].hive` | `string` | - | 仅 `registry_value`：`HKCU`（默认）/ `HKLM`，写别的判清单非法 |
+| `candidates[].probes[].key` | `string` | 是* | 仅 `registry_value`：根键下的键路径，如 `Software\\Valve\\Steam` |
+| `candidates[].probes[].value` | `string` | 是* | 仅 `registry_value`：值名，如 `SteamExe` |
+| `candidates[].probes[].require_exists` | `bool` | - | 仅 `registry_value`：默认 `true`，还要验证值指向的路径真的存在；`false` 时只问「登记在不在」（版本号这类非路径值） |
+| `candidates[].probes[].label` | `string` | - | 证据行显示名，缺省取第一条路径（`registry_value` 取 `hive\\key\\value`） |
 | `candidates[].probes[].limit` | `int` | - | 仅 `dir_count`：最多列几条（默认 60，封顶 200，`<=0` 返回空） |
 | `candidates[].command` | `object` | - | 命令面；`argv` 非法（空 / 非字符串数组）会被校验拒绝 |
 | `candidates[].command.argv` | `array` | 是 | 无 shell 的参数数组，`argv[0]` 用 PATH 查找判定可用性（Windows 上把无扩展名垫片换成带可执行后缀的真目标，否则 `CreateProcess` 报 `WinError 193`；真执行时 `stdin=DEVNULL`，不让子进程继承服务的 stdio 管道） |
 | `candidates[].command.preview` | `string` | - | 人读预览，缺省由 `argv` 拼接 |
 | `candidates[].command.version_pattern` | `string` | - | 取版本号的正则（须有捕获组），加载时就编译校验 |
+
+> 标 `是*` 的字段按 `probe` 类型二选一必填：`path_exists` / `dir_count` 要
+> `path` 或 `paths`，`registry_value` 要 `key` 和 `value`。校验按类型分支检查，
+> 缺了直接判清单非法（`config_error`），不静默降级。
+
+**登记值探针补的是声明式路径的结构盲区**：`path_exists` 只能验「清单写过的位置」，
+装在非常规盘就全落空——本机 Steam 装在 `S:\Program Files (x86)\Steam`，清单原先只声明
+`C:\Program Files` 两处，于是明明装着却判成 `not_installed`（中信心）。`registry_value`
+读安装器自己维护的登记值（Steam 在 `HKCU\Software\Valve\Steam\SteamExe`），不依赖穷举
+盘符。**清单里每个候选都该有一条不依赖盘符的证据**。读数分四档，档位决定结论：
+键/值不存在、值不是非空字符串 → `miss`（这是事实信号：登记记录没有）；权限不足、
+非 Windows、`REG_EXPAND_SZ` 展开后仍残留 `%…%` → `inconclusive`（只是没检查成，
+不能伪装成没装）；登记值存在但指向的路径已不存在 → `miss`（僵尸登记）。
 
 **路径模板**：`{ProgramFiles}`、`{APPDATA}`、`{LOCALAPPDATA}`、`{USERPROFILE}`，
 Windows 变量名里的括号也支持（`{ProgramFiles(x86)}`）。token 取值有两个来源：
@@ -240,9 +257,9 @@ Windows 变量名里的括号也支持（`{ProgramFiles(x86)}`）。token 取值
 
 | 结论 | `status` | `confidence` | 成立条件 |
 |---|---|---|---|
-| 命中 | `installed` | `high` | 任一路径存在，或命令在 PATH 上 |
+| 命中 | `installed` | `high` | 任一路径存在、登记值指向的路径存在，或命令在 PATH 上 |
 | 未命中 | `not_installed` | `medium` | 所有能下结论的维度都说没有，且没有维度没检查成 |
-| 没检查成 | `unknown` | `none` | 至少一个声明位置因环境变量未设置而没探测成 |
+| 没检查成 | `unknown` | `none` | 至少一个声明位置因环境变量未设置、注册表读不到或探针类型未实现而没探测成 |
 
 `dir_count` 永远不参与结论（目录空不等于没装）。命令可用性只查 PATH（`shutil.which`），
 **不 spawn**；执行版本命令取版本号要显式传 `run_commands=true`，与 `launch_tool` 的
@@ -264,6 +281,16 @@ Windows 变量名里的括号也支持（`{ProgramFiles(x86)}`）。token 取值
         { "probe": "dir_count", "path": "{USERPROFILE}\\scoop\\apps", "limit": 40, "label": "已安装 formula" }
       ],
       "command": { "argv": ["scoop", "--version"], "version_pattern": "CURRENT:\\s+([0-9.]+)" }
+    },
+    {
+      "tool_id": "steam",
+      "name": "Steam",
+      "kind": "app",
+      "purpose": "Steam 客户端",
+      "probes": [
+        { "probe": "registry_value", "hive": "HKCU", "key": "Software\\Valve\\Steam", "value": "SteamExe", "label": "Steam 自己登记的 steam.exe 位置" },
+        { "probe": "path_exists", "paths": ["{ProgramFiles(X86)}\\Steam\\steam.exe"], "label": "默认安装位置" }
+      ]
     }
   ]
 }
@@ -296,7 +323,7 @@ Windows 变量名里的括号也支持（`{ProgramFiles(x86)}`）。token 取值
 | `run_launcher_action` | `tool_id`(必填)、`action_id`/`action_name`(至少一个)、`param`、`wait`、`allowDestructive` | 执行启动器动作（条目或目标标记 `destructive` 时需 `allowDestructive=true`；配 `destructiveActions` 时按动作 id/name/type 的 glob 判定，仅命中的动作需确认） |
 | `get_tool_help` | `tool_id`(必填)、`run`、`timeout`、`allowDestructive` | 取工具帮助信息：文档链接 + 能力清单（`kind=mcp` 子工具 / `kind=launcher` 动作）+ 帮助命令预览。**默认只读数据、不 spawn**；`kind=app` 显式 `run=true` 才执行 `help.command`/`launch.command` + `help.args`（缺省 `--help`）并捕获输出（条目 `destructive` 时需 `allowDestructive=true`；`timeout` 默认 5s、封顶 30s） |
 | `get_usage_stats` | `days`、`tool_id` | 查询调用使用统计（只读 `<runtime>/usage.log`）：按天 / 按对外工具 / 按目标 `tool_id` 聚合调用量、成败与耗时。`days` 按日历日含今天、缺省 7、越界收敛到 1~365；`tool_id` 与记录里的 `target` 精确匹配 |
-| `discover_tools` | `run_commands`、`status` | 按 `data/discovery.json` 发现本机工具：`path_exists` / `dir_count` / 命令是否在 PATH 三类**只读**探测，输出 `status`（installed / not_installed / unknown）+ `confidence` + `registered` + 逐条证据。**默认不 spawn**，`run_commands=true` 才执行清单里的版本命令取版本号；`status` 带 `enum`，只裁剪返回的候选，`summary` 仍是整份清单的计数 |
+| `discover_tools` | `run_commands`、`status` | 按 `data/discovery.json` 发现本机工具：`path_exists` / `registry_value` / `dir_count` / 命令是否在 PATH 四类**只读**探测，输出 `status`（installed / not_installed / unknown）+ `confidence` + `registered` + 逐条证据。**默认不 spawn**，`run_commands=true` 才执行清单里的版本命令取版本号；`status` 带 `enum`，只裁剪返回的候选，`summary` 仍是整份清单的计数 |
 
 > **统计的覆盖范围是「经本 server 分发的调用」**：`dispatch_tool` 的每个出口
 > （成功、`unknown_tool`、`permission_denied`、handler 业务错、意外异常）各记一行
@@ -317,7 +344,10 @@ Windows 变量名里的括号也支持（`{ProgramFiles(x86)}`）。token 取值
 > 缺省值 `installed` / 空串，不是缺键），调用方可以直接把看到的值回填给筛选参数。
 > `discover_tools` 走的是同一套 `status` / `kind` 词表（反向也成立：发现结果的
 > `status` 能直接接住筛选参数），但**它的探测面不是穷举**——清单没声明的安装位置
-> 发现不了，所以「未命中」只是中信心结论，返回体固定附 `note` 自证这一条。
+> 发现不了，所以「未命中」只是中信心结论，返回体固定附 `note` 自证这一条。这条
+> 不是理论风险：Steam 装在 `S:\Program Files (x86)` 时，只声明 `C:\Program Files`
+> 的清单把它判成了 `not_installed`，因此加了 `registry_value` 探针并要求
+> **每个候选都有一条不依赖盘符的证据**。
 
 ### Resources
 

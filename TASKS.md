@@ -251,11 +251,12 @@
     最后一条才是本场景的存在理由——前三条在单测层用桩就能验。
   - 红绿：摘掉 `stdin=subprocess.DEVNULL` → 场景⑨ 9.33s 内红（客户端先断），
     单测 `test_run_commands_executes_and_parses_version` 同时红；还原后全绿
-- **口径**：`pytest tests/ -q` = 425 passed / **9 deselected**；
-  `pytest -m e2e -q` = 9 passed / 425 deselected。说「425」时要带上
+- **口径**：`pytest tests/ -q` = 441 passed / **9 deselected**；
+  `pytest -m e2e -q` = 9 passed / 441 deselected。说「441」时要带上
   「另有 9 个 e2e 默认不收集」，否则会被误读成总数。
   （本行随每次落地更新：NE-8 时为 314，NE-9「工具使用统计」落地后为 343，
-  NE-10「工具自动发现」落地后为 411，真机端到端 + 发现层三处修复后为 425）
+  NE-10「工具自动发现」落地后为 411，真机端到端 + 发现层三处修复后为 425，
+  Steam 假阴性纠正（`registry_value` 探针）后为 441）
 - **手工脚本**（不在上面 9 个里）：
   `"<pyenv 3.12 python>" tests/e2e/manual_install_gate.py`——验「已授权时
   install.command 真的被提交给 shell」，依赖本机 npm，故保留手工。
@@ -521,10 +522,11 @@
 `tmp_path` 合成数据、不碰用户真机**；真机结果由客户端调一次 `discover_tools` 得到。
 本轮因此没有读取过用户的 `LOCALAPPDATA` / `PATH` 内容。
 
-- [x] **`src/discovery.py`（新模块，425 行）+ `data/discovery.json`（9 个候选）** -
+- [x] **`src/discovery.py`（新模块，落地时 425 行；同日晚补 `registry_value` 探针后 653 行）+ `data/discovery.json`（9 个候选）** -
       声明式候选清单（scoop / powertoys / winget / quicker / utools / everything /
-      node / python / steam）+ 三类探测：`path_exists`（能下结论）、`dir_count`
-      （只补充证据，目录空不等于没装）、命令是否在 PATH（`shutil.which`，**不 spawn**）
+      node / python / steam）+ 三类探测（落地时三类：`path_exists`（能下结论）、`dir_count`
+      （只补充证据，目录空不等于没装）、命令是否在 PATH（`shutil.which`，**不 spawn**）；
+      第四类 `registry_value` 是同日晚为 Steam 假阴性加的，见「真机端到端打通」缺陷④）
 - [x] **结论三态：`hit` / `miss` / `inconclusive`** - `{ENV}` 位置因为环境变量没设
       而没检查成时必须判「不知道」而不是「没装」，否则探测面自己制造假结论；
       `miss` 要求**所有**能下结论的维度都说没有、且没有维度没检查成。
@@ -624,9 +626,12 @@
         Everything `C:\Program Files\Everything\Everything.exe`、
         Scoop `S:\Libs\Scoop\apps`、uTools `%APPDATA%\uTools\plugins`、
         node `C:\Program Files\nodejs\node.exe`
-      - **对未完成 Task 的直接影响**：Steam 判 `not_installed`（中信心）→ P0「接入 Steam」的
-        本机阻塞项得到独立佐证；Scoop / PowerToys 判 `installed`（高信心）→ 两条 P2
-        确实**可实测**；6 个 `unregistered` 候选就是现成的下一步接入清单
+      - **对未完成 Task 的直接影响**：Scoop / PowerToys 判 `installed`（高信心）→ 两条 P2
+        确实**可实测**；6 个 `unregistered` 候选就是现成的下一步接入清单。
+        ~~Steam 判 `not_installed`（中信心）→ P0「接入 Steam」的本机阻塞项得到独立佐证~~
+        **这条当时读错了**：Steam 本机明明装着（`S:\Program Files (x86)\Steam`），
+        `not_installed` 是清单只声明 `C:\Program Files` 两处造成的**假阴性**，
+        不是「本机没有」——见下「缺陷④」
 - [x] **缺陷① 命令解析取到无扩展名垫片 → `[WinError 193]`** - 根因已从 CPython 源码坐实：
       `shutil.which` 在 Windows 上把候选建成 `files = [cmd] + [cmd + ext for ext in pathext]`
       并**目录外层、候选内层**循环，即**每个 PATH 目录都先试裸名**；而 Windows 的
@@ -662,6 +667,37 @@
       `ProgramFilesDir` / `ProgramFilesDir (x86)`），`REG_EXPAND_SZ` 展开后仍残留 `%`
       照样判取不到；**三态纪律一字未改**——取不到仍是 `inconclusive`，
       绝不退化成相对路径去试存在性（`731201f`）
+- [x] **缺陷④ 声明式路径穷举不出「装在非常规盘」→ Steam 假阴性** - 真机复核发现自己
+      写进文档的结论是错的：Steam 本机装着（`S:\Program Files (x86)\Steam`，16 个已安装
+      appid、3 个 library），而清单只声明 `{ProgramFiles(X86)}\Steam\steam.exe` 与
+      `{ProgramFiles}\Steam\steam.exe` 两处 C 盘位置，两个探针全 miss → 折成
+      `not_installed`（中信心）。这不是「中信心就够了」的口径问题，是**结构性盲区**：
+      只要安装位置不在声明模板里，探测面就无声缩小，而返回体里的 `note` 只说
+      「探测面不是穷举」，读的人不会知道自己恰好撞上的是哪一例。
+      修复：给发现层加第四类只读探针 `registry_value`（`hive` / `key` / `value` /
+      `require_exists`），读安装器自己维护的登记值——本机权威值实测为
+      `HKCU\Software\Valve\Steam\SteamExe` = `s:/program files (x86)/steam/steam.exe`
+      （REG_SZ、正斜杠、盘符小写，所以探针要先归一分隔符）。读数分四档，
+      **只有「键/值不存在 / 值不是非空字符串 / 登记值指向的路径已失效」判 miss**，
+      权限不足、非 Windows、`REG_EXPAND_SZ` 展开后仍残留 `%` 一律 `inconclusive`，
+      与三态纪律同构。清单里 steam 候选补这条探针后，本机整份清单从
+      `8 installed / 1 not_installed / 0 unknown` 变为 **`9 / 0 / 0`**，
+      steam 判 `installed`（高信心）且证据两行分别是「登记值命中 + 声明位置落空」。
+      顺带修掉一个红绿才暴露的次生盲区：新探针类型若忘了在 `run_probes()` 接线，
+      会掉进 path 流程、而 `probe.get("path", "")` 的空串经 `Path("")` 就是当前目录、
+      **存在** → 假命中；现在未接线的类型一律判 `inconclusive`（`test_unwired_probe_kind_never_becomes_a_false_hit`）。
+      **未接入 Steam**（用户口径「暂时不新接入了」）：这条只纠正发现层的事实结论与
+      清单表达力，`data/tools/` 里没有新增 steam 条目
+- [x] **测试：+16 条（425 → 441）** - `tests/test_discovery.py` 注册表探针段 12 条
+      （登记值命中含正斜杠归一 / 值不存在判 miss / 僵尸登记判 miss / 权限不足判
+      inconclusive / 展开残留判 inconclusive / `require_exists=false` 只看登记 /
+      非 Windows 判 inconclusive / 登记值把声明路径全 miss 的候选救回 installed /
+      未接线类型不假命中 / 清单校验 6 组参数化 / 仓库 steam 候选必须带不依赖盘符的
+      证据），`FakeWinreg` 增 `raises` 以区分「不存在」与「读不到」。
+      红绿三次：把 `FileNotFoundError` 并回通用 `OSError` → `absent 判 miss` 红；
+      `require_exists` 默认翻成 `false` → 僵尸登记与 hit 证据结构两条红；
+      摘掉 registry 接线 → 7 条红（含救回 installed 的回归用例，第一次变异时它
+      因为假命中而没红，于是补了逐行证据断言 + 未接线守卫）
 - [x] **测试：+14 条（411 → 425），e2e 场景 8 → 9** - `tests/test_discovery.py` 补命令
       解析 7 条（垫片替换 / 非 Windows 原样返回 / 命令不存在 / PATHEXT 顺序且跳过非
       可执行后缀 / 目录优先于后缀 / 无兄弟可执行文件时保留 which 结果 /
@@ -793,7 +829,12 @@
    没装」的事实用；`unknown` 更进一步——连一个位置都没检查成（`{ENV}` 在进程环境
    与注册表回退两处都取不到；mcp 客户端拉起 server 时会剥掉 `ProgramFiles` 等
    非白名单变量，所以注册表回退是必需的，见 `731201f`）。
-   这条限制由返回体的 `note` 每次自证，不靠调用方读文档
+   这条限制由返回体的 `note` 每次自证，不靠调用方读文档。
+   **它已被真机兑现成一次真实的假阴性**（2026-10-18 晚）：Steam 装在 `S:\Program Files
+   (x86)\Steam`，清单只声明 C 盘两处 → 判 `not_installed`，而文档当时把它当成了
+   「本机没装」的证据。修法是给清单加**不依赖盘符的证据**（`registry_value` 读安装器
+   自己写的登记值），并立一条维护规矩：**每个候选都该有一条不依赖盘符的证据**，
+   否则「没发现」迟早会被再读成「没有」
 - ~~**本期没在用户真机上跑过探测**（授权口径：代码先行）：仓库内单测与协议回环用例
    全部用 `tmp_path` 合成的假目录、假 PATH、假清单，只有两条用例**静态**读仓库清单
    （校验它合规、且路径只用 `{ENV}` token）。真实结论要等客户端调一次 `discover_tools`~~
@@ -802,7 +843,10 @@
    0 unknown`、版本号 scoop 0.5.3 / winget 1.12.350 / node 22.22.2 / python 3.12.0；
    这一跑同时抓出并修掉了三个只在真机上现形的缺陷（命令解析取到无扩展名垫片、
    子进程继承 stdio 管道打死网关、`{ENV}` 只读进程环境导致四个假 unknown），
-   详见「真机端到端打通（P1 收尾，2026-10-18 晚）」
+   详见「真机端到端打通（P1 收尾，2026-10-18 晚）」。
+   **其中「1 not_installed = Steam 没装」这个结论本身也是错的**：同日晚复核发现
+   Steam 装在 S 盘，属第四个缺陷（发现面假阴性），修法是加 `registry_value` 探针；
+   修完同一台机器的整份清单是 **`9 installed / 0 not_installed / 0 unknown`**
 - ~~`data/backend-tools/*.json` 是自动生成的缓存却受 git 跟踪，多实例在跑时
   `lastSynced` 会被反复改写~~ → 已解决（A14）：运行时缓存整体迁到
   `%LOCALAPPDATA%\.awam-tool-manager`，仓库里只剩人工维护的 `data/tools/`
@@ -821,17 +865,23 @@
 ## 三、待完成 ⏳
 
 ### P0 - 核心打通
-- [ ] 接入 Steam（steam-local-mcp）— ⚠️ 本机未安装 Steam，无法端到端实测
-      （2026-10-18 真机 `discover_tools` 独立佐证：判 `not_installed` / 中信心，
-      声明的两处位置 `C:\Program Files (x86)\Steam\steam.exe`、
-      `C:\Program Files\Steam\steam.exe` 都检查成且都不存在；这条 P0 的阻塞是
-      **本机没有 Steam**，不是集成缺陷——要实测得先装或换机器）
+- [ ] 接入 Steam（steam-local-mcp）— ⚠️ **阻塞不是「本机没装」，是「还没接」**（2026-10-18 晚纠正）：
+      本机 Steam 装着，位置在 `S:\Program Files (x86)\Steam`（权威登记值
+      `HKCU\Software\Valve\Steam` 的 `SteamPath` / `SteamExe`），library 声明 3 个
+      （`S:\Program Files (x86)\Steam` 5 个 appmanifest、`D:\03Games\SteamLibrary` 11 个、
+      `E:\Games\SteamLibrary` 目录当前不存在），合计 16 个已安装 appid。
+      早先那句「真机 `discover_tools` 判 `not_installed` / 中信心，佐证本机没有 Steam」
+      是**发现清单的假阴性**——它只声明了 `C:\Program Files` 两处位置，装在 S 盘就全落空；
+      已随第四类探针 `registry_value` 修掉，现在判 `installed` / 高信心。
+      所以这条 P0 本机可实测条件齐备，要先定的是接入形态：读本地 `appmanifest_*.acf` /
+      `libraryfolders.vdf` 自研，还是接第三方 steam-local-mcp（后者是 MCP 后端，
+      走 `kind=mcp` + `connection`，破坏性门禁要按实际子工具清单配 `destructiveTools`）
 - [ ] 接入 npm（npm MCP）— ⚠️ 需求待澄清：npm 官方无 MCP server，需明确接哪个包
 
 ### P1 - 体验完善
 - [x] 工具自动发现 — ✅ 已完成（2026-10-18，见「工具自动发现（P1）」小节）：
       `data/discovery.json` 声明候选清单 + `src/discovery.py` 只读探测
-      （路径存在 / 目录条目数 / 命令是否在 PATH），第 18 个对外工具
+      （路径存在 / 注册表登记值 / 目录条目数 / 命令是否在 PATH），第 18 个对外工具
       `discover_tools` 给出 `installed` / `not_installed` / `unknown` 三态结论；
       取版本号要显式 `run_commands=true`。**本期口径**：代码先行，仓库内单测全部
       跑 `tmp_path` 合成数据、不探测用户真机，真机结论由客户端调一次 `discover_tools` 得到
@@ -997,7 +1047,7 @@ awam-tool-manager/
 │   └── schema.py               # 两层数据的 JSON Schema 校验 + **文档生成源**
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                      # 18 个 test_*.py（425 passed）+ 9 个 e2e 场景（默认不收集）
+└── tests/                      # 18 个 test_*.py（441 passed）+ 9 个 e2e 场景（默认不收集）
     ├── test_store.py
     ├── test_registry.py
     ├── test_registry_policy.py

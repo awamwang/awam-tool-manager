@@ -942,7 +942,7 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
         name="discover_tools",
         handler=_handle_discover_tools,
         description=(
-            "发现本机工具：按声明式候选清单做只读探测（路径存在 / 目录条目数 / 命令是否在 PATH），"
+            "发现本机工具：按声明式候选清单做只读探测（路径存在 / 目录条目数 / 注册表登记值 / 命令是否在 PATH），"
             "对照已登记工具给出 installed / not_installed / unknown 结论（默认不执行任何命令）"
         ),
         input_schema={

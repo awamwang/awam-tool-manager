@@ -252,24 +252,32 @@ class FakeHandle:
 
 
 class FakeWinreg:
-    """只覆盖 `discovery._reg_value` 用到的四个入口"""
+    """只覆盖 `discovery._read_reg_string` 用到的四个入口
+
+    `raises` 按 `(hive, key, name)` 抛指定异常，用来模拟「键存在但读不到」
+    （权限/视图问题）——这条路径必须和「值不存在」分开，见注册表探针用例。
+    """
 
     HKEY_CURRENT_USER = "HKCU"
     HKEY_LOCAL_MACHINE = "HKLM"
     REG_SZ = 1
     REG_EXPAND_SZ = 2
 
-    def __init__(self, values=None, expand_result=None):
+    def __init__(self, values=None, expand_result=None, raises=None):
         self.values = dict(values or {})
         self.expand_result = expand_result
+        self.raises = dict(raises or {})
         self.queries: list[tuple] = []
 
     def OpenKey(self, hive, key):
         return FakeHandle(self, hive, key)
 
     def QueryValueEx(self, handle, name):
-        self.queries.append((handle.hive, handle.key, name))
-        got = self.values.get((handle.hive, handle.key, name))
+        target = (handle.hive, handle.key, name)
+        self.queries.append(target)
+        if target in self.raises:
+            raise self.raises[target]
+        got = self.values.get(target)
         if got is None:
             raise FileNotFoundError(name)  # OSError 的子类，与真实缺值同路径
         return got
@@ -382,6 +390,213 @@ def test_program_files_resolves_on_windows_without_the_env_var(monkeypatch):
     path, unresolved = discovery.expand_path("{ProgramFiles}")
     assert unresolved is None, f"注册表回退未生效：{unresolved}"
     assert path.name.lower() == "program files"
+
+
+# ---------------- registry_value 探针（不依赖盘符的权威登记） ----------------
+
+
+def reg_probe(**kw):
+    data = {"probe": "registry_value"}
+    data.update(kw)
+    return data
+
+
+STEAM_KEY = "Software\\Valve\\Steam"
+
+
+def test_registry_value_hit_uses_the_registered_path(fake_root, monkeypatch):
+    """登记值本身就是安装位置：读它，不用穷举「装在哪个盘」
+
+    值按真机 Steam 的形态给——正斜杠、盘符小写（`s:/program files (x86)/steam/steam.exe`），
+    所以探针必须先归一分隔符再试存在性。
+    """
+    exe = fake_root / "steam.exe"
+    exe.write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        discovery,
+        "winreg",
+        FakeWinreg({("HKCU", STEAM_KEY, "SteamExe"): (str(exe).replace("\\", "/"), FakeWinreg.REG_SZ)}),
+    )
+
+    evidence, verdict = discovery.run_probes(
+        cand("steam", probes=[reg_probe(key=STEAM_KEY, value="SteamExe")])
+    )
+    assert verdict == discovery.VERDICT_HIT
+    row = evidence[0]
+    assert row["ok"] is True
+    assert Path(row["path"]).name == "steam.exe"
+    assert row["key"] == f"HKCU\\{STEAM_KEY}"
+
+
+def test_registry_value_absent_is_miss(fake_root, monkeypatch):
+    """键/值不存在是事实信号（这个登记记录没有），不是「没检查成」"""
+    monkeypatch.setattr(discovery, "winreg", FakeWinreg())
+    evidence, verdict = discovery.run_probes(
+        cand("steam", probes=[reg_probe(key=STEAM_KEY, value="SteamExe")])
+    )
+    assert verdict == discovery.VERDICT_MISS
+    assert "不存在" in evidence[0]["reason"]
+
+
+def test_registry_value_stale_pointer_is_miss(fake_root, monkeypatch):
+    """卸载/搬家后留下的僵尸登记不该被读成「装着」"""
+    monkeypatch.setattr(
+        discovery,
+        "winreg",
+        FakeWinreg({("HKCU", STEAM_KEY, "SteamExe"): ("Q:\\gone\\steam.exe", FakeWinreg.REG_SZ)}),
+    )
+    evidence, verdict = discovery.run_probes(
+        cand("steam", probes=[reg_probe(key=STEAM_KEY, value="SteamExe")])
+    )
+    assert verdict == discovery.VERDICT_MISS
+    assert "失效" in evidence[0]["reason"]
+
+
+def test_registry_value_unreadable_is_inconclusive(fake_root, monkeypatch):
+    """权限/视图问题 ≠ 没装（与「环境变量取不到判 inconclusive」同一条纪律）"""
+    monkeypatch.setattr(
+        discovery,
+        "winreg",
+        FakeWinreg(raises={("HKCU", STEAM_KEY, "SteamExe"): PermissionError("拒绝访问")}),
+    )
+    _evidence, verdict = discovery.run_probes(
+        cand("steam", probes=[reg_probe(key=STEAM_KEY, value="SteamExe")])
+    )
+    assert verdict == discovery.VERDICT_INCONCLUSIVE
+
+
+def test_registry_value_unexpanded_is_inconclusive(fake_root, monkeypatch):
+    """`REG_EXPAND_SZ` 展开后仍残留 %…% → 没检查成，绝不拿字面量去试存在性"""
+    monkeypatch.setattr(
+        discovery,
+        "winreg",
+        FakeWinreg(
+            {("HKCU", STEAM_KEY, "SteamExe"): ("%NOSUCHVAR%\\steam.exe", FakeWinreg.REG_EXPAND_SZ)},
+            expand_result="%NOSUCHVAR%\\steam.exe",
+        ),
+    )
+    evidence, verdict = discovery.run_probes(
+        cand("steam", probes=[reg_probe(key=STEAM_KEY, value="SteamExe")])
+    )
+    assert verdict == discovery.VERDICT_INCONCLUSIVE
+    assert "未能展开" in evidence[0]["reason"]
+
+
+def test_registry_value_can_skip_the_path_check(fake_root, monkeypatch):
+    """`require_exists=false` 时只问「登记在不在」（版本号这类非路径值）"""
+    monkeypatch.setattr(
+        discovery,
+        "winreg",
+        FakeWinreg({("HKLM", "SOFTWARE\\Valve\\Steam", "Version"): ("1.2.3", FakeWinreg.REG_SZ)}),
+    )
+    evidence, verdict = discovery.run_probes(
+        cand(
+            "steam",
+            probes=[reg_probe(hive="HKLM", key="SOFTWARE\\Valve\\Steam", value="Version",
+                              require_exists=False)],
+        )
+    )
+    assert verdict == discovery.VERDICT_HIT
+    assert evidence[0]["data"] == "1.2.3"
+
+
+def test_registry_value_off_windows_is_inconclusive(monkeypatch):
+    monkeypatch.setattr(discovery, "winreg", None)
+    evidence, verdict = discovery.run_probes(
+        cand("steam", probes=[reg_probe(key=STEAM_KEY, value="SteamExe")])
+    )
+    assert verdict == discovery.VERDICT_INCONCLUSIVE
+    assert "非 Windows" in evidence[0]["reason"]
+
+
+def test_registry_hit_rescues_a_missed_declared_path(fake_root, monkeypatch):
+    """假阴性回归：装在非常规盘时，声明位置全 miss，登记值必须把它救回 installed
+
+    真机第一版清单对 Steam 判的是 `not_installed`（中信心）——它实际装在
+    `S:\\Program Files (x86)\\Steam`，而清单只声明了 `C:\\Program Files` 两处。
+    """
+    exe = fake_root / "steam.exe"
+    exe.write_text("", encoding="utf-8")
+    monkeypatch.setenv(TOKEN, str(fake_root / "Steam"))
+    monkeypatch.setattr(
+        discovery,
+        "winreg",
+        FakeWinreg({("HKCU", STEAM_KEY, "SteamExe"): (str(exe), FakeWinreg.REG_SZ)}),
+    )
+    result = discovery.discover(
+        manifest_of(
+            cand(
+                "steam",
+                kind="app",
+                probes=[
+                    reg_probe(key=STEAM_KEY, value="SteamExe"),
+                    exists_probe(f"{TEMPLATE}\\Steam\\steam.exe"),
+                ],
+            )
+        ),
+        FakeRegistry(),
+    )
+    row = result["candidates"][0]
+    assert row["status"] == "installed"
+    assert row["confidence"] == "high"
+    assert len(row["evidence"]) == 2
+    # 逐行看证据：登记值命中、声明位置落空（不是「没检查成」）
+    assert row["evidence"][0]["probe"] == "registry_value"
+    assert row["evidence"][0]["key"] == f"HKCU\\{STEAM_KEY}"
+    assert row["evidence"][0]["ok"] is True
+    assert row["evidence"][1]["probe"] == "path_exists"
+    assert row["evidence"][1]["ok"] is False
+
+
+def test_unwired_probe_kind_never_becomes_a_false_hit(fake_root):
+    """没接线的探针类型只能判「没检查成」
+
+    它本来会掉进 path 流程，而 `probe.get("path", "")` 给出的空串经 `Path("")`
+    就是当前目录——存在。于是「这个类型压根没实现」会被说成「装着的」。
+    """
+    evidence, verdict = discovery.run_probes(
+        cand("alpha", probes=[{"probe": "registry_value_but_not_wired"}])
+    )
+    assert verdict == discovery.VERDICT_INCONCLUSIVE
+    assert evidence[0]["ok"] is False
+    assert "未实现" in evidence[0]["reason"]
+
+
+@pytest.mark.parametrize(
+    "probe, expect",
+    [
+        (reg_probe(hive="HKEY_CURRENT_USER", key=STEAM_KEY, value="SteamExe"), "hive 取值非法"),
+        (reg_probe(key=STEAM_KEY, value="SteamExe"), None),
+        (reg_probe(value="SteamExe"), "key 必须是非空字符串"),
+        (reg_probe(key=STEAM_KEY), "value 必须是非空字符串"),
+        (reg_probe(key=STEAM_KEY, value="SteamExe", require_exists="yes"), "require_exists 必须是布尔"),
+        (reg_probe(key=STEAM_KEY, value="  "), "value 必须是非空字符串"),
+    ],
+)
+def test_registry_probe_manifest_validation(probe, expect):
+    error = discovery.validate_manifest(manifest_of(cand("steam", probes=[probe])))
+    if expect is None:
+        assert error is None
+    else:
+        assert expect in error
+
+
+def test_repo_steam_candidate_has_a_drive_independent_probe():
+    """仓库清单里的 Steam 必须带登记值探针
+
+    只有声明路径的候选会随安装盘符变卦——这条守卫防止「加个路径就完事」的
+    修法回到老位置。
+    """
+    data = json.loads((ROOT / "data" / "discovery.json").read_text(encoding="utf-8"))
+    steam = next(c for c in data["candidates"] if c["tool_id"] == "steam")
+    kinds = [p["probe"] for p in steam["probes"]]
+    assert "registry_value" in kinds
+    registry = next(p for p in steam["probes"] if p["probe"] == "registry_value")
+    assert (registry["hive"], registry["key"], registry["value"]) == (
+        "HKCU",
+        STEAM_KEY,
+        "SteamExe",
+    )
 
 
 # ---------------- run_probes ----------------

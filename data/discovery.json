@@ -185,6 +185,13 @@
       "purpose": "Steam 客户端（P0 待接入，先由发现确认本机是否安装）",
       "probes": [
         {
+          "label": "Steam 自己登记的 steam.exe 位置",
+          "probe": "registry_value",
+          "hive": "HKCU",
+          "key": "Software\\Valve\\Steam",
+          "value": "SteamExe"
+        },
+        {
           "label": "Steam 主程序",
           "probe": "path_exists",
           "paths": [
