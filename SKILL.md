@@ -30,7 +30,10 @@ description: 统一工具管理器，维护本机工具名单，提供统一的�
 - **工具发现**：`discover_tools` 按仓库内声明式候选清单（`data/discovery.json`）
   做**只读**探测（路径存在 / 目录条目数 / 命令是否在 PATH），对照已登记工具给出
   `installed` / `not_installed` / `unknown`；默认不执行任何命令，取版本号要显式传
-  `run_commands=true`。探测面是声明出来的、不是穷举，「没发现」不等于「本机没有」
+  `run_commands=true`。探测面是声明出来的、不是穷举，「没发现」不等于「本机没有」；
+  `{ENV}` 位置在进程环境取不到时会回退查 Windows 注册表（MCP 客户端拉起 server
+  时按白名单剥变量，`ProgramFiles` / `SCOOP` 这类常常不在环境里），两处都取不到
+  才判 `unknown`
 
 ## 目录结构
 
@@ -56,7 +59,7 @@ awam-tool-manager/
 │   └── schema.py             # 两层数据的 JSON Schema 校验 + 文档生成源
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 411 个用例（另有 8 个真实 e2e 用例默认不收集，
+└── tests/                    # 425 个用例（另有 9 个真实 e2e 用例默认不收集，
                               # `pytest -m e2e` 显式跑；含真实 MCP 会话与文档漂移检测）
 ```
 
@@ -96,7 +99,7 @@ awam-tool-manager/
 | `sync_launcher_actions` | `tool_id`(必填) | 手动同步启动器动作清单 |
 | `get_tool_help` | `tool_id`(必填)、`run`、`timeout`、`allowDestructive` | 取工具帮助信息：文档链接 + 能力清单（mcp 子工具 / launcher 动作）+ 帮助命令预览；**默认只读数据、不 spawn**，`kind=app` 显式 `run=true` 才执行帮助命令（`--help` / 条目 `help.args`）并捕获输出 |
 | `get_usage_stats` | `days`、`tool_id` | 查询调用使用统计（只读 `<runtime>/usage.log`，不碰任何工具）：按天 / 按对外工具 / 按目标 `tool_id` 聚合调用量、成败与耗时；`days` 按日历日含今天、默认 7、越界收敛到 1~365，`tool_id` 按记录里的 `target` 精确匹配 |
-| `discover_tools` | `run_commands`、`status` | 按 `data/discovery.json` 声明的候选清单发现本机工具：`path_exists` / `dir_count` / 命令是否在 PATH 三类**只读**探测，对照已登记工具输出 `status`（installed / not_installed / unknown）+ `confidence` + `registered`；**默认不 spawn**，`run_commands=true` 才执行清单里的版本命令取版本号；`status` 只裁剪返回的候选，`summary` 仍是整份清单的计数 |
+| `discover_tools` | `run_commands`、`status` | 按 `data/discovery.json` 声明的候选清单发现本机工具：`path_exists` / `dir_count` / 命令是否在 PATH 三类**只读**探测，对照已登记工具输出 `status`（installed / not_installed / unknown）+ `confidence` + `registered`；**默认不 spawn**，`run_commands=true` 才执行清单里的版本命令取版本号（Windows 上按可执行后缀解析出真目标再无 shell 执行，子进程 `stdin=DEVNULL` 以保证不污染服务通道）；`status` 只裁剪返回的候选，`summary` 仍是整份清单的计数 |
 
 > `kind=launcher`（启动器，如 Quicker / uTools）不是 MCP：没有长连接，调用是一次性的。
 > - **Quicker**：`QuickerStarter.exe -c<秒> "runaction:<ID或名称>?参数"`，stdout 回传动作
@@ -175,6 +178,13 @@ CallToolResult 透传；生产环境 pyenv 3.12 即 1.29.0）。
   需管理员改策略）。策略文件在服务启动时校验，坏策略让启动失败而非静默失效；无该文件时
   全部走现行为（零配置零变更）。破坏性判定审计（含策略判决）追加到运行时目录的 `audit.log`。
 - 不合规的 `data/tools/*.json` 会被跳过并向 stderr 告警，不会让整个服务不可用
+- **服务内任何 spawn 都必须 `stdin=DEVNULL`**：本服务通过 stdio 管道与上游网关通信，
+  子进程若继承这条 stdin（Windows 上 `.cmd` / `.bat` 垫片经 cmd.exe 尤其如此），
+  会**从协议通道里读走字节**，等价于吞掉入站 JSON-RPC——真机实测整个 server 随即退出。
+  `backend_client.py` / `app_launcher.py` / `tool_help.py` / `discovery.py` 四条 spawn
+  路径都按这条纪律走，新增第五条时不要漏
+- **改完服务端代码要用 MCP 客户端验证前，先重启那条连接**：stdio server 是常驻进程，
+  Python 只在 import 期读源码，不重启则拿到的仍是旧行为的结论
 - **`install.command` 默认不被自动执行**（P0 修复）：它写在进版本库的数据文件里、
   且会经 shell 执行，旧逻辑让它在「服务启动预热」和 `start_backend` 两条路径上
   无条件运行——病根是「没有调用方意图」的执行，与本技能「副作用须由显式调用触发」

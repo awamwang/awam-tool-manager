@@ -96,17 +96,17 @@ awam-tool-manager/
 │   └── runtime_paths.py      # 运行时目录解析 + 旧路径迁移
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 18 个用例文件，411 passed（含真实 MCP 会话与文档漂移检测）
-                              # 另有 tests/e2e/ 8 个真实会话用例，默认不收集
-    └── e2e/                  # 真实子进程 / 真实 stdio 端到端层（ARC-P3-02）：8 个用例
+└── tests/                    # 18 个用例文件，425 passed（含真实 MCP 会话与文档漂移检测）
+                              # 另有 tests/e2e/ 9 个真实会话用例，默认不收集
+    └── e2e/                  # 真实子进程 / 真实 stdio 端到端层（ARC-P3-02）：9 个用例
                               # **默认不收集**（起真实子进程、慢、依赖本机解释器），
                               # 发布 / CI 前须显式跑 `pytest -m e2e -q`；另有
                               # manual_install_gate.py（依赖本机 npm，手工跑，不进 pytest）
 ```
 
-> **用例数口径（2026-10-18 更新）**：`pytest tests/ -q` = **411 passed**（另有 8 个
-> e2e 用例被 deselect）。411 **不是**全部用例数——真实 e2e 层不进默认收集，
-> 总数应表述为「411（默认）+ 8（e2e，`pytest -m e2e`）= 419」。
+> **用例数口径（2026-10-18 更新）**：`pytest tests/ -q` = **425 passed**（另有 9 个
+> e2e 用例被 deselect）。425 **不是**全部用例数——真实 e2e 层不进默认收集，
+> 总数应表述为「425（默认）+ 9（e2e，`pytest -m e2e`）= 434」。
 
 运行时数据（**不在仓库**，A14 起）：`%LOCALAPPDATA%\.awam-tool-manager/`
 （环境变量 `AWAM_RUNTIME_DIR` 可覆盖；server 启动时自动从旧路径迁移）
@@ -222,9 +222,19 @@ awam-tool-manager/
 |---|---|---|
 | `path_exists` | 能 | 声明的多个位置逐个试，第一个存在即命中；位置用 `{ENV}` 模板 |
 | `dir_count` | 不能 | 只补充证据（装了几个包）——目录空不等于没装 |
-| 命令是否在 PATH | 能 | `shutil.which`，**不 spawn**；版本号要显式 `run_commands=true` |
+| 命令是否在 PATH | 能 | `resolve_executable()`（内含 `shutil.which`），**不 spawn**；版本号要显式 `run_commands=true` |
 
-结论三态 `hit` / `miss` / **`inconclusive`**：`{ENV}` 取不到就是「这个位置没检查成」，
+`{ENV}` 取值有**两个来源**：先读进程环境，取不到再回退查 Windows 注册表
+（`HKCU\Environment` → `HKLM\...\Session Manager\Environment` → `ProgramFilesDir` /
+`ProgramFilesDir (x86)`）。回退是必需的而不是锦上添花：带 server 的宿主给多少环境
+变量是宿主的决定——mcp SDK 只透传 `DEFAULT_INHERITED_ENV_VARS` 白名单（含
+`PATH` / `PATHEXT` / `LOCALAPPDATA`，**不含** `ProgramFiles`、`ProgramFiles(x86)`、
+用户级 `SCOOP`），别的宿主又缺另一套，只读进程环境会把大片真实存在的安装位置判成
+`unknown`（真机实测：SDK 通道 4 个假 unknown → 0 个；Qoder 原生通道缺
+`ProgramFiles(x86)` 与 `SCOOP`，steam 曾因此判 unknown、scoop 的 `dir_count` 报
+「未能展开: SCOOP」，回退后两者都给出确定结论）。
+
+结论三态 `hit` / `miss` / **`inconclusive`**：`{ENV}` 两处都取不到就是「这个位置没检查成」，
 绝不回退成相对路径去试存在性——那会把「没设环境变量」伪装成「这个路径不存在」。
 `status` / `kind` 与工具条目共用词表，所以发现结果能直接回填 `list_tools` 的筛选参数。
 字段表与示例见 [`format.md`](format.md) 的「发现候选清单」一节。
@@ -289,7 +299,7 @@ awam-tool-manager/
 | `app_launcher.py` | 188 | `kind=app` 的启动执行（`launch_tool` 的 `execute=true` 路径）：`create_subprocess_exec` 无 shell、stdio 三件套 DEVNULL（A8）、`shutil.which` 预检、观察窗口（默认 5s / 封顶 30s）区分「早退报退出码」与「仍在运行报 running」；运行中进程由模块级注册表强引用保活（CPython transport.close() 会 kill 运行中子进程） | `errors`、`anyio` |
 | `tool_help.py` | 256 | 帮助信息分层（`get_tool_help` 的底座）：`resolve_help_command()`（`help.command` > `launch.command`，`help.args` > `--help`，**永不复用 `launch.args`**；timeout 默认 5s / 封顶 30s）+ `entry_help` / `backend_summary` / `launcher_summary` 纯取数 + `run_help_command()`（`create_subprocess_exec` 无 shell、PIPE 捕获、UTF-8→GBK→replace 三级解码、超时必 kill、>20000 字符截断、非零但有文本仍算成功） | `errors`、`anyio` |
 | `usage.py` | 209 | 调用使用统计（P3）：`record_call()` 在 dispatch 每个出口 append 一行 JSONL 到 `<runtime>/usage.log`（**刻意不记参数**；落盘失败只向 stderr 告警，绝不把「统计写不进去」变成「工具调用失败」）+ `read_rows()` 容错读取（缺文件算空、坏行跳过并汇总告警一次）+ 日历日窗口 + `aggregate()` 纯函数折成 byName / targets / byDay / errorTypes + `window()` 让结果自证口径。选日志而非内存计数器：网关会整池回收进程，计数必须在盘上才是真相源 | `runtime_paths`、标准库 |
-| `discovery.py` | 425 | 本机工具发现（P1）：`load_manifest()`（文件不存在算空清单，坏文件抛 `DiscoveryError`）+ `validate_manifest()`（调用期校验，与 `policy` 的 import 期快速失败刻意不同）+ `expand_path()`（`{ENV}` 模板，任一 token 取不到就判「没检查成」，**绝不退化成相对路径**）+ `run_probes()` / `fold_verdicts()`（`hit` / `miss` / `inconclusive` 三态）+ `probe_command()`（默认只 `shutil.which` 查 PATH，`run=true` 才无 shell 执行并按 `version_pattern` 取版本号，超时/OSError 都折成结论不抛）+ `discover()`（纯编排，折成 `status` / `confidence` / `registered` + summary）+ `note_for()`（自证探测面是声明出来的、不是穷举） | 标准库 |
+| `discovery.py` | 544 | 本机工具发现（P1）：`load_manifest()`（文件不存在算空清单，坏文件抛 `DiscoveryError`）+ `validate_manifest()`（调用期校验，与 `policy` 的 import 期快速失败刻意不同）+ `expand_path()`（`{ENV}` 模板：进程环境优先、取不到回退 `registry_env_value()` 查注册表，两处都没有才判「没检查成」，**绝不退化成相对路径**）+ `run_probes()` / `fold_verdicts()`（`hit` / `miss` / `inconclusive` 三态）+ `resolve_executable()`（Windows 上校验 which 结果的后缀，无扩展名垫片按「目录外层 / PATHEXT 内层」重扫 PATH 换成真目标）+ `probe_command()`（默认只解析 PATH 不 spawn，`run=true` 才用绝对路径无 shell 执行、`stdin=DEVNULL`、按 `version_pattern` 取版本号，超时/OSError 都折成结论不抛）+ `discover()`（纯编排，折成 `status` / `confidence` / `registered` + summary）+ `note_for()`（自证探测面是声明出来的、不是穷举） | 标准库（Windows 另用 `winreg`） |
 | `tool_specs.py` | 1038 | 对外 MCP 工具声明式注册表（SSOT）：18 条 `ServerToolSpec`（name/description/inputSchema/annotations/handler 同条记录）+ 18 个 handler + `build_mcp_tools()` / `get_spec()` / `validate_specs()`（import 期自检：重名/空 handler/非法注解键快速失败） | `mcp`、`errors`、`launcher_client`、`app_launcher`、`tool_help`、`discovery`、`policy`、`usage` |
 | `policy.py` | 429 | 破坏性门禁 + 部署策略：`decide_destructive(kind, tool, sub_op, args)`（mcp 子工具精确匹配 / launcher 动作级 glob / 缺省回退条目级；`destructive.mode` 参与判定）+ `check_call(name)`（dispatch 前置 deny/白名单）+ `load_policy()`（import 期校验，坏策略快速失败）+ 结构化审计行（stderr + `<runtime>/audit.log`） | `runtime_paths`、`schema`、标准库 |
 | `server.py` | 525 | MCP 协议入口：协议装配 + 查表薄分发（`dispatch_tool` 约 40 行：策略前置 → 查表 → handler → 统一 `json.dumps`，五个出口各记一行使用统计）+ Resources/Prompts + 生命周期（启动预热/状态恢复），启动时后台检测依赖 + 恢复期望状态 | `mcp`、`store`、`registry`、`backend_client`、`runtime_paths`、`launcher_client`、`schema`、`errors`、`tool_specs`、`policy`、`usage` |
@@ -600,7 +610,7 @@ python src/server.py
 | `launcher_client.py` `LauncherClient` | 启动器（非 MCP）适配器：`_scan_quicker` 解析动作清单、**先 json.loads 再取字符串**才能拿到动作名；`run_action` 走一次性外部命令（`-c<秒> "runaction:<ID>?参数"`），输出按 GBK 解码、失败按文本判定（退出码恒为 0） |
 | `app_launcher.py` `launch_app` | `kind=app` 的启动执行：`launch_tool` 传 `execute=true` 才走到这里；只支持 `launch.type=executable`，失败一律走返回载荷（`config_error` 预检不通过 / `runtime_error` 退出码非 0），不抛异常 |
 | `tool_help.py` `resolve_help_command` / `run_help_command` | `get_tool_help` 的两段：前者把条目折成一条帮助命令（`help.command` > `launch.command`、`help.args` > `--help`，**绝不复用 `launch.args`**，timeout 归一化封顶 30s），后者只在显式 `run=true` 时被调用——`shutil.which` 预检 → `create_subprocess_exec` 捕获 stdout/stderr（UTF-8→GBK→replace 三级解码）→ 超时 kill 并报 `runtime_error`；`executed` 字段如实反映「是否真的 spawn 过」 |
-| `discovery.py` `expand_path` / `fold_verdicts` / `probe_command` | P1 工具发现的三段：`expand_path()` 把 `{ENV}` 模板展开成绝对路径，任一 token 取不到就返回「没检查成」而不是相对路径；`fold_verdicts()` 把逐条证据折成 `hit` / `miss` / `inconclusive`（miss 要求**所有**能下结论的维度都说没有，且没有维度没检查成）；`probe_command()` 默认只用 `shutil.which` 判可用性（不 spawn），`run=True` 才用绝对路径无 shell 执行、按 `version_pattern` 取版本号，超时与 OSError 都折成结论返回而不抛 |
+| `discovery.py` `expand_path` / `resolve_executable` / `fold_verdicts` / `probe_command` | P1 工具发现的四段：`expand_path()` 把 `{ENV}` 模板展开成绝对路径，进程环境与注册表回退两处都取不到才返回「没检查成」而不是相对路径；`resolve_executable()` 在 Windows 上把 `shutil.which` 的无扩展名垫片结果换成真目标（裸名优先是 `WinError 193` 的根因）；`fold_verdicts()` 把逐条证据折成 `hit` / `miss` / `inconclusive`（miss 要求**所有**能下结论的维度都说没有，且没有维度没检查成）；`probe_command()` 默认只解析 PATH 判可用性（不 spawn），`run=True` 才用绝对路径无 shell 执行、`stdin=DEVNULL`（子进程继承 server 的 stdio 管道会偷走 inbound JSON-RPC，真机上打死过整个网关）、按 `version_pattern` 取版本号，超时与 OSError 都折成结论返回而不抛 |
 | `policy.py` `decide_destructive` / `check_call` | 统一破坏性门禁与部署策略（ARC-P1-05 Phase 1+2，取代 `tool_specs.py` 的 `_needs_destructive_confirm`）：mcp 子工具精确匹配（`destructiveTools`）/ launcher 动作级 glob（`destructiveActions`，大小写不敏感，匹配动作 id/name/type）/ app 条目级（`launch_tool execute=true` 与 `get_tool_help run=true` 两个执行入口共用同一判定，审计 `action` 跟随实际入口）/ 缺省回退条目级；`data/policy.json` 参与判决（deny 名单、白名单、`destructive.mode`：deny 时策略赢过客户端 `allowDestructive` → `permission_denied`）；未配置新字段/无策略文件时与旧行为逐字等价（`tests/test_policy_gate.py` 冻结旧逻辑对照 + `tests/test_policy_config.py` 默认策略行为锁定）；输出 `Decision` + 结构化审计行（stderr + `<runtime>/audit.log`，含 decision / rule_hit / client_declared / policy_mode） |
 | `server.py` `read_resource` | 返回 `Iterable[ReadResourceContents]` |
 | `server.py` `main` | stdio 事件循环 + 启动后台预热任务 `_prewarm_backends()`，`finally` 取消预热并关闭全部后端 |

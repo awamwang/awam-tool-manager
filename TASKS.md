@@ -184,8 +184,8 @@
 - [x] 合计 **168 passed**（`c40d80d` 时点签署，9 个贡献用例的文件；P0 修复后为 183，见下节）；
      真实后端子进程启停 + 调用回归通过
 
-> 文件数口径（2026-10-18 更新）：`tests/` 下有 **17 个** `test_*.py`（贡献 pytest
-> 用例），另有 `tests/e2e/` 下的 **8 个** e2e 用例文件（8 个场景）——它们**默认不收集**
+> 文件数口径（2026-10-18 更新）：`tests/` 下有 **18 个** `test_*.py`（贡献 pytest
+> 用例），另有 `tests/e2e/` 下的 **9 个** e2e 用例文件（9 个场景）——它们**默认不收集**
 > （`pytest.ini` 的 `addopts = -m "not e2e"`），须 `pytest -m e2e` 显式跑。
 > `tests/e2e/manual_install_gate.py`（原 `tests/test_e2e_install_gate.py`，C 期
 > 改名并去掉 `test_` 前缀）是**手工脚本**，依赖本机 npm，不进 pytest。
@@ -203,11 +203,12 @@
   收集会让日常回归从 6s 变成 30s，还会把本机环境差异带进每次提交。
   默认排除由 `pytest.ini` 的 `addopts = -m "not e2e"` 实现，命令行的 `-m e2e`
   会覆盖它。
-- **当前 8 个场景**：① 起服 + `tools/list` ≡ golden、② 只读工具真调、
+- **当前 9 个场景**：① 起服 + `tools/list` ≡ golden、② 只读工具真调、
   ③ 仓内假后端全链路（含无残留子进程断言）、④ resources / prompts 往返、
   ⑤ policy deny 端到端（后端零调用）、⑥ install 门禁未授权不执行、
   ⑦ `launch_tool` 的 `execute=true` 真启动（含 destructive 门禁双向）、
-  ⑧ `get_tool_help` 的默认零副作用 / 显式 `run=true` 才 spawn。
+  ⑧ `get_tool_help` 的默认零副作用 / 显式 `run=true` 才 spawn、
+  ⑨ `discover_tools` 的 `run_commands=true` 真跑命令且子进程不污染 stdio 通道。
 - **场景② 取证加固（QA #29，2026-10-18）**：原写法用「不存在的 exe 探针」验证
   `launch_tool` 只返回不执行，但违约子进程从未真正 spawn，正常与违约两条路都
   「零证据」——测试实际什么都没验。根因：子进程继承 server stdio 管道 + Windows
@@ -235,12 +236,27 @@
   destructive 门禁摘除的变异本轮被权限策略拦下未跑（同款摘除已在场景⑦验过，
   help 路径的门禁由单测 `test_handler_destructive_entry_blocks_run_until_allowed`
   与场景⑧的断言锁定）
-- **口径**：`pytest tests/ -q` = 411 passed / **8 deselected**；
-  `pytest -m e2e -q` = 8 passed / 411 deselected。说「411」时要带上
-  「另有 8 个 e2e 默认不收集」，否则会被误读成总数。
+- **场景⑨ 新增（2026-10-18 晚，配合真机端到端跑通）**：`discover_tools` 的
+  `run_commands=true` 是**第四条**能 spawn 的路径，也是第一条曾经**把整个网关打死**的
+  路径——真机上子进程默认继承 server 的 stdio 管道，把 inbound JSON-RPC 读走了
+  （客户端 `anyio.BrokenResourceError`，server 日志「工具 discover_tools 执行完成，
+  返回 11550 字符」紧跟「服务退出」）。根因排除过程：同会话 41.9s 后 `list_tools()`
+  仍正常，所以**不是** 30s 后端空闲超时。
+  - 探针 `tests/e2e/stdin_guard_probe.py` 自己报告 stdin 的下场：`EOF`（合格，
+    说明拿到的是 `DEVNULL`）/ `BLOCKED` / `STOLEN=<n> bytes:<内容>`，marker 落的
+    就是这个 verdict；同时打一行 `StdinGuardProbe 1.2.3`，用来证明版本号确实是从
+    **子进程 stdout** 经 `version_pattern` 取回来的。
+  - 四条断言：默认路径当场不 spawn、`run_commands=true` 取到 `version=1.2.3`、
+    verdict 恒为 `EOF`、**调用之后 `list_tools()` 仍返回 18 个工具**（传输通道活着）。
+    最后一条才是本场景的存在理由——前三条在单测层用桩就能验。
+  - 红绿：摘掉 `stdin=subprocess.DEVNULL` → 场景⑨ 9.33s 内红（客户端先断），
+    单测 `test_run_commands_executes_and_parses_version` 同时红；还原后全绿
+- **口径**：`pytest tests/ -q` = 425 passed / **9 deselected**；
+  `pytest -m e2e -q` = 9 passed / 425 deselected。说「425」时要带上
+  「另有 9 个 e2e 默认不收集」，否则会被误读成总数。
   （本行随每次落地更新：NE-8 时为 314，NE-9「工具使用统计」落地后为 343，
-  NE-10「工具自动发现」落地后为 411）
-- **手工脚本**（不在上面 8 个里）：
+  NE-10「工具自动发现」落地后为 411，真机端到端 + 发现层三处修复后为 425）
+- **手工脚本**（不在上面 9 个里）：
   `"<pyenv 3.12 python>" tests/e2e/manual_install_gate.py`——验「已授权时
   install.command 真的被提交给 shell」，依赖本机 npm，故保留手工。
 
@@ -564,10 +580,100 @@
       真实子进程与 stdout 通道不被污染；这两点分别由「清单里只写 `{ENV}` token」的
       静态守卫 + 协议回环用例（真实会话、PATH 换成 tmp bin、`subprocess.run` 换成
       记录型桩）在更低成本上锁定。Scoop 适配器（P2）落地时再补 e2e 场景
+      - **后续（2026-10-18 晚）场景⑨ 已补**：真机跑 `run_commands=true` 时暴露出
+        「子进程继承 server stdio 管道 → 偷走 inbound JSON-RPC → 整个网关死」，
+        这一条**桩级用例结构上抓不到**（桩不真的创建子进程，管道就不会被读走），
+        必须真实子进程 + 真实会话才能验。详见「真机端到端打通（P1 收尾，2026-10-18 晚）」
 - [x] **明确不做** - ①不把发现结果自动回填 `data/tools/`（登记是人的决定）；
       ②不做清单自动生成/穷举扫描（与「声明式」定位冲突，且会扩大读取面）；
       ③不并发探测（首版候选个位数，串行够用）；④不把 `not_installed` 当事实结论用；
       ⑤不在仓库测试里跑任何真实命令面
+
+### 真机端到端打通（P1 收尾，2026-10-18 晚）
+
+背景：用户要求「根据未完成 Task 把本项目加进 MCP 列表，用 MCP 做端到端调用」。
+这一步把 NE-10 留下的**唯一欠账**——「真机结论要等客户端调一次 `discover_tools`」——
+真的还上了，并且那一次调用当场抓出三个只在真机上才会现形的问题。
+
+- [x] **登记进 Qoder MCP 列表** - 经 App MCP 控制面 `manage_mcp add` 登记，条目名
+      `awam-tool-manager`（stdio，command = pyenv 3.12.0 `python.exe`，args = `src/server.py`）；
+      `query_mcp` 复核 `status=ready`、18 个工具全部列出
+- [x] **两条必须留档的机制约束** -
+      ① **会话的 `mcp_call` 路由是会话开始时的快照**：新登记的 server 在**当前**会话里
+      不可路由（两种命名猜测都返回「No connected MCP server offers a tool named …」，
+      `mcp_list` 里也没有它）。要在同一会话里「登记完立刻原生调用」做不到——只能起新会话。
+      用户选定「我起新会话代跑」，因此新会话
+      （`create_chat_session`，sessionId `67f6656b-4fae-4bee-9d73-5fea8bf8ed69`）负责走
+      Qoder 原生通道，本仓库侧先用**真实 stdio MCP 客户端**出结论。
+      ② **常驻 server 进程不会自己重载源码**：第一轮原生调用报回的仍是**修复前**的行为
+      （`command.path` = 无扩展名垫片 `S:\Libs\Scoop\shims\scoop` → `WinError 193`、
+      `{SCOOP}` / `{ProgramFiles(X86)}` 未展开、steam 判 `unknown`、
+      summary `8 / 0 / 1`）。根因不是修复无效，而是那个 stdio 进程**起来的时间在修复之前**，
+      Python 只在 import 期读源码。`manage_mcp retry` 重启同一条连接后原样重跑，逐项翻转：
+      `scoop.cmd` → 0.5.3、`python.bat` → 3.12.0、scoop `dir_count` 14 包 / 4 bucket、
+      steam → `not_installed`、summary `8 / 1 / 0`，且随后 `{}` 存活探针仍正常返回。
+      **结论：改完 server 代码要先重启 MCP 连接再验证**，否则拿的是旧代码的结论
+- [x] **真机结论（修复后，两条独立通道一致）** - 通道 A = 仓库侧真实 stdio MCP 客户端，
+      通道 B = Qoder 原生 MCP 会话（`mcp__awam_tool_manager__discover_tools`，重启连接后）。
+      只读调用：`8 installed / 1 not_installed / 0 unknown`，`registered 3 / unregistered 6`；
+      `run_commands=true`：版本号取回 scoop `0.5.3`、winget `1.12.350`、node `22.22.2`、
+      python `3.12.0`，服务全程存活。修复前同一调用是 `5 installed / 0 not_installed / 4 unknown`
+      （四个 unknown 全是假结论，见下③）
+      - 命中位置实测：PowerToys `C:\Program Files\PowerToys\PowerToys.exe`、
+        Quicker `C:\Program Files\Quicker\QuickerStarter.exe`、
+        Everything `C:\Program Files\Everything\Everything.exe`、
+        Scoop `S:\Libs\Scoop\apps`、uTools `%APPDATA%\uTools\plugins`、
+        node `C:\Program Files\nodejs\node.exe`
+      - **对未完成 Task 的直接影响**：Steam 判 `not_installed`（中信心）→ P0「接入 Steam」的
+        本机阻塞项得到独立佐证；Scoop / PowerToys 判 `installed`（高信心）→ 两条 P2
+        确实**可实测**；6 个 `unregistered` 候选就是现成的下一步接入清单
+- [x] **缺陷① 命令解析取到无扩展名垫片 → `[WinError 193]`** - 根因已从 CPython 源码坐实：
+      `shutil.which` 在 Windows 上把候选建成 `files = [cmd] + [cmd + ext for ext in pathext]`
+      并**目录外层、候选内层**循环，即**每个 PATH 目录都先试裸名**；而 Windows 的
+      `os.access(X_OK)` 对任何存在的文件都成立，所以只要目录里有个无扩展名的 shell 垫片
+      （`S:\Libs\Scoop\shims\scoop`、`.pyenv\pyenv-win\shims\python`）它就胜出，
+      `CreateProcess` 随后报「%1 不是有效的 Win32 应用程序」。与 PATHEXT 在不在环境里无关，
+      去掉 PATHEXT 实测同样返回裸名。
+      修复：`resolve_executable()` 校验 which 结果的后缀是否在可执行集合内，不在就按
+      **目录外层 / PATHEXT 内层**重扫 PATH（与 cmd.exe 语义一致——反过来写会先命中
+      `WindowsApps\python.exe` 这个商店占位符、退出码 9009，本轮实测踩过并已由
+      `test_path_order_beats_suffix_order` 钉住）（`98e3486`）。真机复跑取证：
+      `command.path` = `S:\Libs\Scoop\shims\scoop.cmd`、
+      `C:\Users\Administrator\.pyenv\pyenv-win\shims\python.bat`（都是带后缀的真身），
+      版本号 0.5.3 / 3.12.0 正常取回
+- [x] **缺陷② 子进程继承 server 的 stdio 管道 → 整个网关被打死** - `run_commands=true`
+      第一次真跑时：客户端 `anyio.BrokenResourceError`，server 日志「工具 discover_tools
+      执行完成，返回 11550 字符」之后紧跟「服务退出」。先怀疑 30s 后端空闲超时，
+      用同会话 41.9s 后仍正常的 `list_tools()` **排除**了它，坐实是子进程读走了
+      inbound JSON-RPC。修复：`stdin=subprocess.DEVNULL`——仓内
+      `app_launcher.py:133` / `backend_client.py:187` / `backend_client.py:627` /
+      `tool_help.py:186` 早有先例，discovery 是唯一漏网的那条 spawn 路径（`98e3486`）
+- [x] **缺陷③ `{ENV}` token 只读进程环境 → 假 unknown** - host 给多少环境变量是**宿主的
+      决定，不是我们的**：mcp SDK 拉起 server 时只带 `DEFAULT_INHERITED_ENV_VARS`
+      白名单（`APPDATA / HOMEDRIVE / HOMEPATH / LOCALAPPDATA / PATH / PATHEXT /
+      PROCESSOR_ARCHITECTURE / SYSTEMDRIVE / SYSTEMROOT / TEMP / USERNAME / USERPROFILE`，
+      `mcp/client/stdio/__init__.py`），`ProgramFiles`、`ProgramFiles(x86)`、用户级
+      `SCOOP` 都**不在**里面；而 Qoder 自己的宿主给了 `ProgramFiles` 却没给
+      `ProgramFiles(x86)` 和 `SCOOP`（旧代码那一轮真机调用就是这样：steam 因
+      `{ProgramFiles(X86)}` 没展开而判 `unknown`、scoop 的 `dir_count` 报
+      「未能展开: SCOOP」）。两条真机路径各缺一块，所以「只读进程环境」在任何宿主上
+      都不够。修复：`expand_path()` 增 Windows 注册表回退（`HKCU\Environment` →
+      `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment` →
+      `ProgramFilesDir` / `ProgramFilesDir (x86)`），`REG_EXPAND_SZ` 展开后仍残留 `%`
+      照样判取不到；**三态纪律一字未改**——取不到仍是 `inconclusive`，
+      绝不退化成相对路径去试存在性（`731201f`）
+- [x] **测试：+14 条（411 → 425），e2e 场景 8 → 9** - `tests/test_discovery.py` 补命令
+      解析 7 条（垫片替换 / 非 Windows 原样返回 / 命令不存在 / PATHEXT 顺序且跳过非
+      可执行后缀 / 目录优先于后缀 / 无兄弟可执行文件时保留 which 结果 /
+      「跑的是真目标不是裸垫片」）、注册表回退与 env 展开若干条（含
+      `FakeWinreg` 桩与 Windows-only 的 `ProgramFiles` 用例）、以及
+      `test_run_commands_executes_and_parses_version` 里对 `stdin=DEVNULL` 的断言；
+      新增场景⑨ `tests/e2e/test_e2e_discovery_command.py` + 探针
+      `tests/e2e/stdin_guard_probe.py`
+- [x] **红绿验证** - 摘掉 `stdin=subprocess.DEVNULL` → 场景⑨ 9.33s 内红（客户端先断）
+      且单测同时红；把 PATH 重扫改成后缀外层 → `python` 解析到商店占位符、用例红；
+      去掉注册表回退 → `ProgramFiles` 类候选回到 unknown、用例红。还原后
+      `425 passed / 9 deselected`、`9 passed / 425 deselected` 全绿
 
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
@@ -675,11 +781,19 @@
 - **发现面是声明出来的，不是穷举**（NE-10 的刻意边界）：`discover_tools` 只看
    `data/discovery.json` 里写了的位置和命令，清单没写的安装路径（如自定义 scoop 根、
    绿色软件目录）发现不了。所以 `not_installed` 只是**中信心**结论，不能当「本机确实
-   没装」的事实用；`unknown` 更进一步——连一个位置都没检查成（环境变量没设）。
+   没装」的事实用；`unknown` 更进一步——连一个位置都没检查成（`{ENV}` 在进程环境
+   与注册表回退两处都取不到；mcp 客户端拉起 server 时会剥掉 `ProgramFiles` 等
+   非白名单变量，所以注册表回退是必需的，见 `731201f`）。
    这条限制由返回体的 `note` 每次自证，不靠调用方读文档
-- **本期没在用户真机上跑过探测**（授权口径：代码先行）：仓库内单测与协议回环用例
+- ~~**本期没在用户真机上跑过探测**（授权口径：代码先行）：仓库内单测与协议回环用例
    全部用 `tmp_path` 合成的假目录、假 PATH、假清单，只有两条用例**静态**读仓库清单
-   （校验它合规、且路径只用 `{ENV}` token）。真实结论要等客户端调一次 `discover_tools`
+   （校验它合规、且路径只用 `{ENV}` token）。真实结论要等客户端调一次 `discover_tools`~~
+   → 已解决（2026-10-18 晚）：server 已登记进 Qoder MCP 列表，真机 `discover_tools`
+   跑过（只读 + `run_commands=true` 两次），结论为 `8 installed / 1 not_installed /
+   0 unknown`、版本号 scoop 0.5.3 / winget 1.12.350 / node 22.22.2 / python 3.12.0；
+   这一跑同时抓出并修掉了三个只在真机上现形的缺陷（命令解析取到无扩展名垫片、
+   子进程继承 stdio 管道打死网关、`{ENV}` 只读进程环境导致四个假 unknown），
+   详见「真机端到端打通（P1 收尾，2026-10-18 晚）」
 - ~~`data/backend-tools/*.json` 是自动生成的缓存却受 git 跟踪，多实例在跑时
   `lastSynced` 会被反复改写~~ → 已解决（A14）：运行时缓存整体迁到
   `%LOCALAPPDATA%\.awam-tool-manager`，仓库里只剩人工维护的 `data/tools/`
@@ -699,6 +813,10 @@
 
 ### P0 - 核心打通
 - [ ] 接入 Steam（steam-local-mcp）— ⚠️ 本机未安装 Steam，无法端到端实测
+      （2026-10-18 真机 `discover_tools` 独立佐证：判 `not_installed` / 中信心，
+      声明的两处位置 `C:\Program Files (x86)\Steam\steam.exe`、
+      `C:\Program Files\Steam\steam.exe` 都检查成且都不存在；这条 P0 的阻塞是
+      **本机没有 Steam**，不是集成缺陷——要实测得先装或换机器）
 - [ ] 接入 npm（npm MCP）— ⚠️ 需求待澄清：npm 官方无 MCP server，需明确接哪个包
 
 ### P1 - 体验完善
@@ -708,10 +826,17 @@
       `discover_tools` 给出 `installed` / `not_installed` / `unknown` 三态结论；
       取版本号要显式 `run_commands=true`。**本期口径**：代码先行，仓库内单测全部
       跑 `tmp_path` 合成数据、不探测用户真机，真机结论由客户端调一次 `discover_tools` 得到
+      —— 该口径已于同日晚兑现：server 登记进 Qoder MCP 列表并真跑过只读 +
+      `run_commands=true` 两次，结论与那一次跑抓出的三个缺陷见
+      「真机端到端打通（P1 收尾，2026-10-18 晚）」
       （「工具帮助文档查看」「筛选维度增强」已于 2026-10-18 完成，见上节 P1）
 
 ### P2 - 生态扩展
 - [ ] 接入 Scoop（写 CLI 适配器）— 本机已装（`S:\Libs\Scoop`），可实测
+      （2026-10-18 真机 `discover_tools` 已确认：`{SCOOP}` 由注册表回退解析成功，
+      `installed` / 高信心，`scoop --version` = 0.5.3，`dir_count` 实测
+      **14 个包 / 4 个 bucket**（extras、Faustvii、main、versions）——
+      适配器要列的清单规模已经有了）
 - [ ] 接入 WeGame（腾讯平台）
 - [x] 接入 Quicker — ✅ 已完成（见「启动器接入」）：实测同步 212 个动作、160 个有名称，
       关键词搜索命中（"搜索"→5 条 / "剪贴"→2 条 / "识别二维码"→1 条），
@@ -720,10 +845,18 @@
       source=auto，协议调用成功（`start` 退出码 0）；fire-and-forget 无回传、
       payload 仅文本等限制见勘察报告 §5
 - [ ] 接入 PowerToys — 本机已装，可实测
+      （2026-10-18 真机 `discover_tools` 已确认：主程序
+      `C:\Program Files\PowerToys\PowerToys.exe` 命中，`installed` / 高信心，
+      模块设置目录 `dir_count` = 48 项；`{ProgramFiles}` 同样靠注册表回退才拿到，
+      这条 P2 不存在「本机没装」的阻塞）
 
 ### P3 - 高级功能
 - [ ] 智能路由：根据用户意图自动选择从哪个安装器安装
 - [ ] 版本检测和更新提醒
+      （2026-10-18 真机已验通「取本机版本」这一半：`discover_tools` 的
+      `run_commands=true` 拿到 scoop 0.5.3 / winget 1.12.350 / node 22.22.2 /
+      python 3.12.0。仍缺的是另一半——没有「最新版本」来源，也没有把版本写回
+      `data/tools/` 条目的口径，所以提醒还立不起来）
 - [x] 工具使用统计 — ✅ 已完成（2026-10-18，见「工具使用统计（P3）」小节）：
       dispatch 五个出口各记一行 JSONL 到 `<runtime>/usage.log`（不含参数），
       第 17 个对外工具 `get_usage_stats` 按窗口聚合；刻意不做跨进程计数精度保证、
@@ -855,7 +988,7 @@ awam-tool-manager/
 │   └── schema.py               # 两层数据的 JSON Schema 校验 + **文档生成源**
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                      # 18 个 test_*.py（411 passed）+ 8 个 e2e 场景（默认不收集）
+└── tests/                      # 18 个 test_*.py（425 passed）+ 9 个 e2e 场景（默认不收集）
     ├── test_store.py
     ├── test_registry.py
     ├── test_registry_policy.py

@@ -223,14 +223,18 @@
 | `candidates[].probes[].label` | `string` | - | 证据行显示名，缺省取第一条路径 |
 | `candidates[].probes[].limit` | `int` | - | 仅 `dir_count`：最多列几条（默认 60，封顶 200，`<=0` 返回空） |
 | `candidates[].command` | `object` | - | 命令面；`argv` 非法（空 / 非字符串数组）会被校验拒绝 |
-| `candidates[].command.argv` | `array` | 是 | 无 shell 的参数数组，`argv[0]` 用 PATH 查找判定可用性 |
+| `candidates[].command.argv` | `array` | 是 | 无 shell 的参数数组，`argv[0]` 用 PATH 查找判定可用性（Windows 上把无扩展名垫片换成带可执行后缀的真目标，否则 `CreateProcess` 报 `WinError 193`；真执行时 `stdin=DEVNULL`，不让子进程继承服务的 stdio 管道） |
 | `candidates[].command.preview` | `string` | - | 人读预览，缺省由 `argv` 拼接 |
 | `candidates[].command.version_pattern` | `string` | - | 取版本号的正则（须有捕获组），加载时就编译校验 |
 
 **路径模板**：`{ProgramFiles}`、`{APPDATA}`、`{LOCALAPPDATA}`、`{USERPROFILE}`，
-Windows 变量名里的括号也支持（`{ProgramFiles(x86)}`）。任一 token 在环境里取不到
-→ **该位置判「没检查成」**（`inconclusive`），绝不回退成相对路径去试存在性——
-那会把「没设环境变量」伪装成「这个路径不存在」。
+Windows 变量名里的括号也支持（`{ProgramFiles(x86)}`）。token 取值有两个来源：
+先读进程环境，取不到再回退查 Windows 注册表（用户 `HKCU\Environment` → 机器
+`Session Manager\Environment`，`ProgramFiles` 系列另查 `ProgramFilesDir`）。
+回退不是可选加固——MCP 客户端按白名单裁剪 server 的环境变量，`ProgramFiles` /
+`SCOOP` 这类常常压根不在进程环境里。两处都取不到 → **该位置判「没检查成」**
+（`inconclusive`），绝不回退成相对路径去试存在性——那会把「没设环境变量」
+伪装成「这个路径不存在」。
 
 **结论三态**（`status` 与工具条目共用词表，可直接回填 `list_tools` 的筛选）：
 
