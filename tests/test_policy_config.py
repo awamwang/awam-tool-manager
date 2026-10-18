@@ -114,6 +114,10 @@ def test_bad_policy_fails_at_import(tmp_path):
         env=env,
         capture_output=True,
         text=True,
+        # 子进程 stderr 里的策略文案是 UTF-8；不指定编码时 Windows 会按本地
+        # GBK 解码，reader 线程抛 UnicodeDecodeError → proc.stderr 变成 None
+        encoding="utf-8",
+        errors="replace",
         timeout=120,
     )
     assert proc.returncode != 0, "坏策略必须让 import 失败"
