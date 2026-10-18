@@ -86,10 +86,12 @@ awam-tool-manager/
 │   ├── schema.py             # 两层数据的 JSON Schema 与校验（**文档生成源**）
 │   ├── backend_client.py     # 后端 MCP 客户端与连接池
 │   ├── launcher_client.py    # 启动器适配器（非 MCP：Quicker / uTools）
+│   ├── app_launcher.py       # kind=app 启动执行（launch_tool 的 execute=true 路径）
 │   └── runtime_paths.py      # 运行时目录解析 + 旧路径迁移
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 14 个用例文件，254 passed（含真实 MCP 会话与文档漂移检测）
+└── tests/                    # 15 个用例文件，271 passed（含真实 MCP 会话与文档漂移检测）
+                              # 另有 tests/e2e/ 7 个真实会话用例，默认不收集
     └── e2e/                  # 真实子进程 / 真实 stdio 端到端层（ARC-P3-02）：6 个用例
                               # **默认不收集**（起真实子进程、慢、依赖本机解释器），
                               # 发布 / CI 前须显式跑 `pytest -m e2e -q`；另有
@@ -160,7 +162,7 @@ awam-tool-manager/
 
 `kind` 的语义作用：
 
-- `kind == "app"` → `get_tool_info` 返回 `version` / `tags` / `launch`；`launch_tool` 可返回启动命令。
+- `kind == "app"` → `get_tool_info` 返回 `version` / `tags` / `launch`；`launch_tool` 默认返回启动命令，调用方显式传 `execute=true` 时才由 `app_launcher.launch_app()` 真正 spawn 进程（条目 `destructive` 需 `allowDestructive=true`）。
 - `kind == "mcp"` → `get_tool_info` 额外返回 `backend`（运行状态）与 `backendTools`（子工具目录）；`BackendManager` 才会为其创建连接。
 
 ### 4.2 后端子工具缓存 `<runtime_dir>/backend-tools/{parent_id}.json`
@@ -253,13 +255,14 @@ awam-tool-manager/
 |---|---|---|---|
 | `store.py` | 194 | JSON 文件的读写与目录遍历，读有容错、写走原子替换，无缓存 | 标准库 |
 | `runtime_paths.py` | 93 | 运行时目录解析（`%LOCALAPPDATA%\.awam-tool-manager`，`AWAM_RUNTIME_DIR` 可覆盖）+ 旧路径数据一次性迁移 | 标准库 |
-| `schema.py` | 321 | 两层数据的 JSON Schema 与校验（`jsonschema` 可选，缺失时降级）；**同时是 `docs/format.md` 字段表的唯一生成源** | `jsonschema`(可选) |
+| `schema.py` | 450 | 两层数据的 JSON Schema 与校验（`jsonschema` 可选，缺失时降级）；**同时是 `docs/format.md` 字段表的唯一生成源** | `jsonschema`(可选) |
 | `registry.py` | 141 | 工具查询语义（列表 / 搜索含 `id` / 详情 / 启动信息），加载时过滤不合规条目 | `store`、`schema` |
-| `backend_client.py` | 1481 | 后端 MCP 子进程的连接管理、调用转发、缓存、心跳、日志、**install 执行门禁（P0）** | `mcp`、`store`、`runtime_paths` |
+| `backend_client.py` | 1593 | 后端 MCP 子进程的连接管理、调用转发、缓存、心跳、日志、**install 执行门禁（P0）** | `mcp`、`store`、`runtime_paths` |
 | `launcher_client.py` | 628 | 启动器适配器（非 MCP，Quicker / uTools）：Quicker 走 states 目录解析 + `runaction:` 命令行回传；uTools 走 `plugins/*.asar` 的 plugin.json 纯 Python 解析（Chromium Pickle 封包）+ `utools://` 协议唤起（fire-and-forget） | `store` |
-| `errors.py` | 86 | 业务错误出口：`ErrorType` 常量枚举 + `ToolError` / `fail` / `ensure_success`（P1-04 从 server.py 原样搬出——tool_specs 的 handlers 要用，留在 server.py 会形成循环 import；server 命名空间继续 re-export；P1-03 补齐枚举至 16 种） | 标准库 |
-| `tool_specs.py` | 730 | 对外 MCP 工具声明式注册表（SSOT）：15 条 `ServerToolSpec`（name/description/inputSchema/annotations/handler 同条记录）+ 15 个 handler + `build_mcp_tools()` / `get_spec()` / `validate_specs()`（import 期自检：重名/空 handler/非法注解键快速失败） | `mcp`、`errors`、`launcher_client` |
-| `policy.py` | 375 | 破坏性门禁 + 部署策略：`decide_destructive(kind, tool, sub_op, args)`（mcp 子工具精确匹配 / launcher 动作级 glob / 缺省回退条目级；`destructive.mode` 参与判定）+ `check_call(name)`（dispatch 前置 deny/白名单）+ `load_policy()`（import 期校验，坏策略快速失败）+ 结构化审计行（stderr + `<runtime>/audit.log`） | `runtime_paths`、`schema`、标准库 |
+| `errors.py` | 92 | 业务错误出口：`ErrorType` 常量枚举 + `ToolError` / `fail` / `ensure_success`（P1-04 从 server.py 原样搬出——tool_specs 的 handlers 要用，留在 server.py 会形成循环 import；server 命名空间继续 re-export；P1-03 补齐枚举至 16 种） | 标准库 |
+| `app_launcher.py` | 188 | `kind=app` 的启动执行（`launch_tool` 的 `execute=true` 路径）：`create_subprocess_exec` 无 shell、stdio 三件套 DEVNULL（A8）、`shutil.which` 预检、观察窗口（默认 5s / 封顶 30s）区分「早退报退出码」与「仍在运行报 running」；运行中进程由模块级注册表强引用保活（CPython transport.close() 会 kill 运行中子进程） | `errors`、`anyio` |
+| `tool_specs.py` | 780 | 对外 MCP 工具声明式注册表（SSOT）：15 条 `ServerToolSpec`（name/description/inputSchema/annotations/handler 同条记录）+ 15 个 handler + `build_mcp_tools()` / `get_spec()` / `validate_specs()`（import 期自检：重名/空 handler/非法注解键快速失败） | `mcp`、`errors`、`launcher_client`、`app_launcher`、`policy` |
+| `policy.py` | 426 | 破坏性门禁 + 部署策略：`decide_destructive(kind, tool, sub_op, args)`（mcp 子工具精确匹配 / launcher 动作级 glob / 缺省回退条目级；`destructive.mode` 参与判定）+ `check_call(name)`（dispatch 前置 deny/白名单）+ `load_policy()`（import 期校验，坏策略快速失败）+ 结构化审计行（stderr + `<runtime>/audit.log`） | `runtime_paths`、`schema`、标准库 |
 | `server.py` | 464 | MCP 协议入口：协议装配 + 查表薄分发（`dispatch_tool` 约 12 行，含策略前置检查）+ Resources/Prompts + 生命周期（启动预热/状态恢复），启动时后台检测依赖 + 恢复期望状态 | `mcp`、`store`、`registry`、`backend_client`、`runtime_paths`、`launcher_client`、`schema`、`errors`、`tool_specs`、`policy` |
 | `scripts/generate_format_doc.py` | 148 | 读 `schema.py` 渲染字段表并就地替换 `docs/format.md` 的生成区块；`--check` 做漂移检查 | 标准库、`schema` |
 
@@ -338,7 +341,8 @@ npm/cli 链会阻塞在读 stdin 上永不返回（表现为启动挂死 → 网
 `create_subprocess_shell` 执行——服务启动预热（`_prewarm_backends` →
 `ensure_all_installed`）与 `start_backend`（`start()` 前置 `ensure_installed`），
 既无调用方意图，也无任何 `destructive` / `allowDestructive` 门禁，与
-「`launch_tool` 只返回命令、不实际执行」的取舍正好相反（最小权限倒置）。
+「副作用必须由显式调用触发」的取舍正好相反（最小权限倒置；对照：`launch_tool`
+默认只返回命令，只有显式 `execute=true` 才 spawn）。
 
 修复后是三段式门禁，全部收在 `BackendClient.ensure_installed()` 内：
 
@@ -399,7 +403,7 @@ toolport 网关会**周期性整池回收**它拉起的 server 进程（2026-10-
 | `search_tools` | `keyword`(必填)、`kind` | 关键词搜索 |
 | `list_tools` | `kind` | 列出工具 |
 | `get_tool_info` | `tool_id`(必填) | 工具详情（按 kind 返回不同字段） |
-| `launch_tool` | `tool_id`(必填) | 返回启动命令（不执行） |
+| `launch_tool` | `tool_id`(必填)、`execute`、`wait`、`allowDestructive` | 返回启动命令（默认不执行）；`execute=true` 才 spawn |
 | `call_backend_tool` | `tool_id`、`tool_name`(必填)、`arguments`、`allowDestructive` | 路由调用（A12：命中 `destructiveTools` 子工具时需确认） |
 | `list_backend_tools` | `tool_id`(必填)、`force_refresh` | 后端子工具（含 schema） |
 | `start_backend` | `tool_id`(必填) | 启动后端 + 自动同步 |
@@ -509,7 +513,7 @@ python src/server.py
 |---|---|
 | 搜索不含 `id`（D18） | ✅ `search_tools` 匹配范围加入 `id` |
 | 文档与数据字段漂移（D17） | ✅ `format.md` 明确「两层数据 + 一层对外契约」，补齐 `install` / `actions` / `capabilities` |
-| `launch_tool` 名不副实（D22） | ✅ 描述改为「只返回命令，不实际执行」并标 `readOnlyHint`（未改名，避免破坏已接入客户端） |
+| `launch_tool` 名不副实（D22） | ✅ 描述改为「只返回命令，不实际执行」并标 `readOnlyHint`（未改名，避免破坏已接入客户端）；2026-10-18 起补上显式 `execute=true` 执行路径，描述与 annotations 随之改为「默认只返回命令」+ `openWorldHint`（NE-6） |
 | 无 schema 校验（A1） | ✅ 新增 `src/schema.py`（`jsonschema` 可选依赖），`registry` 跳过不合规条目并告警 |
 | 安全元数据形同装饰（A2） | ✅ 只读工具下发 `readOnlyHint`；`call_backend_tool` 新增 destructive 门禁（`allowDestructive`） |
 | 测试 | ✅ 新增 `test_registry_policy.py`（13 例），合计 54 passed |
@@ -560,7 +564,8 @@ python src/server.py
 | `server.py` `call_tool` | `tools/call` 入口，含意外异常兜底 |
 | `server.py` `dispatch_tool` | 15 个工具的查表分发（`policy.check_call` 策略前置 → `get_spec` → handler → 统一 `json.dumps`；未命中即 `unknown_tool`，策略拒绝即 `permission_denied`） |
 | `launcher_client.py` `LauncherClient` | 启动器（非 MCP）适配器：`_scan_quicker` 解析动作清单、**先 json.loads 再取字符串**才能拿到动作名；`run_action` 走一次性外部命令（`-c<秒> "runaction:<ID>?参数"`），输出按 GBK 解码、失败按文本判定（退出码恒为 0） |
-| `policy.py` `decide_destructive` / `check_call` | 统一破坏性门禁与部署策略（ARC-P1-05 Phase 1+2，取代 `tool_specs.py` 的 `_needs_destructive_confirm`）：mcp 子工具精确匹配（`destructiveTools`）/ launcher 动作级 glob（`destructiveActions`，大小写不敏感，匹配动作 id/name/type）/ 缺省回退条目级；`data/policy.json` 参与判决（deny 名单、白名单、`destructive.mode`：deny 时策略赢过客户端 `allowDestructive` → `permission_denied`）；未配置新字段/无策略文件时与旧行为逐字等价（`tests/test_policy_gate.py` 冻结旧逻辑对照 + `tests/test_policy_config.py` 默认策略行为锁定）；输出 `Decision` + 结构化审计行（stderr + `<runtime>/audit.log`，含 decision / rule_hit / client_declared / policy_mode） |
+| `app_launcher.py` `launch_app` | `kind=app` 的启动执行：`launch_tool` 传 `execute=true` 才走到这里；只支持 `launch.type=executable`，失败一律走返回载荷（`config_error` 预检不通过 / `runtime_error` 退出码非 0），不抛异常 |
+| `policy.py` `decide_destructive` / `check_call` | 统一破坏性门禁与部署策略（ARC-P1-05 Phase 1+2，取代 `tool_specs.py` 的 `_needs_destructive_confirm`）：mcp 子工具精确匹配（`destructiveTools`）/ launcher 动作级 glob（`destructiveActions`，大小写不敏感，匹配动作 id/name/type）/ app 条目级（`execute=true` 的执行入口）/ 缺省回退条目级；`data/policy.json` 参与判决（deny 名单、白名单、`destructive.mode`：deny 时策略赢过客户端 `allowDestructive` → `permission_denied`）；未配置新字段/无策略文件时与旧行为逐字等价（`tests/test_policy_gate.py` 冻结旧逻辑对照 + `tests/test_policy_config.py` 默认策略行为锁定）；输出 `Decision` + 结构化审计行（stderr + `<runtime>/audit.log`，含 decision / rule_hit / client_declared / policy_mode） |
 | `server.py` `read_resource` | 返回 `Iterable[ReadResourceContents]` |
 | `server.py` `main` | stdio 事件循环 + 启动后台预热任务 `_prewarm_backends()`，`finally` 取消预热并关闭全部后端 |
 | `store.py` `load_json` / `save_json` | JSON 读写：读有容错（坏文件跳过），写走 `mkstemp` + `os.replace` 原子替换 |

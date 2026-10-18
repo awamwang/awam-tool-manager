@@ -46,7 +46,8 @@ TOOL_ENTRY_SCHEMA: dict[str, Any] = {
             "type": "string",
             "enum": ["app", "mcp", "launcher"],
             "description": (
-                "工具类型：`app` 普通应用（`launch_tool` 返回命令）、`mcp` 可建后端连接、"
+                "工具类型：`app` 普通应用（`launch_tool` 返回命令，显式 `execute=true` 时启动）、"
+                "`mcp` 可建后端连接、"
                 "`launcher` 启动器（非 MCP 协议，但有可列/可搜/可调用的动作清单，见 `launcher`）"
             ),
         },
@@ -63,7 +64,7 @@ TOOL_ENTRY_SCHEMA: dict[str, Any] = {
         "icon": {"type": "string", "description": "图标路径或 URL"},
         "launch": {
             "type": "object",
-            "description": "**仅 `kind=app`**：启动方式，`launch_tool` 据此返回命令",
+            "description": "**仅 `kind=app`**：启动方式，`launch_tool` 据此返回命令；`execute=true` 时按此 spawn 进程",
             "properties": {
                 "type": {
                     "type": "string",

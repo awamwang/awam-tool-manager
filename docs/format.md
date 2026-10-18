@@ -31,7 +31,7 @@
 | `id` | `string` | ✅ | 工具唯一 ID，**必须与文件名一致**（须匹配 `^[A-Za-z0-9._-]+$`） |
 | `name` | `string` | ✅ | 工具名称（英文/技术名） |
 | `displayName` | `string` | - | 显示名称（中文/用户友好），缺省回落 `name` |
-| `kind` | `string` | ✅ | 工具类型：`app` 普通应用（`launch_tool` 返回命令）、`mcp` 可建后端连接、`launcher` 启动器（非 MCP 协议，但有可列/可搜/可调用的动作清单，见 `launcher`）（取值：`app` / `mcp` / `launcher`） |
+| `kind` | `string` | ✅ | 工具类型：`app` 普通应用（`launch_tool` 返回命令，显式 `execute=true` 时启动）、`mcp` 可建后端连接、`launcher` 启动器（非 MCP 协议，但有可列/可搜/可调用的动作清单，见 `launcher`）（取值：`app` / `mcp` / `launcher`） |
 | `description` | `string` | - | 工具功能描述（参与搜索匹配） |
 | `status` | `string` | - | 安装状态（取值：`installed` / `not_installed` / `unknown`） |
 | `version` | `string` | - | 版本号 |
@@ -39,7 +39,7 @@
 | `website` | `string` | - | 官方网站 |
 | `docUrl` | `string` | - | 文档地址 |
 | `icon` | `string` | - | 图标路径或 URL |
-| `launch` | `object` | - | **仅 `kind=app`**：启动方式，`launch_tool` 据此返回命令 |
+| `launch` | `object` | - | **仅 `kind=app`**：启动方式，`launch_tool` 据此返回命令；`execute=true` 时按此 spawn 进程 |
 | `launch.type` | `string` | - | 启动方式类型（取值：`executable` / `protocol` / `command`） |
 | `launch.command` | `string` | - | 启动命令或可执行文件路径 |
 | `launch.args` | `array` | - | 启动参数（元素建议统一写字符串） |
@@ -208,7 +208,7 @@
 | `search_tools` | `keyword`(必填)、`kind` | 按关键词搜索工具（匹配 `id` / 名称 / 描述 / 标签） |
 | `list_tools` | `kind` | 列出所有工具 |
 | `get_tool_info` | `tool_id`(必填) | 查看工具详情 |
-| `launch_tool` | `tool_id`(必填) | 返回启动命令（**当前不实际执行**） |
+| `launch_tool` | `tool_id`(必填)、`execute`、`wait`、`allowDestructive` | 返回启动命令；**默认只返回、不执行**，显式 `execute=true` 才启动进程（条目 `destructive` 时需 `allowDestructive=true`；`wait` 是执行后的早退观察窗口，默认 5s、封顶 30s） |
 | `call_backend_tool` | `tool_id`、`tool_name`(必填)、`arguments`、`allowDestructive` | 路由调用后端子工具（目标标记 `destructive` 时需 `allowDestructive=true`） |
 | `list_backend_tools` | `tool_id`(必填)、`force_refresh` | 列出后端子工具 |
 | `start_backend` | `tool_id`(必填) | 启动后端并同步目录 |

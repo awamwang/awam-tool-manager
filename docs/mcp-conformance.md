@@ -195,18 +195,23 @@ MCP Tool 支持 `annotations`（`title` / `readOnlyHint` / `destructiveHint` / `
 
 数据文件里已经有 `readOnly` / `destructive` 字段，但此前**没有映射到 Tool 定义**，纯装饰。
 
-**已修复**：`server.py` 新增 `TOOL_ANNOTATION_HINTS` 并在返回工具列表前逐个附加：
+**已修复**：annotations 逐个附加（P1-04 起声明在 `src/tool_specs.py` 的 spec 表里，
+早期实现是 `server.py` 的 `TOOL_ANNOTATION_HINTS` 常量）：
 
 | 类别 | 工具 | hints |
 |---|---|---|
-| 只读 | `search_tools` / `list_tools` / `get_tool_info` / `launch_tool` / `list_backend_tools` / `get_backend_status` / `get_backend_logs` | `readOnlyHint=true`、`destructiveHint=false` |
+| 只读 | `search_tools` / `list_tools` / `get_tool_info` / `list_backend_tools` / `get_backend_status` / `get_backend_logs` | `readOnlyHint=true`、`destructiveHint=false` |
 | 幂等 | `start_backend` / `stop_backend` / `sync_backend_tools` | `idempotentHint=true` |
-| 副作用静态不可知 | `call_backend_tool` | `openWorldHint=true`（**不谎报 readOnly**） |
+| 副作用静态不可知 | `call_backend_tool` / `launch_tool` | `openWorldHint=true`（**不谎报 readOnly**） |
 
 `call_backend_tool` 只标 `openWorldHint` 是刻意的：它转发到任意后端子工具，
 副作用取决于运行时的 `tool_name`，静态断言只读会误导客户端。真正的防护落在
 **转发前的 destructive 门禁**上：目标工具 `destructive=true` 时默认拒绝
 （`errorType: destructive_blocked`），需显式传 `allowDestructive=true`。
+
+`launch_tool` 走同一条判定：默认只返回命令（零副作用），显式 `execute=true` 才
+spawn 进程，条目 `destructive` 时同样需 `allowDestructive=true`；正因为多了这条
+执行路径，它的 `readOnlyHint` 已撤下、改标 `openWorldHint`。
 
 ### 2.5 异常兜底
 

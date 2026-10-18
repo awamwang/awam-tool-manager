@@ -29,7 +29,7 @@
 - [x] `search_tools` - 搜索工具（关键词 + kind 筛选）
 - [x] `list_tools` - 列出所有工具
 - [x] `get_tool_info` - 查看工具详情
-- [x] `launch_tool` - 返回启动命令信息
+- [x] `launch_tool` - 返回启动命令信息；2026-10-18 起支持显式 `execute=true` 真正执行启动（默认仍只返回命令）
 - [x] `call_backend_tool` - 路由调用后端 MCP 的子工具
 - [x] `list_backend_tools` - 列出后端子工具（含完整参数 schema）
 - [x] `start_backend` / `stop_backend` / `get_backend_status` - 后端进程管理
@@ -181,8 +181,8 @@
 - [x] 合计 **168 passed**（`c40d80d` 时点签署，9 个贡献用例的文件；P0 修复后为 183，见下节）；
      真实后端子进程启停 + 调用回归通过
 
-> 文件数口径（2026-10-17 更新）：`tests/` 下有 **14 个** `test_*.py`（贡献 pytest
-> 用例），另有 `tests/e2e/` 下的 **6 个** e2e 用例文件——它们**默认不收集**
+> 文件数口径（2026-10-18 更新）：`tests/` 下有 **15 个** `test_*.py`（贡献 pytest
+> 用例），另有 `tests/e2e/` 下的 **7 个** e2e 用例文件——它们**默认不收集**
 > （`pytest.ini` 的 `addopts = -m "not e2e"`），须 `pytest -m e2e` 显式跑。
 > `tests/e2e/manual_install_gate.py`（原 `tests/test_e2e_install_gate.py`，C 期
 > 改名并去掉 `test_` 前缀）是**手工脚本**，依赖本机 npm，不进 pytest。
@@ -200,9 +200,10 @@
   收集会让日常回归从 6s 变成 30s，还会把本机环境差异带进每次提交。
   默认排除由 `pytest.ini` 的 `addopts = -m "not e2e"` 实现，命令行的 `-m e2e`
   会覆盖它。
-- **当前 6 个场景**：① 起服 + `tools/list` ≡ golden、② 只读工具真调、
+- **当前 7 个场景**：① 起服 + `tools/list` ≡ golden、② 只读工具真调、
   ③ 仓内假后端全链路（含无残留子进程断言）、④ resources / prompts 往返、
-  ⑤ policy deny 端到端（后端零调用）、⑥ install 门禁未授权不执行。
+  ⑤ policy deny 端到端（后端零调用）、⑥ install 门禁未授权不执行、
+  ⑦ `launch_tool` 的 `execute=true` 真启动（含 destructive 门禁双向）。
 - **场景② 取证加固（QA #29，2026-10-18）**：原写法用「不存在的 exe 探针」验证
   `launch_tool` 只返回不执行，但违约子进程从未真正 spawn，正常与违约两条路都
   「零证据」——测试实际什么都没验。根因：子进程继承 server stdio 管道 + Windows
@@ -210,9 +211,16 @@
   快通道（宽限窗口内 marker 文件出现 = 命令真被执行）+ 慢通道（marker 没出现再
   WMI 扫进程表补刀）；探针脚本与被跑证据文件都复制进 tmp、绝不落仓库。
   自然（继承管道）与重定向两种违约形态均已验证破坏即红
-- **口径**：`pytest tests/ -q` = 254 passed / **6 deselected**；
-  `pytest -m e2e -q` = 6 passed / 254 deselected。说「254」时要带上
-  「另有 6 个 e2e 默认不收集」，否则会被误读成总数。
+- **场景⑦ 新增（2026-10-18，配合 P0「launch_tool 执行启动」）**：验显式
+  `execute=true` 的新副作用面——ok 探针真跑并落 marker（退出码 0）、fail 探针
+  退出码 3 → `isError` + `runtime_error`（与「命令不存在」的 `config_error`
+  可区分）、destructive 条目无 `allowDestructive` → `destructive_blocked` 且
+  **当场**取证 marker 不出现（门禁在 spawn 之前），显式确认后放行并真执行。
+  红绿验证：拆掉 destructive 门禁 → 场景⑦ 红（`:171`）；把默认路径改成也
+  spawn → 场景②与⑦同时红（默认只返回命令的硬契约由两处双重锁定）；还原后全绿
+- **口径**：`pytest tests/ -q` = 271 passed / **7 deselected**；
+  `pytest -m e2e -q` = 7 passed / 271 deselected。说「271」时要带上
+  「另有 7 个 e2e 默认不收集」，否则会被误读成总数。
 - **手工脚本**（不在上面 6 个里）：
   `"<pyenv 3.12 python>" tests/e2e/manual_install_gate.py`——验「已授权时
   install.command 真的被提交给 shell」，依赖本机 npm，故保留手工。
@@ -278,6 +286,40 @@
       → `88c0b2a`(U3 协议唤起) → `0e597e7`(U4 22 用例) → `82871e5`(U5 文档 + 实调记录)
       → `383385d`(QA 遗留加固 4 例) → `000aeec`(用例口径 250→254 同步)；每步后全量回归
 
+### `launch_tool` 真正执行启动（P0，2026-10-18）
+- [x] **新增 `src/app_launcher.py`（188 行）** - `kind=app` 的启动执行底座：
+      `launch_app()` 只支持 `launch.type=executable`；`create_subprocess_exec`
+      **不经 shell**（`command`/`args` 是结构化字段，元字符无机可乘）、stdio 三件套
+      `DEVNULL`（A8 同款，绝不继承 server 管道）、`shutil.which` 预检；失败一律走
+      返回载荷（`config_error` / `runtime_error`）不抛异常，与 `registry.launch_tool`
+      / `LauncherClient.run_action` 的载荷约定一致
+- [x] **观察窗口语义**（`wait`，默认 5s、封顶 30s）- 窗口内退出 → 透传退出码
+      （捕捉「命令存在但一跑就崩」）；窗口到时仍在运行 → `running=true` 放任继续
+      （应用启动本该长跑）；`wait<=0` → 不等待、一律按运行中报告；乱传非数值 →
+      回落默认值（客户端乱传不炸）
+- [x] **进程保活注册表**（易漏的坑）- CPython `BaseSubprocessTransport.close()` 会
+      `kill()` 仍在运行的子进程：transport 被 GC 等于杀掉刚启动的应用。故运行中进程
+      由模块级 `_LAUNCHED` 强引用持有（先登记再等待，取消路径同样有人持有），
+      顺手修剪 `returncode is not None` 的已退出进程防列表无界增长；不提供枚举/杀灭
+      API，生命周期交还操作系统（服务退出时运行中子进程随 transport 关闭被杀——
+      与后端同一条「已知边界」）
+- [x] **`launch_tool` 增 `execute` / `wait` / `allowDestructive`**（`tool_specs.py`）-
+      `execute` 缺省/`false` 时 handler 与改造前**逐字等价**（只返回命令、零副作用）；
+      `execute=true` 才 spawn。破坏性判定收拢到同一入口 `policy.decide_destructive`
+      （新增 `app` 种：条目 `destructive` → 需 `allowDestructive=true`，策略 `deny`
+      模式同样赢过客户端声明 → `permission_denied`），门禁判定在 spawn **之前**
+- [x] **测试** - `tests/test_app_launcher.py` 10 用例（ok/fail/sleep 三探针现场写 tmp、
+      预检失败、类型不支持、`_clamp_wait` 归一化、`wait<=0`、注册表修剪）+
+      `tests/test_policy_gate.py` 判定表补 `app` 4 行与冻结对照 +
+      **e2e 场景⑦** `tests/e2e/test_e2e_launch_execute.py`（真实 stdio 会话验
+      默认路径/成功/失败退出码/destructive 拦截与放行，红绿双向已验证）；
+      全量口径 **271 passed**（+7 个 e2e 默认不收集，见上节）
+- [x] **非等价点 NE-6**（行为变更申报）- ① `tools/list` 的 `launch_tool` 三字段变更：
+      description 文案、inputSchema 增 3 参、annotations 由 `readOnlyHint` +
+      `destructiveHint=false` 改 `openWorldHint`（该工具确实能 spawn，不再声称只读）；
+      golden 已同步重基线，diff 仅此一条；② 显式 `execute=true` 的调用会产生本地
+      子进程（新副作用面，由参数本身与 destructive 门禁双重显式化）
+
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
 - [x] Everything Search MCP（`kind=mcp`，已实测连接、调用、启停跑通）
@@ -309,14 +351,16 @@
       → M02 `d2b4cd2` → M03 `019713d` → M04 `c3b2b08` → M05 `738b843`；M06（本文档 +
       `docs/architecture.md` 同步）与 M07（SKILL.md 工具表守卫 + 全量回归 + 真实 stdio 冒烟
       + P0 install 门禁 e2e 复跑）为收尾两步，哈希见 `git log`
-- [x] **非等价点（显式标注 NE-1~NE-5，U6 要求对用户可见）**：NE-1 `json.dumps` 统一带
+- [x] **非等价点（显式标注 NE-1~NE-6，U6 要求对用户可见）**：NE-1 `json.dumps` 统一带
       `default=str`（5 → 15 个工具；可达输入上的 no-op，单向放宽，不启用 `strict_dumps`
       回退）；NE-2 未知工具失败时机改为查表未命中即失败（错误消息与 errorType 逐字相同，
       完全等价）；NE-3 `validate_specs()` import 期自检（对合法输入零差异，spec 表损坏时
       快速失败）；NE-4 `server.py` 行数下降致旧文档行号引用失效（M06 已同步
       `docs/architecture.md`）；NE-5 `search_tools`/`list_tools` 入参文案里的 `driver`
       举例漂移已于 2026-10-17 漂移清理批次修正为 `launcher`（§3.1 #20，行为变更：tools/list
-      两处 description 文案变更，golden 同步重新基线）
+      两处 description 文案变更，golden 同步重新基线）；NE-6 `launch_tool` 增
+      `execute` / `wait` / `allowDestructive`（2026-10-18 P0 落地，详见「`launch_tool`
+      真正执行启动」小节：tools/list 三字段变更 + 显式调用产生本地子进程）
 
 ### 其他
 - [x] Git 仓库初始化，代码版本管理
@@ -330,6 +374,11 @@
 - 真正的「后端永不重启」需要外部 supervisor（后端生命周期移出网关控制的进程），
   当前只能做到「跨网关回收自愈」（A10），列为架构演进
 - 硬杀 server 会孤儿化后端子进程（下一代自动恢复会另起一个，stdio 无端口冲突可共存）
+- **`launch_tool` 的 `execute=true` 启动的应用随 server 退出而被杀**：运行中进程由
+  `app_launcher._LAUNCHED` 强引用保活（防 GC 杀进程），但 server 正常退出时
+  transport 关闭仍会 kill 掉仍在运行的子进程——与后端子进程同一条边界。要「启动后
+  独立于 server 存活」需外部 supervisor 或 `CREATE_NEW_PROCESS_GROUP`+detach 一类的
+  进程分离方案（未做，属架构演进）
 - ~~`data/backend-tools/*.json` 是自动生成的缓存却受 git 跟踪，多实例在跑时
   `lastSynced` 会被反复改写~~ → 已解决（A14）：运行时缓存整体迁到
   `%LOCALAPPDATA%\.awam-tool-manager`，仓库里只剩人工维护的 `data/tools/`
@@ -350,7 +399,6 @@
 ### P0 - 核心打通
 - [ ] 接入 Steam（steam-local-mcp）— ⚠️ 本机未安装 Steam，无法端到端实测
 - [ ] 接入 npm（npm MCP）— ⚠️ 需求待澄清：npm 官方无 MCP server，需明确接哪个包
-- [ ] launch_tool 真正执行启动（目前只返回命令）
 
 ### P1 - 体验完善
 - [ ] 工具自动发现：检测本机已安装哪些可作为 MCP 后端接入的工具
@@ -426,7 +474,7 @@
 字段要点：
 
 - `kind`：`app`（普通应用）/ `mcp`（MCP 工具）/ `launcher`（启动器，非 MCP），决定是否可建立后端连接、决定 `get_tool_info` 的返回形状
-- `launch`：仅 `kind=app` 有意义，`launch_tool` 据此返回启动命令
+- `launch`：仅 `kind=app` 有意义，`launch_tool` 据此返回启动命令；显式 `execute=true` 时按此 spawn 进程
 - `connection`：仅 `kind=mcp` 有意义，`BackendClient` 据此拉起子进程；目前只支持 `stdio`
 - `install`：仅 `kind=mcp` 有意义，`start_backend` 检测到启动命令缺失时会自动执行一次 `install.command`
 
@@ -473,25 +521,40 @@ awam-tool-manager/
 ├── src/
 │   ├── server.py               # MCP Server 入口：协议装配 + 薄分发 + 生命周期
 │   ├── tool_specs.py           # 对外 MCP 工具声明式注册表（SSOT：15 条 spec + handlers）
+│   ├── policy.py               # 破坏性门禁统一判定 + 部署策略（data/policy.json）
 │   ├── errors.py               # 业务错误出口（ToolError / fail / ensure_success）
 │   ├── store.py                # JSON 存储层（tools 走仓库，缓存走 runtime dir）
 │   ├── registry.py             # 工具注册中心
 │   ├── backend_client.py       # 后端 MCP 客户端与连接池（stdio）
 │   ├── launcher_client.py      # 启动器适配器（非 MCP：Quicker / uTools）
+│   ├── app_launcher.py         # kind=app 启动执行（launch_tool 的 execute=true 路径）
 │   ├── runtime_paths.py        # 运行时目录解析 + 旧路径迁移（A14）
 │   └── schema.py               # 两层数据的 JSON Schema 校验 + **文档生成源**
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/
-   ├── test_store.py
-   ├── test_registry.py
-   ├── test_registry_policy.py
-   ├── test_server_dispatch.py
-   ├── test_backend_client.py
-   ├── test_launcher_client.py
-   ├── test_runtime_paths.py     # 运行时目录解析与迁移（A14）
-   ├── test_protocol_roundtrip.py   # 真实 MCP 会话，不 mock SDK
-   └── test_docs_sync.py            # 文档/示例/data 与 schema 的一致性
+└── tests/                      # 15 个 test_*.py（271 passed）+ 7 个 e2e 场景（默认不收集）
+    ├── test_store.py
+    ├── test_registry.py
+    ├── test_registry_policy.py
+    ├── test_server_dispatch.py
+    ├── test_dispatch_equivalence.py  # 分发等价（golden 之外）
+    ├── test_tool_specs.py            # spec 表与 tools/list golden
+    ├── test_error_type_contract.py   # errorType 台账（覆盖/文案契约）
+    ├── test_policy_gate.py           # destructive 判定表 + 旧逻辑冻结对照
+    ├── test_policy_config.py         # 部署策略（deny/白名单/H1/审计）
+    ├── test_backend_client.py
+    ├── test_launcher_client.py
+    ├── test_app_launcher.py          # kind=app 启动执行（execute 路径底座）
+    ├── test_runtime_paths.py     # 运行时目录解析与迁移（A14）
+    ├── test_protocol_roundtrip.py   # 真实 MCP 会话，不 mock SDK
+    ├── test_docs_sync.py            # 文档/示例/data 与 schema 的一致性
+    ├── golden/tools_list.json       # tools/list 五字段基线（M00 采集）
+    └── e2e/                        # 真实子进程 + 真实会话，须 `pytest -m e2e`
+        ├── test_e2e_startup.py / test_e2e_readonly.py /
+        │   test_e2e_backend_lifecycle.py / test_e2e_resources_prompts.py /
+        │   test_e2e_policy_deny.py / test_e2e_install_gate.py（场景①–⑥）
+        ├── test_e2e_launch_execute.py   # 场景⑦：execute=true 真启动 + 门禁双向
+        └── manual_install_gate.py       # 手工脚本（依赖本机 npm，不进 pytest）
 ```
 
 运行时数据（**不在仓库**，A14）：`%LOCALAPPDATA%\.awam-tool-manager/`

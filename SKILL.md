@@ -67,7 +67,7 @@ awam-tool-manager/
 | `search_tools` | `keyword`(必填)、`kind` | 按关键词搜索工具 |
 | `list_tools` | `kind` | 列出所有工具 |
 | `get_tool_info` | `tool_id`(必填) | 查看工具详情 |
-| `launch_tool` | `tool_id`(必填) | 返回工具的启动命令（**目前不实际执行**） |
+| `launch_tool` | `tool_id`(必填)、`execute`、`wait`、`allowDestructive` | 返回工具的启动命令；**默认只返回不执行**，显式 `execute=true` 才真正启动进程（条目 `destructive` 时需 `allowDestructive=true`，见「安全约定」） |
 | `call_backend_tool` | `tool_id`、`tool_name`(必填)、`arguments`、`allowDestructive` | 路由调用后端 MCP 的子工具；命中破坏性判定时需显式确认（A12：条目配了 `destructiveTools` 就只拦清单内子工具，未配则整个后端都拦） |
 | `list_backend_tools` | `tool_id`(必填)、`force_refresh` | 列出后端子工具（含参数 schema） |
 | `start_backend` | `tool_id`(必填) | 启动后端并自动同步工具目录；启动命令缺失时**仅在显式授权后**才按 `install` 安装（未授权返回 `install_required`，见「安全约定」） |
@@ -139,7 +139,8 @@ CallToolResult 透传；生产环境 pyenv 3.12 即 1.29.0）。
 ## 安全约定
 
 - 工具条目里的 `readOnly` / `destructive` 会映射到 MCP Tool annotations
-- **破坏性门禁**（`call_backend_tool` 转发前 / `run_launcher_action` 执行前）：
+- **破坏性门禁**（`call_backend_tool` 转发前 / `run_launcher_action` 执行前 /
+  `launch_tool` 的 `execute=true` 启动前）：
   条目未标 `destructive` → 不拦；标了之后命中判定才需显式传
   `allowDestructive=true`，否则返回 `destructive_blocked`。
   - mcp：配 `destructiveTools` 时只拦清单内的子工具（精确匹配），未配则整个后端都拦；
@@ -157,7 +158,9 @@ CallToolResult 透传；生产环境 pyenv 3.12 即 1.29.0）。
 - 不合规的 `data/tools/*.json` 会被跳过并向 stderr 告警，不会让整个服务不可用
 - **`install.command` 默认不被自动执行**（P0 修复）：它写在进版本库的数据文件里、
   且会经 shell 执行，旧逻辑让它在「服务启动预热」和 `start_backend` 两条路径上
-  无条件运行，与「`launch_tool` 只返回命令、不实际执行」的取舍正好相反。
+  无条件运行——病根是「没有调用方意图」的执行，与本技能「副作用须由显式调用触发」
+  的取舍正好相反（对照：`launch_tool` 默认只返回命令，只有显式 `execute=true`
+  才真正 spawn 进程）。
   现在必须显式授权才执行，授权有两个来源（任一即可）：
   1. 环境变量 `AWAM_AUTO_INSTALL=1` —— 部署者在 MCP 客户端配置里显式打开；
   2. 条目 `install.auto: true` —— 逐工具 opt-in。
