@@ -509,7 +509,7 @@
 | 工具条目 | `data/tools/{tool_id}.json`（仓库内） | 每个工具一个文件，文件名即 tool_id |
 | 后端子工具缓存 | `<runtime_dir>/backend-tools/{tool_id}.json` | 由 `sync_backend_tools` 自动生成（A14 起在 `%LOCALAPPDATA%\.awam-tool-manager`） |
 | 启动器动作清单 | `<runtime_dir>/launcher-actions/{tool_id}.json` | 由 `sync_launcher_actions` 自动生成 |
-| 对外 MCP 工具 | `src/server.py` | 暴露给 AI 客户端的工具列表 |
+| 对外 MCP 工具 | `src/tool_specs.py`（P1-04 起为单一声明源；`server.py` 只做协议装配与分发） | 暴露给 AI 客户端的工具列表（**非磁盘数据层**） |
 
 > 早期设计中的「启动器配置层」`data/launchers/` 与「适配器层」`src/adapters/` 已废弃移除。
 > MCP 现在是**工具的一种类型**（`kind=mcp`），而非独立层级，
@@ -555,7 +555,9 @@
   `launch.command`，`help.args` 缺省 `--help`、**绝不回落 `launch.args`**，
   `help.timeout` 封顶 30s）；只在显式 `run=true` 时执行
 - `connection`：仅 `kind=mcp` 有意义，`BackendClient` 据此拉起子进程；目前只支持 `stdio`
-- `install`：仅 `kind=mcp` 有意义，`start_backend` 检测到启动命令缺失时会自动执行一次 `install.command`
+- `install`：仅 `kind=mcp` 有意义，声明「启动命令缺失时怎么装」；**默认不执行**
+  （P0 门禁）——需 `AWAM_AUTO_INSTALL=1` 或条目 `install.auto: true` 授权，且命令要
+  过白名单，否则 `start_backend` 只返回 `install_required`，服务预热退化为纯检测
 
 ### 4.3 后端子工具缓存（`<runtime_dir>/backend-tools/{tool_id}.json`）
 
