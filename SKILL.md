@@ -111,6 +111,8 @@ awam-tool-manager/
 >   动作清单从 `plugins/*.asar` 的 plugin.json 解析（纯 Python 读 Pickle 封包，
 >   只读文件头 + 条目；声明完整，`source` 恒 `auto`）；`wait` 语义改为「投递后
 >   观察窗口」（等 renderer 起来，默认取条目 timeout、封顶 5s）。
+>   面板在投递后约 1s 才真正呈现（呈现后失焦不自动隐藏），所以「调用后看一眼屏幕
+>   说没反应」不成立——要判断呈现必须连续采样，`success` 也只代表协议被系统接收。
 >
 > 动作清单缓存在运行时目录的 `launcher-actions/{tool_id}.json`。
 >

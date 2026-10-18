@@ -741,10 +741,19 @@
 - [x] .gitignore 配置（测试脚本、缓存文件排除）
 
 ### 已知边界（非缺陷，记录备查）
-- **uTools 协议投递成功但 UI 不呈现**：本机 uTools 只剩托盘、零可见顶层窗口时，
-  `utools://` 投递（`start` 退出码 0）成功但界面不渲染；用原始协议直接唤起重现，
-  同现象——判为会话状态问题而非集成缺陷。待办：在可见桌面会话里单跑一次
-  `run_launcher_action` 做 UI 级实调确认（勘察报告 §5 已留痕）
+- **uTools 协议投递的「UI 不呈现」已排除（2026-10-18 晚 UI 级实调确认，无需改代码）**：
+  经对外通道单跑 `run_launcher_action(tool_id=utools, action_id="JSON 编辑器/Json",
+  allowDestructive=true)` 返回 `exitCode=0`，同时用 Win32 连续采样抓到主面板
+  （hwnd 标题 `uTools`、类 `Chrome_WidgetWin_1`、`WS_EX_TOOLWINDOW`）从
+  `WS_VISIBLE=False` 翻到 `True` 且拿到前台，之后 25s 观察窗内保持可见——
+  失焦不自动隐藏，只有手动关闭/ESC 才隐藏。受控实测（同进程内先起采样再投递
+  同一条 `cmd /c start "" utools://…`）给出**投递→呈现 ≈1.1s**。
+  旧结论「投递成功但界面不渲染」的两条成因：① **取证方式**——单次快照落在 1.1s
+  呈现延迟之前、或落在面板已被关掉之后，就得到 `visible=False`；② 当时 uTools
+  只剩托盘、零可见窗口的会话状态。教训是**判断呈现必须连续采样，不能单跑快照**
+  （脚本 `.scratch/utools-ui-2026-10-18/`，不进版本库）。
+  仍然成立的边界：这是 fire-and-forget，返回体的 `success` 只代表「系统接收了协议」，
+  不代表 UI 呈现、更不代表功能执行结果——要结果只有 MCP 通道或 HTTP 传输两条路
 - 真正的「后端永不重启」需要外部 supervisor（后端生命周期移出网关控制的进程），
   当前只能做到「跨网关回收自愈」（A10），列为架构演进
 - 硬杀 server 会孤儿化后端子进程（下一代自动恢复会另起一个，stdio 无端口冲突可共存）
