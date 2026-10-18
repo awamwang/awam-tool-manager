@@ -11,7 +11,7 @@ async def _handle_xxx」，`build_mcp_tools()` / `dispatch_tool` /
 `conftest.EXPECTED_TOOL_NAMES` 的守卫测试全部自动跟随。
 
 与 `schema.py` 的分工：schema.py 管辖**数据条目**（`data/tools/*.json`），
-本模块管辖**对外 MCP 工具**（协议层暴露的 17 个 `tools/call` 入口）。
+本模块管辖**对外 MCP 工具**（协议层暴露的 18 个 `tools/call` 入口）。
 两者字段名有重叠但语义不同，互不 import、互不引用。
 """
 
@@ -27,6 +27,9 @@ except ImportError:  # pragma: no cover
 
 from errors import ErrorType, ToolError, fail, ensure_success  # noqa: F401（handler 侧经本模块转手）
 from app_launcher import launch_app
+# 发现清单走「环境变量指路径」而不是模块全局常量，所以按值 import 就够：
+# 单测用 monkeypatch.setenv("AWAM_DISCOVERY_FILE", ...) 换清单，不需要打补丁。
+from discovery import DiscoveryError, discover, load_manifest, note_for, resolve_discovery_path
 from launcher_client import LauncherError
 from policy import decide_destructive
 # 统计模块**按模块引用**：`usage.USAGE_LOG` 要在调用时取当前值，
@@ -510,6 +513,40 @@ async def _handle_get_usage_stats(arguments: dict, ctx: ToolContext) -> dict:
     return payload
 
 
+async def _handle_discover_tools(arguments: dict, ctx: ToolContext) -> dict:
+    """按声明清单发现本机工具：默认只做文件系统读，不 spawn 任何进程"""
+    run_commands = bool(arguments.get("run_commands"))
+    status = str(arguments.get("status") or "").strip()
+    try:
+        manifest = load_manifest()
+    except DiscoveryError as exc:
+        # 清单坏了只让这一次调用失败：发现不是安全面，不该影响其他工具
+        fail(str(exc), error_type=ErrorType.CONFIG_ERROR)
+    result = discover(manifest, ctx.registry, run_commands=run_commands)
+    candidates = result["candidates"]
+    if status:
+        candidates = [c for c in candidates if c["status"] == status]
+    payload = {
+        "success": True,
+        "manifestPath": str(resolve_discovery_path()),
+        "runCommands": run_commands,
+        "summary": result["summary"],
+        "returned": len(candidates),
+        "candidates": candidates,
+        "note": note_for(result),
+    }
+    if status:
+        # summary 计的是**整份清单**，filter 只裁 candidates；不标注筛了什么，
+        # 调用方会把「summary.installed=3 / 返回 1 条」读成结果自相矛盾
+        payload["statusFilter"] = status
+    if not manifest.get("candidates"):
+        payload["note"] = (
+            f"发现清单为空或文件不存在（{resolve_discovery_path()}）："
+            "没有候选可探测。这是「还没声明要找什么」，不是「本机没有工具」"
+        )
+    return payload
+
+
 # 顺序即 tools/list 对外可见顺序（golden 按列表逐位锁定，保序即保行为）。
 SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
     ServerToolSpec(
@@ -901,6 +938,32 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
         # 只读一份本机日志文件，不碰任何工具、不 spawn
         annotations={"readOnlyHint": True, "destructiveHint": False},
     ),
+    ServerToolSpec(
+        name="discover_tools",
+        handler=_handle_discover_tools,
+        description=(
+            "发现本机工具：按声明式候选清单做只读探测（路径存在 / 目录条目数 / 命令是否在 PATH），"
+            "对照已登记工具给出 installed / not_installed / unknown 结论（默认不执行任何命令）"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "run_commands": {
+                    "type": "boolean",
+                    "description": "可选，默认 false。true 才真正执行清单里的版本命令取版本号（会 spawn 子进程）；false 只报告命令是否在 PATH 上"
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["installed", "not_installed", "unknown"],
+                    "description": "可选，只返回该结论的候选（summary 仍是整份清单的计数）"
+                }
+            }
+        },
+        # run_commands=true 会 spawn，按 mcp-conformance 的口径挂 openWorldHint
+        # 且**不声明** readOnlyHint：默认路径确实只读，但工具的能力面包含执行，
+        # 声明只读等于把「它会跑命令」对客户端藏起来（与 get_tool_help 同判例）
+        annotations={"openWorldHint": True, "destructiveHint": False},
+    ),
 )
 
 # ToolAnnotations 的合法键（MCP 协议 hints 全集）。validate_specs 用它拦
@@ -917,7 +980,7 @@ def build_mcp_tools() -> list[Tool]:
     - `if ToolAnnotations is not None and spec.annotations:` —— 可选导入的
       真值判断都原样保留（`{}` 取假，不挂注解）；
     - `tool.outputSchema = spec.output_schema or SHARED_OUTPUT_SCHEMA` ——
-      本期 17 条全部回落共享 schema。
+      本期 18 条全部回落共享 schema。
     """
     tools: list[Tool] = []
     for spec in SERVER_TOOL_SPECS:

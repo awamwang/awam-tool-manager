@@ -1,0 +1,720 @@
+"""P1 本机工具自动发现：`discovery.py` 单元面 + `discover_tools` 集成面。
+
+**全部探测跑在 tmp_path 合成数据上，不碰用户真机**（本期授权口径：代码先行，
+真机结果由客户端调 `discover_tools` 得到）。因此清单里的路径一律用自定义
+token `{AWAM_FAKE_ROOT}`，由 fixture 把它 setenv 到 tmp 目录；真机用的
+`{ProgramFiles}` 之类只出现在仓库清单文件里，本文件只校验它能通过校验、
+不执行探测。
+
+两条最重要的纪律各自有用例钉住：
+1. **默认零 spawn**——`run_commands` 不为 true 时 `subprocess.run` 换成
+   一调用就 raise 的桩，跑到了就是红；
+2. **没检查成 ≠ 没装**——环境变量展开失败必须判 inconclusive/unknown，
+   不能降级成 not_installed。
+"""
+import asyncio
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(ROOT / "src"))
+
+import discovery  # noqa: E402
+import server  # noqa: E402
+from errors import ToolError  # noqa: E402
+
+
+TOKEN = "AWAM_FAKE_ROOT"
+TEMPLATE = "{" + TOKEN + "}"
+MISSING_TOKEN = "{AWAM_DEFINITELY_UNSET_VAR}"
+
+
+def run(coro):
+    """统一的事件循环入口（本仓库不装 pytest-asyncio）"""
+    return asyncio.run(coro)
+
+
+@pytest.fixture
+def fake_root(tmp_path, monkeypatch):
+    """把清单模板的 {AWAM_FAKE_ROOT} 指到 tmp，返回该目录"""
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setenv(TOKEN, str(root))
+    return root
+
+
+@pytest.fixture
+def fake_bin(tmp_path, monkeypatch):
+    """把 PATH 换成一个空 tmp 目录，返回它（要「命令可用」就在里面造文件）
+
+    Windows 的 `shutil.which` 按 PATHEXT 补后缀试，POSIX 只看裸名，所以
+    `make_cli` 同时留裸名和 `.cmd`，两个平台都能命中。
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    monkeypatch.setenv("PATH", str(bin_dir))
+    return bin_dir
+
+
+def make_cli(bin_dir: Path, name="fakecli") -> Path:
+    exe = bin_dir / name
+    exe.write_text("", encoding="utf-8")
+    bin_dir.joinpath(name + ".cmd").write_text("", encoding="utf-8")
+    return exe
+
+
+class FakeRegistry:
+    """只提供 `list_all_tools()` 的最小对照面"""
+
+    def __init__(self, ids=()):
+        self._ids = list(ids)
+
+    def list_all_tools(self):
+        return [{"id": i} for i in self._ids]
+
+
+def cand(tool_id, *, name=None, kind=None, purpose=None, probes=(), command=None):
+    data = {"tool_id": tool_id, "name": name or tool_id.title(), "probes": list(probes)}
+    if kind is not None:
+        data["kind"] = kind
+    if purpose is not None:
+        data["purpose"] = purpose
+    if command is not None:
+        data["command"] = command
+    return data
+
+
+def manifest_of(*cands):
+    return {"version": 1, "candidates": list(cands)}
+
+
+def exists_probe(*paths, **kw):
+    data = {"probe": "path_exists", "paths": list(paths)}
+    data.update(kw)
+    return data
+
+
+# ---------------- 清单加载与校验 ----------------
+
+
+def test_missing_manifest_file_is_empty_not_error(tmp_path):
+    """零配置 = 没有候选，而不是报错：文件不存在是本期的合法状态"""
+    m = discovery.load_manifest(tmp_path / "nope.json")
+    assert m == {"version": 1, "candidates": []}
+
+
+def test_env_var_overrides_default_path(tmp_path, monkeypatch):
+    path = tmp_path / "custom.json"
+    path.write_text(json.dumps(manifest_of(cand("alpha"))), encoding="utf-8")
+    monkeypatch.setenv(discovery.DISCOVERY_ENV_VAR, str(path))
+    assert discovery.resolve_discovery_path() == path
+    assert [c["tool_id"] for c in discovery.load_manifest()["candidates"]] == ["alpha"]
+
+
+def test_write_error_json_raises_discovery_error(tmp_path):
+    path = tmp_path / "bad.json"
+    path.write_text("{not json", encoding="utf-8")
+    with pytest.raises(discovery.DiscoveryError, match="不是合法 JSON"):
+        discovery.load_manifest(path)
+
+
+@pytest.mark.parametrize(
+    "data, expected",
+    [
+        ([], "必须是 JSON 对象"),
+        ({"candidates": {}}, "candidates 数组"),
+        ({"candidates": ["x"]}, "必须是对象"),
+        ({"candidates": [{"tool_id": "", "name": "A"}]}, "tool_id 非法"),
+        (
+            {"candidates": [cand("dup"), cand("dup")]},
+            "tool_id 重复: dup",
+        ),
+        ({"candidates": [{"tool_id": "a", "name": "  "}]}, "缺少 name"),
+        ({"candidates": [cand("a", kind="cli")]}, "kind 取值非法"),
+        ({"candidates": [cand("a", probes=[{"probe": "registry", "path": "x"}])]},
+         "探测类型不支持"),
+        ({"candidates": [cand("a", probes=[{"probe": "path_exists"}])]},
+         "至少要给一个 path"),
+        ({"candidates": [cand("a", probes=["x"])]}, "必须是对象"),
+        ({"candidates": [cand("a", command={"argv": []})]}, "command.argv 非法"),
+        ({"candidates": [cand("a", command={"argv": ["x", "  "]})]}, "command.argv 非法"),
+        ({"candidates": [cand("a", command="x")]}, "command 必须是对象"),
+        ({"candidates": [cand("a", command={"argv": ["x"], "version_pattern": "("})]},
+         "不是合法正则"),
+    ],
+)
+def test_validate_manifest_rejects(data, expected):
+    assert expected in discovery.validate_manifest(data)
+
+
+def test_validate_manifest_accepts_good_manifest(fake_root):
+    m = manifest_of(
+        cand("alpha", kind="app", purpose="演示",
+             probes=[exists_probe(f"{TEMPLATE}/alpha")],
+             command={"argv": ["alpha", "--version"], "version_pattern": r"([0-9.]+)"}),
+        cand("beta", probes=[{"probe": "dir_count", "path": f"{TEMPLATE}/b", "limit": 5}]),
+    )
+    assert discovery.validate_manifest(m) is None
+
+
+def test_repo_shipped_manifest_validates_without_probing():
+    """仓库里人工维护的 data/discovery.json 必须过校验（只读文件，不探测）
+
+    这条是清单拼写错误（重复 id、正则坏了、kind 造词）的 CI 守卫：
+    错一个字段，真机上那次 `discover_tools` 就会 config_error。
+    """
+    data = json.loads((ROOT / "data" / "discovery.json").read_text(encoding="utf-8"))
+    assert discovery.validate_manifest(data) is None
+    assert data["candidates"], "仓库清单不该是空的"
+
+
+def test_repo_manifest_probes_only_declared_env_tokens():
+    """仓库清单里出现的 token 必须是 Windows 真实存在的环境变量名
+
+    拼错的 token 不会报错，只会让该位置「没检查成」→ unknown，
+    发现面无声缩小。所以扫的是**路径字符串里的 token**，不是整份文本里的
+    花括号（后者会把 JSON 对象括号和正则量词也算进去）。
+    """
+    import re as _re
+
+    data = json.loads((ROOT / "data" / "discovery.json").read_text(encoding="utf-8"))
+    templates = []
+    for c in data["candidates"]:
+        for probe in c.get("probes", []):
+            paths = probe.get("paths") or [probe.get("path")]
+            templates.extend(p for p in paths if isinstance(p, str))
+    assert templates, "仓库清单该用 {ENV} 模板而不是硬编码盘符"
+
+    tokens = set()
+    for template in templates:
+        tokens.update(_re.findall(r"\{([^{}]*)\}", template))
+    allowed = {
+        "SCOOP", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "ProgramFiles",
+        "ProgramFiles(X86)", "SystemRoot",
+    }
+    assert tokens <= allowed, f"未登记的环境变量名: {sorted(tokens - allowed)}"
+
+
+# ---------------- expand_path ----------------
+
+
+def test_expand_path_resolves_env_token(fake_root):
+    path, unresolved = discovery.expand_path(f"{TEMPLATE}/sub/dir")
+    assert unresolved is None
+    assert path == fake_root / "sub" / "dir"
+
+
+def test_expand_path_missing_env_is_not_a_relative_path(monkeypatch):
+    """没设环境变量必须报「没设」，不能退化成相对路径
+
+    退化会把「本机没这个变量」伪装成「这个路径不存在」，两者在结论里必须分开。
+    """
+    monkeypatch.delenv("AWAM_DEFINITELY_UNSET_VAR", raising=False)
+    path, unresolved = discovery.expand_path(MISSING_TOKEN + "/apps")
+    assert path is None
+    assert unresolved == "AWAM_DEFINITELY_UNSET_VAR"
+
+
+def test_expand_path_rejects_unrecognised_token():
+    """花括号里是不合法 token 时同样按「没展开」处理，绝不拿字面量去试存在性"""
+    path, unresolved = discovery.expand_path("{not a var!}/apps")
+    assert path is None
+    assert unresolved is not None and "not a var" in unresolved
+
+
+def test_expand_path_supports_windows_parenthesised_names():
+    """`ProgramFiles(x86)` 是 Windows 真实变量名，括号不能当成字面量"""
+    if not sys.platform.startswith("win"):
+        pytest.skip("该变量名只存在于 Windows")
+    path, unresolved = discovery.expand_path("{ProgramFiles(x86)}")
+    assert unresolved is None if path is not None else "ProgramFiles(x86)" in unresolved
+
+
+# ---------------- run_probes ----------------
+
+
+def test_path_exists_hit_reports_path(fake_root):
+    (fake_root / "alpha.exe").write_text("", encoding="utf-8")
+    evidence, verdict = discovery.run_probes(
+        cand("alpha", probes=[exists_probe(f"{TEMPLATE}/alpha.exe")])
+    )
+    assert verdict == discovery.VERDICT_HIT
+    assert evidence[0]["ok"] is True
+    assert evidence[0]["path"].endswith("alpha.exe")
+
+
+def test_path_exists_miss_lists_checked_paths(fake_root):
+    evidence, verdict = discovery.run_probes(
+        cand("alpha", probes=[exists_probe(f"{TEMPLATE}/nope.exe")])
+    )
+    assert verdict == discovery.VERDICT_MISS
+    assert evidence[0]["ok"] is False
+    assert evidence[0]["checked"] == [str(fake_root / "nope.exe")]
+
+
+def test_second_declared_location_can_hit(fake_root):
+    """声明多个候选位置：第一个不存在、第二个存在 → 命中"""
+    (fake_root / "b" / "x.exe").parent.mkdir()
+    (fake_root / "b" / "x.exe").write_text("", encoding="utf-8")
+    _, verdict = discovery.run_probes(
+        cand("x", probes=[exists_probe(f"{TEMPLATE}/a/x.exe", f"{TEMPLATE}/b/x.exe")])
+    )
+    assert verdict == discovery.VERDICT_HIT
+
+
+def test_unexpanded_location_overrides_miss(fake_root, monkeypatch):
+    """有一处没检查成 → 整体 inconclusive，不是 miss
+
+    这是发现类接口最坏的一种错：把「没检查成的位置」当成「那儿没装」。
+    """
+    monkeypatch.delenv("AWAM_DEFINITELY_UNSET_VAR", raising=False)
+    evidence, verdict = discovery.run_probes(
+        cand("x", probes=[exists_probe(f"{TEMPLATE}/nope.exe", MISSING_TOKEN + "/real.exe")])
+    )
+    assert verdict == discovery.VERDICT_INCONCLUSIVE
+    assert "环境变量未设置" in evidence[0]["reason"]
+    assert discovery.status_of(verdict) == ("unknown", "none")
+
+
+def test_hit_wins_over_unexpanded_location(fake_root, monkeypatch):
+    monkeypatch.delenv("AWAM_DEFINITELY_UNSET_VAR", raising=False)
+    (fake_root / "here.exe").write_text("", encoding="utf-8")
+    _, verdict = discovery.run_probes(
+        cand("x", probes=[exists_probe(f"{TEMPLATE}/here.exe", MISSING_TOKEN + "/y.exe")])
+    )
+    assert verdict == discovery.VERDICT_HIT
+
+
+def test_dir_count_reports_entries_sorted_and_skips_dotdirs(fake_root):
+    for name in ["zlib", "alpha", ".cache", "mid"]:
+        (fake_root / "pkgs" / name).mkdir(parents=True)
+    evidence, verdict = discovery.run_probes(
+        cand("p", probes=[{"probe": "dir_count", "path": f"{TEMPLATE}/pkgs"}])
+    )
+    row = evidence[0]
+    assert row["ok"] is True and row["count"] == 3
+    assert row["entries"] == ["alpha", "mid", "zlib"]
+    # 目录里有什么不决定装没装：dir_count 不下结论
+    assert verdict == discovery.VERDICT_INCONCLUSIVE
+
+
+def test_dir_count_limit_is_clamped(fake_root):
+    for i in range(5):
+        (fake_root / f"d{i}").mkdir()
+    row = discovery.run_probes(
+        cand("p", probes=[{"probe": "dir_count", "path": TEMPLATE, "limit": 99999}])
+    )[0][0]
+    assert row["count"] == 5
+    negative = discovery.run_probes(
+        cand("q", probes=[{"probe": "dir_count", "path": TEMPLATE, "limit": -3}])
+    )[0][0]
+    assert negative["count"] == 0 and negative["entries"] == []
+
+
+def test_dir_count_missing_dir_is_ok_false(fake_root):
+    evidence, verdict = discovery.run_probes(
+        cand("p", probes=[{"probe": "dir_count", "path": f"{TEMPLATE}/absent"}])
+    )
+    assert evidence[0]["ok"] is False and evidence[0]["reason"] == "目录不存在"
+    # 目录不存在同样不决定装没装（清单里 python 就是这种补充探测）
+    assert verdict == discovery.VERDICT_INCONCLUSIVE
+
+
+def test_no_probes_gives_no_verdict(fake_root):
+    _, verdict = discovery.run_probes(cand("bare"))
+    assert verdict == discovery.VERDICT_INCONCLUSIVE
+
+
+# ---------------- 结论合成 ----------------
+
+
+@pytest.mark.parametrize(
+    "verdicts, expected",
+    [
+        ([], discovery.VERDICT_INCONCLUSIVE),
+        ([discovery.VERDICT_MISS], discovery.VERDICT_MISS),
+        ([discovery.VERDICT_MISS, discovery.VERDICT_HIT], discovery.VERDICT_HIT),
+        ([discovery.VERDICT_MISS, discovery.VERDICT_INCONCLUSIVE],
+         discovery.VERDICT_INCONCLUSIVE),
+        ([discovery.VERDICT_HIT, discovery.VERDICT_INCONCLUSIVE], discovery.VERDICT_HIT),
+    ],
+)
+def test_fold_verdicts(verdicts, expected):
+    assert discovery.fold_verdicts(verdicts) == expected
+
+
+@pytest.mark.parametrize(
+    "verdict, status, confidence",
+    [
+        (discovery.VERDICT_HIT, "installed", "high"),
+        (discovery.VERDICT_MISS, "not_installed", "medium"),
+        (discovery.VERDICT_INCONCLUSIVE, "unknown", "none"),
+    ],
+)
+def test_status_of_table(verdict, status, confidence):
+    assert discovery.status_of(verdict) == (status, confidence)
+
+
+# ---------------- 命令面 ----------------
+
+
+def test_command_availability_does_not_spawn(fake_bin, monkeypatch):
+    """只查 PATH 不 spawn：available 是默认路径就能给出的证据
+
+    用桩记录调用次数，而不是让桩 raise——断言「一次都没被调用」才是本用例
+    要证的性质（raise 型桩会把「根本没调用」和「调用后炸」混成一个红法）。
+    """
+    calls = []
+    monkeypatch.setattr(discovery.subprocess, "run", lambda *a, **k: calls.append(a))
+    make_cli(fake_bin, "alpha")
+
+    row = discovery.probe_command(cand("a", command={"argv": ["alpha", "--version"]}))
+    assert calls == []
+    assert row["preview"] == "alpha --version"
+    assert row["run"] is False and row["available"] is True
+    # 不钉 which 选中的具体垫片名（Windows 按 PATHEXT 补后缀，裸名与 .cmd 都算命中）
+    assert Path(row["path"]).parent == fake_bin
+
+
+def test_command_availability_resolves_absolute_path(fake_bin):
+    make_cli(fake_bin, "alpha")
+    row = discovery.probe_command(cand("a", command={"argv": ["alpha", "--version"]}))
+    assert Path(row["path"]).is_absolute()
+
+
+def test_command_absent_from_path_without_run(fake_bin):
+    row = discovery.probe_command(cand("a", command={"argv": ["nope", "--version"]}))
+    assert row["available"] is False
+    assert "reason" not in row  # 没跑就不编造失败原因，可用与否已是结论
+
+
+def test_run_commands_executes_and_parses_version(fake_bin, monkeypatch):
+    make_cli(fake_bin, "alpha")
+    captured = {}
+
+    class Done:
+        returncode = 0
+        stdout = "Alpha 3.2.1 (release)\n"
+        stderr = ""
+
+    def fake_run(argv, **kw):
+        captured["argv"] = argv
+        captured["kw"] = kw
+        return Done()
+
+    monkeypatch.setattr(discovery.subprocess, "run", fake_run)
+    row = discovery.probe_command(
+        cand("a", command={
+            "argv": ["alpha", "--version"],
+            "version_pattern": r"Alpha ([0-9]+\.[0-9]+\.[0-9]+)",
+        }),
+        run=True,
+    )
+    assert row["run"] is True and row["ok"] is True
+    assert row["version"] == "3.2.1"
+    # 无 shell + 用 which 解析出的绝对路径（.cmd 垫片在 Windows 上必须绝对路径）
+    assert Path(captured["argv"][0]).parent == fake_bin
+    assert captured["argv"][1:] == ["--version"]
+    assert captured["kw"]["shell"] is False
+
+
+def test_run_without_version_pattern_keeps_output(fake_bin, monkeypatch):
+    make_cli(fake_bin, "alpha")
+
+    class Done:
+        returncode = 0
+        stdout = "x" * 900
+        stderr = ""
+
+    monkeypatch.setattr(discovery.subprocess, "run", lambda *a, **k: Done())
+    row = discovery.probe_command(cand("a", command={"argv": ["alpha"]}), run=True)
+    assert "version" not in row
+    assert len(row["output"]) == 400  # 输出截断，不把大文本塞进协议载荷
+
+
+def test_nonzero_exit_marks_not_ok(fake_bin, monkeypatch):
+    make_cli(fake_bin, "alpha")
+
+    class Done:
+        returncode = 7
+        stdout = ""
+        stderr = "boom"
+
+    monkeypatch.setattr(discovery.subprocess, "run", lambda *a, **k: Done())
+    row = discovery.probe_command(cand("a", command={"argv": ["alpha", "-v"]}), run=True)
+    assert row["ok"] is False and row["exitCode"] == 7
+    assert row["output"] == "boom"
+
+
+def test_timeout_is_reported_not_raised(fake_bin, monkeypatch):
+    make_cli(fake_bin, "alpha")
+
+    def boom(*_a, **_k):
+        raise discovery.subprocess.TimeoutExpired("alpha", 1)
+
+    monkeypatch.setattr(discovery.subprocess, "run", boom)
+    row = discovery.probe_command(cand("a", command={"argv": ["alpha"]}), run=True)
+    assert row["ok"] is False and "超时" in row["reason"]
+
+
+def test_oserror_is_reported_not_raised(fake_bin, monkeypatch):
+    make_cli(fake_bin, "alpha")
+
+    def boom(*_a, **_k):
+        raise PermissionError("被拦了")
+
+    monkeypatch.setattr(discovery.subprocess, "run", boom)
+    row = discovery.probe_command(cand("a", command={"argv": ["alpha"]}), run=True)
+    assert row["ok"] is False and "无法执行" in row["reason"]
+
+
+def test_command_unavailable_when_run_for_reports_reason(fake_bin):
+    row = discovery.probe_command(cand("a", command={"argv": ["nope"]}), run=True)
+    assert row["available"] is False and row["ok"] is False
+    assert "不在 PATH" in row["reason"]
+
+
+def test_preview_falls_back_to_argv_join(fake_bin):
+    row = discovery.probe_command(
+        cand("a", command={"argv": ["nope", "--version"], "preview": "显式预览"})
+    )
+    assert row["preview"] == "显式预览"
+
+
+def test_preview_of_joins_argv_when_absent(fake_bin):
+    assert discovery._preview_of(cand("a", command={"argv": ["nope", "-v"]})) == "nope -v"
+    assert discovery._preview_of(cand("a", command={})) == ""
+
+
+def test_invalid_argv_reasons_without_available(fake_bin):
+    """没 argv 就没有可用与否的结论——不能让发现面自己造出一维 miss"""
+    row = discovery.probe_command(cand("a", command={}))
+    assert "available" not in row and row["run"] is False
+    assert "命令面" in row["reason"]
+
+
+# ---------------- discover 编排 ----------------
+
+
+def test_discover_rows_and_summary(fake_root):
+    (fake_root / "here").mkdir()
+    m = manifest_of(
+        cand("here", kind="app", purpose="在的", probes=[exists_probe(f"{TEMPLATE}/here")]),
+        cand("gone", probes=[exists_probe(f"{TEMPLATE}/gone")]),
+    )
+    res = discovery.discover(m, FakeRegistry(["here"]))
+    by_id = {c["toolId"]: c for c in res["candidates"]}
+    assert by_id["here"]["status"] == "installed"
+    assert by_id["here"]["registered"] is True
+    assert by_id["here"]["purpose"] == "在的" and by_id["here"]["kind"] == "app"
+    assert by_id["gone"]["status"] == "not_installed"
+    assert by_id["gone"]["registered"] is False
+    assert res["summary"] == {
+        "installed": 1, "not_installed": 1, "unknown": 0,
+        "registered": 1, "unregistered": 1,
+    }
+
+
+def test_discover_defaults_kind_and_purpose(fake_root):
+    row = discovery.discover(
+        manifest_of(cand("x", probes=[exists_probe(f"{TEMPLATE}/x")])),
+        FakeRegistry(),
+    )["candidates"][0]
+    assert row["kind"] == "app" and row["purpose"] == ""
+    assert "command" not in row
+
+
+def test_discover_forwards_run_commands(fake_root, fake_bin, monkeypatch):
+    """run_commands 逐层传到 probe_command：只有 true 才真的调 subprocess
+
+    桩返回假 CompletedProcess 形状的对象，所以「调了一次」是计数真话，
+    本机没有任何子进程被起过。命令**在 PATH 上**是关键：换成不在 PATH 的命令，
+    「没 spawn」就只是「没找到命令」，忽略门禁的变异杀不动（第一版踩过）。
+    """
+    make_cli(fake_bin, "herecli")
+    calls = []
+
+    class Done:
+        returncode = 0
+        stdout = "herecli 1.0"
+        stderr = ""
+
+    def recorder(*_a, **_k):
+        calls.append(1)
+        return Done()
+
+    monkeypatch.setattr(discovery.subprocess, "run", recorder)
+    m = manifest_of(cand("x", probes=[exists_probe(TEMPLATE)],
+                        command={"argv": ["herecli", "--version"],
+                                 "version_pattern": r"([0-9][0-9.]*)"}))
+
+    off = discovery.discover(m, FakeRegistry())["candidates"][0]["command"]
+    assert (off["run"], off["available"], off.get("version")) == (False, True, None)
+    assert calls == []
+
+    on = discovery.discover(m, FakeRegistry(), run_commands=True)["candidates"][0]["command"]
+    assert (on["run"], on["available"], on["version"]) == (True, True, "1.0")
+    assert len(calls) == 1
+
+
+def test_command_availability_can_decide_status_alone(fake_bin):
+    """PATH 上找得到就判 installed——这是「只有命令面」的 CLI 工具的唯一出路"""
+    make_cli(fake_bin, "alpha")
+    m = manifest_of(cand("alpha", command={"argv": ["alpha", "--version"]}))
+    row = discovery.discover(m, FakeRegistry())["candidates"][0]
+    assert (row["status"], row["confidence"]) == ("installed", "high")
+
+
+def test_path_hit_and_command_miss_still_installed(fake_root, fake_bin):
+    """多维度取或：声明位置命中就够了，命令不在 PATH 不推翻结论"""
+    (fake_root / "alpha.exe").write_text("", encoding="utf-8")
+    m = manifest_of(cand("alpha", probes=[exists_probe(f"{TEMPLATE}/alpha.exe")],
+                        command={"argv": ["alpha-not-on-path"]}))
+    row = discovery.discover(m, FakeRegistry())["candidates"][0]
+    assert row["status"] == "installed"
+    assert row["command"]["available"] is False
+
+
+def test_command_available_and_path_miss_is_installed(fake_root, fake_bin):
+    """反过来：装在别处（声明路径没中）但命令在 PATH 上，仍判 installed"""
+    make_cli(fake_bin, "alpha")
+    m = manifest_of(cand("alpha", probes=[exists_probe(f"{TEMPLATE}/gone")],
+                        command={"argv": ["alpha", "--version"]}))
+    row = discovery.discover(m, FakeRegistry())["candidates"][0]
+    assert (row["status"], row["confidence"]) == ("installed", "high")
+
+
+def test_note_for_declares_probe_surface_is_not_exhaustive(fake_root):
+    m = manifest_of(cand("x", probes=[exists_probe(f"{TEMPLATE}/gone")]))
+    res = discovery.discover(m, FakeRegistry())
+    note = discovery.note_for(res)
+    assert "不是" in note and "本机没有" in note
+    assert "尚未登记" in note
+
+
+# ---------------- discover_tools（dispatch 集成面）----------------
+
+
+@pytest.fixture
+def shipped_manifest(fake_root, fake_bin, tmp_path, monkeypatch):
+    """把 AWAM_DISCOVERY_FILE 指到 tmp 里的一份合成清单
+
+    三个覆盖面各一个：`here` 路径命中**且命令在 PATH 上**（门禁用例要靠它
+    证明「可用 ≠ 会跑」）、`gone` 两处都没有、`unknownvar` 有一处位置没检查成。
+    """
+    (fake_root / "here").mkdir()
+    make_cli(fake_bin, "herecli")
+    path = tmp_path / "discovery.json"
+    path.write_text(
+        json.dumps(
+            manifest_of(
+                cand("here", purpose="命中项",
+                     probes=[exists_probe(f"{TEMPLATE}/here")],
+                     command={"argv": ["herecli", "--version"]}),
+                cand("gone", probes=[exists_probe(f"{TEMPLATE}/gone")],
+                     command={"argv": ["gonecli", "--version"]}),
+            ),
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(discovery.DISCOVERY_ENV_VAR, str(path))
+    return path
+
+
+def test_dispatch_discover_tools_payload(shipped_manifest, fake_bin, monkeypatch):
+    monkeypatch.setattr(
+        server._TOOL_CONTEXT.registry, "list_all_tools", lambda: [{"id": "here"}]
+    )
+    payload = json.loads(run(server.dispatch_tool("discover_tools", {})))
+    assert payload["success"] is True
+    assert payload["manifestPath"] == str(shipped_manifest)
+    assert payload["runCommands"] is False
+    assert payload["summary"] == {
+        "installed": 1, "not_installed": 1, "unknown": 0,
+        "registered": 1, "unregistered": 1,
+    }
+    assert payload["returned"] == 2
+    by_id = {c["toolId"]: c for c in payload["candidates"]}
+    assert by_id["here"]["purpose"] == "命中项"
+    assert by_id["here"]["status"] == "installed"
+    assert by_id["gone"]["status"] == "not_installed"
+    # here 的命令**在 PATH 上**但默认不跑：available True / run False 同时成立
+    here_cmd = by_id["here"]["command"]
+    assert here_cmd["available"] is True and here_cmd["run"] is False
+    assert Path(here_cmd["path"]).parent == fake_bin
+    assert by_id["gone"]["command"] == {
+        "preview": "gonecli --version", "run": False, "available": False,
+    }
+    assert "data/tools/" in payload["note"]
+
+
+def test_dispatch_discover_tools_never_spawns_by_default(shipped_manifest, monkeypatch):
+    """门禁的正证：默认路径下 subprocess.run 一次都不该被调用
+
+    清单里刻意放一个**在 PATH 上**的命令（herecli）：否则「没 spawn」只是因为
+    「没找到命令」，M3 那类「忽略 run 门禁」的变异就杀不动（第一版踩过）。
+    用记录型桩而不是 raise 型桩——「一次都没调」才是本用例要证的性质。
+    """
+    calls = []
+    monkeypatch.setattr(discovery.subprocess, "run", lambda *a, **k: calls.append(a))
+    payload = json.loads(run(server.dispatch_tool("discover_tools", {})))
+    assert calls == []
+    assert payload["runCommands"] is False
+    runs = [c["command"]["run"] for c in payload["candidates"] if "command" in c]
+    assert runs == [False, False]
+
+
+def test_dispatch_discover_tools_status_filter_keeps_full_summary(shipped_manifest):
+    payload = json.loads(run(server.dispatch_tool("discover_tools", {"status": "installed"})))
+    assert payload["statusFilter"] == "installed"
+    assert payload["returned"] == 1
+    assert [c["toolId"] for c in payload["candidates"]] == ["here"]
+    # summary 不被筛选裁剪：否则「summary.installed=1 / 返回 1 条」会看不出
+    # 到底是筛过还是本来就只有这些
+    assert payload["summary"]["not_installed"] == 1
+    assert "statusFilter" not in json.loads(run(server.dispatch_tool("discover_tools", {})))
+
+
+def test_dispatch_discover_tools_empty_manifest_says_so(tmp_path, monkeypatch):
+    monkeypatch.setenv(discovery.DISCOVERY_ENV_VAR, str(tmp_path / "absent.json"))
+    payload = json.loads(run(server.dispatch_tool("discover_tools", {})))
+    assert payload["success"] is True and payload["candidates"] == []
+    assert "没有候选可探测" in payload["note"]
+    assert "还没声明" in payload["note"]
+
+
+def test_dispatch_discover_tools_bad_manifest_is_config_error(tmp_path, monkeypatch):
+    path = tmp_path / "discovery.json"
+    path.write_text(
+        json.dumps(manifest_of(cand("dup", name="A"), cand("dup", name="B"))),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(discovery.DISCOVERY_ENV_VAR, str(path))
+
+    with pytest.raises(ToolError) as exc:
+        run(server.dispatch_tool("discover_tools", {}))
+
+    payload = json.loads(str(exc.value))
+    assert payload["success"] is False
+    assert payload["errorType"] == "config_error"
+    assert "tool_id 重复" in payload["error"]
+
+
+def test_discover_tools_spec_is_open_world_not_read_only():
+    """注解：会 spawn 的能力面不声明只读（与 get_tool_help 同判例）"""
+    from tool_specs import build_mcp_tools, get_spec
+
+    spec = get_spec("discover_tools")
+    assert spec.annotations == {"openWorldHint": True, "destructiveHint": False}
+    assert "readOnlyHint" not in spec.annotations
+    assert set(spec.input_schema["properties"]) == {"run_commands", "status"}
+    assert spec.input_schema["properties"]["status"]["enum"] == [
+        "installed", "not_installed", "unknown",
+    ]
+    assert "required" not in spec.input_schema
+    built = {t.name: t for t in build_mcp_tools()}["discover_tools"]
+    assert built.annotations.model_dump(exclude_none=True)["openWorldHint"] is True

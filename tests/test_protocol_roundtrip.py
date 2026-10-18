@@ -209,6 +209,74 @@ def test_usage_stats_call_carries_boolean_success_over_wire():
     assert sc["window"]["days"] == 30
 
 
+def test_discover_tools_call_carries_success_envelope_without_spawning(
+    tmp_path, monkeypatch
+):
+    """P1 工具发现走真实会话：信封 success 为 bool，且默认路径一次都不 spawn
+
+    清单指向 tmp 合成目录（**不探测用户真机**——本期真机结果由客户端自己调
+    `discover_tools` 得到）。这里要证的是协议面：载荷能过 outputSchema、
+    `run_commands` 缺省为 false 时 subprocess 完全没被碰过。
+    """
+    import discovery
+
+    here = tmp_path / "here"
+    here.mkdir()
+    # 把 PATH 换成 tmp 里的一个假垫片：命令「可用」但不该被跑，才是门禁的正证
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for nm in ("herecli", "herecli.cmd"):
+        bin_dir.joinpath(nm).write_text("", encoding="utf-8")
+    monkeypatch.setenv("PATH", str(bin_dir))
+    manifest = tmp_path / "discovery.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "candidates": [
+                    {"tool_id": "here", "name": "Here",
+                     "probes": [{"probe": "path_exists", "path": str(here)}],
+                     "command": {"argv": ["herecli", "--version"]}},
+                    {"tool_id": "gone", "name": "Gone",
+                     "probes": [{"probe": "path_exists",
+                                 "path": str(tmp_path / "gone")}]},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(discovery.DISCOVERY_ENV_VAR, str(manifest))
+    calls = []
+    monkeypatch.setattr(discovery.subprocess, "run", lambda *a, **k: calls.append(a))
+
+    result = run(_call("discover_tools", {}))
+
+    assert not result.isError, f"工具发现被标成错误: {result.content}"
+    sc = result.structuredContent
+    assert sc["success"] is True
+    assert sc["runCommands"] is False
+    assert calls == []
+    by_id = {c["toolId"]: c for c in sc["candidates"]}
+    assert (by_id["here"]["status"], by_id["gone"]["status"]) == ("installed", "not_installed")
+    here_cmd = by_id["here"]["command"]
+    assert here_cmd["preview"] == "herecli --version"
+    assert here_cmd["run"] is False and here_cmd["available"] is True
+    assert here_cmd["path"].startswith(str(bin_dir))
+
+
+def test_discover_tools_rejects_unknown_status_on_protocol_path():
+    """`status` 带 enum：拼错的值在协议面就是 isError，不会静默返回空列表
+
+    与 NE-8 同一条理由：筛选类接口最坏的失败是让调用方把「参数打错」读成
+    「本机没装」。dispatch 层不校验，只有走真实会话才证明 enum 真的下发了。
+    """
+    result = run(_call("discover_tools", {"status": "insatlled"}))
+
+    assert result.isError, "拼错的 status 应该被 schema 的 enum 拦下"
+    assert "not one of" in result.content[0].text
+
+
 def test_tools_list_carries_output_schema():
     """outputSchema：客户端在 tools/list 里应读到每个工具的 outputSchema
 

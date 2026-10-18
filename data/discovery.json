@@ -1,0 +1,198 @@
+{
+  "version": 1,
+  "candidates": [
+    {
+      "tool_id": "scoop",
+      "name": "Scoop",
+      "kind": "app",
+      "purpose": "Windows 命令行包管理器（按用户安装，不需要管理员权限）",
+      "probes": [
+        {
+          "label": "Scoop 根目录 apps",
+          "probe": "path_exists",
+          "paths": [
+            "{SCOOP}\\apps",
+            "{USERPROFILE}\\scoop\\apps"
+          ]
+        },
+        {
+          "label": "已安装的包",
+          "probe": "dir_count",
+          "path": "{SCOOP}\\apps",
+          "limit": 200
+        },
+        {
+          "label": "已添加的 bucket",
+          "probe": "dir_count",
+          "path": "{SCOOP}\\buckets",
+          "limit": 50
+        }
+      ],
+      "command": {
+        "argv": ["scoop", "--version"],
+        "preview": "scoop --version",
+        "version_pattern": "([0-9]+\\.[0-9]+(?:\\.[0-9]+)?)"
+      }
+    },
+    {
+      "tool_id": "powertoys",
+      "name": "PowerToys",
+      "kind": "app",
+      "purpose": "Microsoft PowerToys 实用工具集（FancyZones / PowerToys Run / Keyboard Manager 等）",
+      "probes": [
+        {
+          "label": "PowerToys 主程序",
+          "probe": "path_exists",
+          "paths": [
+            "{ProgramFiles}\\PowerToys\\PowerToys.exe",
+            "{ProgramFiles(X86)}\\PowerToys\\PowerToys.exe",
+            "{LOCALAPPDATA}\\PowerToys\\PowerToys.exe",
+            "{LOCALAPPDATA}\\Programs\\PowerToys\\PowerToys.exe"
+          ]
+        },
+        {
+          "label": "模块设置目录",
+          "probe": "dir_count",
+          "path": "{LOCALAPPDATA}\\Microsoft\\PowerToys",
+          "limit": 60
+        }
+      ]
+    },
+    {
+      "tool_id": "winget",
+      "name": "WinGet",
+      "kind": "app",
+      "purpose": "Windows 包管理器命令行（App Installer 附带）",
+      "probes": [
+        {
+          "label": "winget 可执行别名",
+          "probe": "path_exists",
+          "paths": [
+            "{LOCALAPPDATA}\\Microsoft\\WindowsApps\\winget.exe",
+            "{SystemRoot}\\System32\\winget.exe"
+          ]
+        }
+      ],
+      "command": {
+        "argv": ["winget", "--version"],
+        "preview": "winget --version",
+        "version_pattern": "v?([0-9]+\\.[0-9]+\\.[0-9]+[^\\s]*)"
+      }
+    },
+    {
+      "tool_id": "quicker",
+      "name": "Quicker",
+      "kind": "launcher",
+      "purpose": "Quicker 效率启动器（动作可列/可搜/可调用，走 QuickerStarter 命令行）",
+      "probes": [
+        {
+          "label": "QuickerStarter 命令行入口",
+          "probe": "path_exists",
+          "paths": [
+            "{ProgramFiles}\\Quicker\\QuickerStarter.exe",
+            "{ProgramFiles(X86)}\\Quicker\\QuickerStarter.exe"
+          ]
+        },
+        {
+          "label": "Quicker 数据目录",
+          "probe": "dir_count",
+          "path": "{LOCALAPPDATA}\\Quicker",
+          "limit": 60
+        }
+      ]
+    },
+    {
+      "tool_id": "utools",
+      "name": "uTools",
+      "kind": "launcher",
+      "purpose": "uTools 效率启动器（插件清单可列/可搜，走 utools:// 协议唤起）",
+      "probes": [
+        {
+          "label": "uTools 插件目录",
+          "probe": "path_exists",
+          "paths": [
+            "{APPDATA}\\uTools\\plugins"
+          ]
+        },
+        {
+          "label": "已安装插件",
+          "probe": "dir_count",
+          "path": "{APPDATA}\\uTools\\plugins",
+          "limit": 200
+        }
+      ]
+    },
+    {
+      "tool_id": "everything",
+      "name": "Everything",
+      "kind": "app",
+      "purpose": "Everything 极速文件搜索",
+      "probes": [
+        {
+          "label": "Everything 主程序",
+          "probe": "path_exists",
+          "paths": [
+            "{ProgramFiles}\\Everything\\Everything.exe",
+            "{LOCALAPPDATA}\\Programs\\Everything\\Everything.exe"
+          ]
+        }
+      ]
+    },
+    {
+      "tool_id": "node",
+      "name": "Node.js",
+      "kind": "app",
+      "purpose": "Node.js 运行时（npx 随附，是 npm 系工具的入口）",
+      "probes": [
+        {
+          "label": "Node.js 安装目录",
+          "probe": "path_exists",
+          "paths": [
+            "{ProgramFiles}\\nodejs\\node.exe",
+            "{LOCALAPPDATA}\\Programs\\nodejs\\node.exe"
+          ]
+        }
+      ],
+      "command": {
+        "argv": ["node", "--version"],
+        "preview": "node --version",
+        "version_pattern": "v([0-9]+\\.[0-9]+\\.[0-9]+)"
+      }
+    },
+    {
+      "tool_id": "python",
+      "name": "Python",
+      "kind": "app",
+      "purpose": "Python 解释器（本 server 自身的运行依赖）",
+      "probes": [
+        {
+          "label": "python.org 安装根目录",
+          "probe": "dir_count",
+          "path": "{LOCALAPPDATA}\\Programs\\Python",
+          "limit": 30
+        }
+      ],
+      "command": {
+        "argv": ["python", "--version"],
+        "preview": "python --version",
+        "version_pattern": "Python ([0-9]+\\.[0-9]+\\.[0-9]+)"
+      }
+    },
+    {
+      "tool_id": "steam",
+      "name": "Steam",
+      "kind": "app",
+      "purpose": "Steam 客户端（P0 待接入，先由发现确认本机是否安装）",
+      "probes": [
+        {
+          "label": "Steam 主程序",
+          "probe": "path_exists",
+          "paths": [
+            "{ProgramFiles(X86)}\\Steam\\steam.exe",
+            "{ProgramFiles}\\Steam\\steam.exe"
+          ]
+        }
+      ]
+    }
+  ]
+}

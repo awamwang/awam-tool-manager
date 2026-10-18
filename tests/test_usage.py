@@ -328,13 +328,16 @@ def test_usage_stats_handler_explains_empty_window(log_path):
 
 
 def test_usage_stats_is_read_only_spec():
-    """新工具进声明表：只读注解 + 参数面（days / tool_id，无必填）"""
-    from tool_specs import SERVER_TOOL_SPECS, build_mcp_tools
+    """声明表里的 get_usage_stats：只读注解 + 参数面（days / tool_id，无必填）
 
-    names = [s.name for s in SERVER_TOOL_SPECS]
-    assert names[-1] == "get_usage_stats"
-    spec = SERVER_TOOL_SPECS[-1]
+    按名字取而不是按下标：顺序由 golden 逐位锁定，本用例只锁这一条 spec 的注解
+    与参数面——追加新工具不该让一个不相干的用例变红（discover_tools 落地时踩过）。
+    """
+    from tool_specs import SERVER_TOOL_SPECS, build_mcp_tools, get_spec
+
+    spec = get_spec("get_usage_stats")
+    assert spec in SERVER_TOOL_SPECS
     assert spec.annotations == {"readOnlyHint": True, "destructiveHint": False}
     assert set(spec.input_schema["properties"]) == {"days", "tool_id"}
     assert "required" not in spec.input_schema
-    assert build_mcp_tools()[-1].name == "get_usage_stats"
+    assert "get_usage_stats" in [t.name for t in build_mcp_tools()]

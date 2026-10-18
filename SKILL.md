@@ -27,6 +27,10 @@ description: 统一工具管理器，维护本机工具名单，提供统一的�
   成败、耗时）到 `<runtime>/usage.log`，`get_usage_stats` 按日历日窗口聚合。
   刻意**不记调用参数**；统计只覆盖经本 server 分发的调用，用户直接启动工具、
   以及其他进程的历史调用都不在计数内
+- **工具发现**：`discover_tools` 按仓库内声明式候选清单（`data/discovery.json`）
+  做**只读**探测（路径存在 / 目录条目数 / 命令是否在 PATH），对照已登记工具给出
+  `installed` / `not_installed` / `unknown`；默认不执行任何命令，取版本号要显式传
+  `run_commands=true`。探测面是声明出来的、不是穷举，「没发现」不等于「本机没有」
 
 ## 目录结构
 
@@ -39,18 +43,20 @@ awam-tool-manager/
 │   ├── mcp-conformance.md    # MCP 协议一致性对比
 │   └── code-review.md        # 代码审核报告
 ├── data/                     # 仓库内只有人工维护的真相源（A14 起）
-│   └── tools/                # 工具条目（每个工具一个 JSON）
+│   ├── tools/                # 工具条目（每个工具一个 JSON）
+│   └── discovery.json        # 发现候选清单（discover_tools 的声明源）
 ├── src/
 │   ├── server.py             # MCP Server 入口 + 对外工具定义 + 分发
 │   ├── store.py              # JSON 存储层（tools 走仓库，缓存走运行时目录）
 │   ├── registry.py           # 工具注册中心（查询语义）
 │   ├── backend_client.py     # 后端 MCP 客户端与连接池
 │   ├── launcher_client.py    # 启动器适配器（非 MCP：Quicker / uTools）
+│   ├── discovery.py          # 本机工具发现（声明清单 + 只读探测，默认零 spawn）
 │   ├── runtime_paths.py      # 运行时目录解析 + 旧路径迁移
 │   └── schema.py             # 两层数据的 JSON Schema 校验 + 文档生成源
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 343 个用例（另有 8 个真实 e2e 用例默认不收集，
+└── tests/                    # 411 个用例（另有 8 个真实 e2e 用例默认不收集，
                               # `pytest -m e2e` 显式跑；含真实 MCP 会话与文档漂移检测）
 ```
 
@@ -90,6 +96,7 @@ awam-tool-manager/
 | `sync_launcher_actions` | `tool_id`(必填) | 手动同步启动器动作清单 |
 | `get_tool_help` | `tool_id`(必填)、`run`、`timeout`、`allowDestructive` | 取工具帮助信息：文档链接 + 能力清单（mcp 子工具 / launcher 动作）+ 帮助命令预览；**默认只读数据、不 spawn**，`kind=app` 显式 `run=true` 才执行帮助命令（`--help` / 条目 `help.args`）并捕获输出 |
 | `get_usage_stats` | `days`、`tool_id` | 查询调用使用统计（只读 `<runtime>/usage.log`，不碰任何工具）：按天 / 按对外工具 / 按目标 `tool_id` 聚合调用量、成败与耗时；`days` 按日历日含今天、默认 7、越界收敛到 1~365，`tool_id` 按记录里的 `target` 精确匹配 |
+| `discover_tools` | `run_commands`、`status` | 按 `data/discovery.json` 声明的候选清单发现本机工具：`path_exists` / `dir_count` / 命令是否在 PATH 三类**只读**探测，对照已登记工具输出 `status`（installed / not_installed / unknown）+ `confidence` + `registered`；**默认不 spawn**，`run_commands=true` 才执行清单里的版本命令取版本号；`status` 只裁剪返回的候选，`summary` 仍是整份清单的计数 |
 
 > `kind=launcher`（启动器，如 Quicker / uTools）不是 MCP：没有长连接，调用是一次性的。
 > - **Quicker**：`QuickerStarter.exe -c<秒> "runaction:<ID或名称>?参数"`，stdout 回传动作
@@ -171,8 +178,9 @@ CallToolResult 透传；生产环境 pyenv 3.12 即 1.29.0）。
 - **`install.command` 默认不被自动执行**（P0 修复）：它写在进版本库的数据文件里、
   且会经 shell 执行，旧逻辑让它在「服务启动预热」和 `start_backend` 两条路径上
   无条件运行——病根是「没有调用方意图」的执行，与本技能「副作用须由显式调用触发」
-  的取舍正好相反（对照：`launch_tool` 默认只返回命令、`get_tool_help` 默认只取数，
-  只有显式 `execute=true` / `run=true` 才真正 spawn 进程）。
+  的取舍正好相反（对照：`launch_tool` 默认只返回命令、`get_tool_help` 默认只取数、
+  `discover_tools` 默认只读文件系统，只有显式 `execute=true` / `run=true` /
+  `run_commands=true` 才真正 spawn 进程）。
   现在必须显式授权才执行，授权有两个来源（任一即可）：
   1. 环境变量 `AWAM_AUTO_INSTALL=1` —— 部署者在 MCP 客户端配置里显式打开；
   2. 条目 `install.auto: true` —— 逐工具 opt-in。
