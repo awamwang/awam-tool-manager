@@ -235,6 +235,155 @@ def test_expand_path_supports_windows_parenthesised_names():
     assert unresolved is None if path is not None else "ProgramFiles(x86)" in unresolved
 
 
+# ---------------- 注册表回退（MCP 宿主不给全环境时） ----------------
+
+
+class FakeHandle:
+    def __init__(self, module, hive, key):
+        self._module = module
+        self.hive = hive
+        self.key = key
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class FakeWinreg:
+    """只覆盖 `discovery._reg_value` 用到的四个入口"""
+
+    HKEY_CURRENT_USER = "HKCU"
+    HKEY_LOCAL_MACHINE = "HKLM"
+    REG_SZ = 1
+    REG_EXPAND_SZ = 2
+
+    def __init__(self, values=None, expand_result=None):
+        self.values = dict(values or {})
+        self.expand_result = expand_result
+        self.queries: list[tuple] = []
+
+    def OpenKey(self, hive, key):
+        return FakeHandle(self, hive, key)
+
+    def QueryValueEx(self, handle, name):
+        self.queries.append((handle.hive, handle.key, name))
+        got = self.values.get((handle.hive, handle.key, name))
+        if got is None:
+            raise FileNotFoundError(name)  # OSError 的子类，与真实缺值同路径
+        return got
+
+    def ExpandEnvironmentStrings(self, raw):
+        return raw if self.expand_result is None else self.expand_result
+
+
+def test_expand_path_falls_back_to_registry_when_process_env_lacks_token(monkeypatch):
+    """宿主没给变量 ≠ 本机没这个目录：注册表是第二来源
+
+    真机首跑的 4 个 `unknown` 全因 `mcp` SDK 只把「安全变量」传给子进程，
+    `ProgramFiles` 与用户自定义的 `SCOOP` 都不在其中。
+    """
+    monkeypatch.delenv("AWAM_DEFINITELY_UNSET_VAR", raising=False)
+    monkeypatch.setattr(discovery.os, "name", "nt")
+    monkeypatch.setattr(
+        discovery,
+        "winreg",
+        FakeWinreg({
+            ("HKCU", "Environment", "AWAM_DEFINITELY_UNSET_VAR"): (
+                "S:\\Libs\\Scoop",
+                FakeWinreg.REG_SZ,
+            )
+        }),
+    )
+
+    path, unresolved = discovery.expand_path("{AWAM_DEFINITELY_UNSET_VAR}/apps")
+    assert unresolved is None
+    assert path == Path("S:\\Libs\\Scoop" + "/apps")
+
+
+def test_expand_path_process_env_wins_over_registry(fake_root, monkeypatch):
+    monkeypatch.setattr(discovery.os, "name", "nt")
+    fake = FakeWinreg({
+        ("HKCU", "Environment", TOKEN): ("D:\\from\\registry", FakeWinreg.REG_SZ)
+    })
+    monkeypatch.setattr(discovery, "winreg", fake)
+
+    path, unresolved = discovery.expand_path(f"{TEMPLATE}/sub")
+    assert unresolved is None and path == fake_root / "sub"
+    assert fake.queries == [], "进程环境已有值，不该再去读注册表"
+
+
+def test_expand_path_refuses_partially_expanded_registry_value(monkeypatch):
+    """`REG_EXPAND_SZ` 展开后仍残留 `%…%` 就当取不到，不拿半截变量名当路径"""
+    monkeypatch.delenv("AWAM_DEFINITELY_UNSET_VAR", raising=False)
+    monkeypatch.setattr(discovery.os, "name", "nt")
+    monkeypatch.setattr(
+        discovery,
+        "winreg",
+        FakeWinreg(
+            {
+                ("HKCU", "Environment", "AWAM_DEFINITELY_UNSET_VAR"): (
+                    "%AWAM_OTHER_UNSET%\\apps",
+                    FakeWinreg.REG_EXPAND_SZ,
+                )
+            }
+        ),
+    )
+
+    path, unresolved = discovery.expand_path("{AWAM_DEFINITELY_UNSET_VAR}")
+    assert path is None and unresolved == "AWAM_DEFINITELY_UNSET_VAR"
+
+
+def test_registry_reads_machine_env_after_user_env(monkeypatch):
+    monkeypatch.setattr(discovery.os, "name", "nt")
+    fake = FakeWinreg({
+        ("HKLM", discovery._MACHINE_ENV_KEY, "SCOOP_GLOBAL"): (
+            "S:\\Libs\\Scoop",
+            FakeWinreg.REG_SZ,
+        )
+    })
+    monkeypatch.setattr(discovery, "winreg", fake)
+
+    assert discovery.registry_env_value("SCOOP_GLOBAL") == "S:\\Libs\\Scoop"
+    assert (fake.HKEY_CURRENT_USER, "Environment", "SCOOP_GLOBAL") in fake.queries
+
+
+def test_program_files_x86_derived_when_official_value_absent(monkeypatch):
+    """x86 目录值缺失时按系统惯例从 64 位目录推导（32 位系统上就长这样）"""
+    monkeypatch.setattr(discovery.os, "name", "nt")
+    monkeypatch.setattr(
+        discovery,
+        "winreg",
+        FakeWinreg({
+            (
+                "HKLM",
+                discovery._CURRENT_VERSION_KEY,
+                "ProgramFilesDir",
+            ): ("C:\\Program Files", FakeWinreg.REG_SZ)
+        }),
+    )
+
+    assert discovery.registry_env_value("ProgramFiles") == "C:\\Program Files"
+    assert discovery.registry_env_value("ProgramFiles(x86)") == "C:\\Program Files (x86)"
+
+
+def test_registry_not_consulted_off_windows(monkeypatch):
+    monkeypatch.setattr(discovery.os, "name", "posix")
+    monkeypatch.setattr(discovery, "winreg", FakeWinreg())
+
+    assert discovery.registry_env_value("ProgramFiles") is None
+
+
+@pytest.mark.skipif(not sys.platform.startswith("win"), reason="注册表只在 Windows 上")
+def test_program_files_resolves_on_windows_without_the_env_var(monkeypatch):
+    """摘掉进程环境变量后仍能展开成真目录（本机的实然结论，不是替身）"""
+    monkeypatch.delenv("ProgramFiles", raising=False)
+    path, unresolved = discovery.expand_path("{ProgramFiles}")
+    assert unresolved is None, f"注册表回退未生效：{unresolved}"
+    assert path.name.lower() == "program files"
+
+
 # ---------------- run_probes ----------------
 
 
@@ -408,6 +557,26 @@ def test_suffix_order_follows_pathext_and_skips_non_executables(fake_bin, monkey
     assert Path(discovery.resolve_executable("alpha")).name.lower() == "alpha.cmd"
     monkeypatch.setenv("PATHEXT", ".EXE;.CMD")
     assert Path(discovery.resolve_executable("alpha")).name.lower() == "alpha.exe"
+
+
+def test_path_order_beats_suffix_order(tmp_path, monkeypatch):
+    """先目录、后后缀（与 cmd.exe 一致）：PATH 靠前的 `.bat` 要赢过靠后的 `.exe`
+
+    真机反例：pyenv 的 `python.bat` 在第 53 个 PATH 项，商店占位 `python.exe` 在
+    第 66 项；按后缀外层解析会跳过前者、选中那个 rc=9009 的占位 stub。
+    """
+    early = tmp_path / "early"
+    late = tmp_path / "late"
+    early.mkdir()
+    late.mkdir()
+    make_exec(early / "python")
+    make_exec(early / "python.bat")
+    make_exec(late / "python.exe")
+    monkeypatch.setenv("PATH", os.pathsep.join([str(early), str(late)]))
+    monkeypatch.setenv("PATHEXT", ".EXE;.BAT;.CMD")
+    monkeypatch.setattr(discovery.os, "name", "nt")
+
+    assert Path(discovery.resolve_executable("python")).parent == early
 
 
 def test_resolve_keeps_which_hit_when_no_executable_sibling(fake_bin, monkeypatch):

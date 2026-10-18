@@ -13,9 +13,9 @@ PATH 上（`shutil.which`，同样不 spawn）。跑命令取版本号（`scoop 
 
 探测面是**声明出来的、不是穷举**：清单里没写路径的安装位置发现不了。所以
 结论分三档——命中判 `installed`（高信心），全部声明位置都检查成且都不存在才判
-`not_installed`（中信心），只要有位置没检查成（环境变量没设）就判 `unknown`
-（无信心）。`status` 复用工具条目的同一套取值，调用方可以把发现结果直接回填给
-`list_tools` 的 `status` 筛选。
+`not_installed`（中信心），只要有位置没检查成（变量在进程环境和注册表里都取不到）
+就判 `unknown`（无信心）。`status` 复用工具条目的同一套取值，调用方可以把发现结果
+直接回填给 `list_tools` 的 `status` 筛选。
 """
 
 from __future__ import annotations
@@ -27,6 +27,11 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
+
+try:  # 仅 Windows 有；POSIX 上注册表回退整条路径直接不生效
+    import winreg
+except ImportError:  # pragma: no cover
+    winreg = None
 
 DISCOVERY_ENV_VAR = "AWAM_DISCOVERY_FILE"
 DEFAULT_DISCOVERY_PATH = Path(__file__).parent.parent / "data" / "discovery.json"
@@ -62,6 +67,19 @@ MAX_DIRS = 200
 # 于是裸名先命中、把不可执行的路径交下去，实跑必报 `[WinError 193] %1 不是有效
 # 的 Win32 应用程序`（真机 discover_tools run_commands=true 首次暴露）。
 WIN_EXEC_SUFFIXES = (".exe", ".com", ".cmd", ".bat")
+
+# 环境变量的第二来源（注册表落点）。MCP 宿主起子进程时按「只继承安全变量」给
+# 环境（mcp SDK 的 `get_default_environment()` 白名单里没有 `ProgramFiles`，更没有
+# 用户自定义的 `SCOOP`），只读 `os.environ` 会让本该命中的探针整批退化成
+# `unknown`——真机首跑 9 个候选里 4 个因此没检查成，其中 PowerToys 本机明明装着。
+_USER_ENV_KEY = "Environment"
+_MACHINE_ENV_KEY = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+_CURRENT_VERSION_KEY = r"SOFTWARE\Microsoft\Windows\CurrentVersion"
+# ProgramFiles 两兄弟的官方目录值；x86 值缺失时按系统惯例从 64 位目录推导
+_PROGRAM_FILES_VALUES = {
+    "programfiles": "ProgramFilesDir",
+    "programfiles(x86)": "ProgramFilesDir (x86)",
+}
 
 
 class DiscoveryError(Exception):
@@ -178,11 +196,57 @@ def load_manifest(path: str | Path | None = None) -> dict:
     return data
 
 
+def _reg_value(hive: int, key: str, name: str) -> str | None:
+    """读一个注册表字符串值；`REG_EXPAND_SZ` 展开后仍残留 `%…%` 的按取不到处理"""
+    if winreg is None:
+        return None
+    try:
+        with winreg.OpenKey(hive, key) as handle:
+            raw, value_kind = winreg.QueryValueEx(handle, name)
+    except OSError:
+        return None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    if value_kind == winreg.REG_EXPAND_SZ:
+        try:
+            raw = winreg.ExpandEnvironmentStrings(raw)
+        except OSError:  # pragma: no cover —— 展开失败与读不到等价
+            return None
+        if "%" in raw:
+            return None
+    return raw
+
+
+def registry_env_value(name: str) -> str | None:
+    """进程环境取不到时，从注册表读变量的原值（用户级优先，再机器级）。
+
+    只读环境变量的两处标准落点，外加 `ProgramFiles` / `ProgramFiles(x86)` 的
+    官方目录值；POSIX 与非 Windows Python 上直接返回 `None`，行为与改动前一致。
+    """
+    if os.name != "nt" or winreg is None:
+        return None
+    for hive, key in (
+        (winreg.HKEY_CURRENT_USER, _USER_ENV_KEY),
+        (winreg.HKEY_LOCAL_MACHINE, _MACHINE_ENV_KEY),
+    ):
+        got = _reg_value(hive, key, name)
+        if got:
+            return got
+    value_name = _PROGRAM_FILES_VALUES.get(name.lower())
+    if not value_name:
+        return None
+    got = _reg_value(winreg.HKEY_LOCAL_MACHINE, _CURRENT_VERSION_KEY, value_name)
+    if got or value_name == "ProgramFilesDir":
+        return got
+    base = _reg_value(winreg.HKEY_LOCAL_MACHINE, _CURRENT_VERSION_KEY, "ProgramFilesDir")
+    return f"{base} (x86)" if base else None
+
+
 def expand_path(template: str) -> tuple[Path | None, str | None]:
     """展开 `{ENV}` 模板成绝对路径。
 
-    返回 `(path, unresolved_env)`：任一 token 在环境里取不到就整体判不命中
-    ——**不回退成相对路径**，那会把「没设环境变量」伪装成「这个路径不存在」，
+    返回 `(path, unresolved_env)`：任一 token 两个来源都取不到就整体判不命中
+    ——**不回退成相对路径**，那会把「取不到变量」伪装成「这个路径不存在」，
     两种情况在结论里必须分开。
 
     token 字符集含 `()`，因为 Windows 的真实变量名就长这样
@@ -193,7 +257,7 @@ def expand_path(template: str) -> tuple[Path | None, str | None]:
 
     def _sub(match: re.Match) -> str:
         name = match.group(1)
-        value = os.environ.get(name)
+        value = os.environ.get(name) or registry_env_value(name)
         if not value:
             missing.append(name)
             return match.group(0)
@@ -350,10 +414,10 @@ def resolve_executable(name: str) -> str | None:
         return exe
     if Path(exe).suffix.lower() in _win_exec_suffix_order():
         return exe
-    for suffix in _win_exec_suffix_order():
-        for directory in (os.environ.get("PATH") or os.defpath).split(os.pathsep):
-            if not directory:
-                continue
+    for directory in (os.environ.get("PATH") or os.defpath).split(os.pathsep):
+        if not directory:
+            continue
+        for suffix in _win_exec_suffix_order():
             candidate = Path(directory) / (name + suffix)
             try:
                 if candidate.is_file():
