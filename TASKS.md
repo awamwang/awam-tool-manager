@@ -896,18 +896,31 @@
       `installed` / 高信心，`scoop --version` = 0.5.3，`dir_count` 实测
       **14 个包 / 4 个 bucket**（extras、Faustvii、main、versions）——
       适配器要列的清单规模已经有了）
-- [ ] 接入 WeGame（腾讯平台）
+- [x] 接入 WeGame（腾讯平台）— ⛔ **本机确实没装主程序，无法实测**（2026-10-19 只读勘察，
+      结论与本轮 Steam 那次相反，这次是真的没有）：
+      ① 全盘限深扫描 `wegame*.exe` 只命中 1 个残留
+      `C:\Users\Administrator\AppData\Local\WeGame\WeGameMiniLoader(2001918)\WeGameMiniLoader.exe`
+      （5.8 MB，是迷你加载器不是客户端）；
+      ② `HKLM\SOFTWARE\Tencent\WeGame`（32 位视图）键**存在但零值**，仅一个空子键 `Apps`；
+      ③ HKLM/HKCU × 32/64 四路卸载表里 WeGame、WeGame1 全无条目（只有 腾讯应用宝 / 腾讯会议）；
+      ④ `C:\Program Files\Tencent` = Androws/QQNT/WeMeet/WeType，`C:\Program Files (x86)\Tencent`
+      = Qzone/QzoneMusic/UpdateSvr，均无 WeGame 目录。
+      **决定不登记、也不写进 `data/discovery.json`**：残留 MiniLoader 恰好是
+      「有残留 ≠ 装着」的反向陷阱，拿它当命中会造出一个新的假阳性，与缺陷④ 同源不同向。
+      要接得先装客户端；届时登记形态按 `kind=app` + `launch` 走，动作面（启动游戏）不在本项目范围内
 - [x] 接入 Quicker — ✅ 已完成（见「启动器接入」）：实测同步 212 个动作、160 个有名称，
       关键词搜索命中（"搜索"→5 条 / "剪贴"→2 条 / "识别二维码"→1 条），
       调用全链路通（含成功路径：真实执行动作并返回 OK）
 - [x] 接入 uTools — ✅ 已完成（2026-10-18，见「启动器接入」）：实测同步 218 个动作、
       source=auto，协议调用成功（`start` 退出码 0）；fire-and-forget 无回传、
       payload 仅文本等限制见勘察报告 §5
-- [ ] 接入 PowerToys — 本机已装，可实测
-      （2026-10-18 真机 `discover_tools` 已确认：主程序
-      `C:\Program Files\PowerToys\PowerToys.exe` 命中，`installed` / 高信心，
-      模块设置目录 `dir_count` = 48 项；`{ProgramFiles}` 同样靠注册表回退才拿到，
-      这条 P2 不存在「本机没装」的阻塞）
+- [x] 接入 PowerToys — ✅ 已登记（2026-10-19，`data/tools/powertoys.json`，`kind=app`）：
+      主程序 `C:\Program Files\PowerToys\PowerToys.exe`（发现层早已判 `installed` / 高信心），
+      版本与模块数取自本机 `settings.json`（`powertoys_version` v0.97.1、`enabled` 段 32 个模块
+      实测 9 个启用），更新渠道 `winget` / `Microsoft.PowerToys`。
+      条目里写死了一条边界：PowerToys 以托盘常驻方式运行，`launch` 只确保进程起来，
+      单模块动作（FancyZones 编辑、PowerToys Run 唤起）由全局快捷键触发、**不经本条目**，
+      所以它是「可列 / 可搜 / 可启动」而不是「可操作」
 
 ### P3 - 高级功能
 - [ ] 智能路由：根据用户意图自动选择从哪个安装器安装
