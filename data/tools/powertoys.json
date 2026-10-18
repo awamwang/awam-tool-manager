@@ -1,0 +1,36 @@
+{
+  "id": "powertoys",
+  "name": "PowerToys",
+  "displayName": "Microsoft PowerToys 实用工具集",
+  "kind": "app",
+  "description": "微软开源的 Windows 桌面增强套件：FancyZones 窗口布局、PowerToys Run 启动器、AlwaysOnTop 窗口置顶、PowerRename 批量重命名、TextExtractor 文字提取、MouseWithoutBorders 跨机键鼠等模块（本机 settings.json 的 enabled 段实测 32 个）",
+  "version": "0.97.1",
+  "status": "installed",
+  "publisher": "Microsoft",
+  "website": "https://github.com/microsoft/PowerToys",
+  "docUrl": "https://learn.microsoft.com/windows/powertoys/",
+  "icon": "C:\\Program Files\\PowerToys\\PowerToys.exe",
+  "launch": {
+    "type": "executable",
+    "command": "C:\\Program Files\\PowerToys\\PowerToys.exe",
+    "args": []
+  },
+  "update": {
+    "method": "winget",
+    "packageId": "Microsoft.PowerToys"
+  },
+  "tags": ["系统工具", "效率工具", "窗口管理", "桌面增强"],
+  "actions": ["launch"],
+  "capabilities": ["window-management", "launcher", "utility-suite"],
+  "readOnly": false,
+  "destructive": false,
+  "metadata": {
+    "installPath": "C:\\Program Files\\PowerToys",
+    "settingsDir": "C:\\Users\\Administrator\\AppData\\Local\\Microsoft\\PowerToys",
+    "detectionNote": "2026-10-18 真机 discover_tools 实测：主程序 path_exists 命中 C:\\Program Files\\PowerToys\\PowerToys.exe（installed / 高信心），模块设置目录 dir_count = 48 项；{ProgramFiles} 靠注册表 ProgramFilesDir 回退才解析出来",
+    "moduleToggles": "模块开关在 settingsDir\\settings.json 的 enabled 段（本机实测启用：CmdPal / EnvironmentVariables / File Explorer / Measure Tool / MousePointerCrosshairs / NewPlus / PowerRename / Shortcut Guide / Workspaces），本条目不代管配置",
+    "notes": "以托盘常驻方式运行，launch 只是确保进程起来；单个模块的动作（ FancyZones 编辑、PowerToys Run 唤起）由全局快捷键触发，不经本条目"
+  },
+  "createdAt": "2026-10-18T16:05:00Z",
+  "updatedAt": "2026-10-18T16:05:00Z"
+}
