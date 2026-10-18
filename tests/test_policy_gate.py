@@ -21,7 +21,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from policy import decide_destructive  # noqa: E402
+import policy
+from policy import decide_destructive
 
 
 def _decide(kind, tool, sub_op=None, args=None):
@@ -31,6 +32,7 @@ def _decide(kind, tool, sub_op=None, args=None):
 _MCP_DESTRUCTIVE = {"id": "boom", "kind": "mcp", "destructive": True}
 _MCP_LISTED = {**_MCP_DESTRUCTIVE, "destructiveTools": ["nuke"]}
 _LAUNCHER_DESTRUCTIVE = {"id": "quicker", "kind": "launcher", "destructive": True}
+_APP_DESTRUCTIVE = {"id": "boom-app", "kind": "app", "destructive": True}
 
 
 # ---- 1. 判定表逐行 ----
@@ -78,6 +80,12 @@ _DECISION_TABLE = [
         False,
         "destructive_actions_miss",
     ),
+    # app（launch_tool 的 execute 路径）：未标 destructive → 放行
+    ("app", None, {}, False, "not_destructive"),
+    ("app", {"id": "a", "kind": "app"}, {}, False, "not_destructive"),
+    ("app", {"id": "a", "destructive": False}, {}, False, "not_destructive"),
+    # app：标了 destructive → 执行启动需 allowDestructive（entry_level）
+    ("app", _APP_DESTRUCTIVE, {}, True, "entry_level"),
     # 未知 kind：默认放行（新增 kind 必须显式接入判定表）
     ("unknown-kind", {"id": "x", "destructive": True}, {}, False, "unknown_kind"),
 ]
@@ -127,6 +135,13 @@ def test_default_mode_rejection_messages_are_verbatim():
             {"action_id": "delete-all"},
             "启动器 'quicker' 的动作 'delete-all' 命中 destructiveActions"
             "（匹配值: 'delete-all'），需显式传 allowDestructive=true 才会执行",
+        ),
+        (
+            "app",
+            _APP_DESTRUCTIVE,
+            {},
+            "目标应用 'boom-app' 被标记为 destructive，"
+            "需显式传 allowDestructive=true 才会执行启动",
         ),
     ]
     for kind, tool, sub_op, expected in cases:
@@ -266,3 +281,44 @@ def test_audit_line_fields_and_three_states(capsys):
     assert lines[1]["sub_op"] == "delete-all"
     assert lines[2]["decision"] == "confirm"
     assert lines[2]["client_declared"] is True
+
+
+# ---- 5. app 种（launch_tool 的 execute 路径）----
+
+
+def test_app_gate_responds_to_allow_destructive(monkeypatch):
+    """app 种：allowDestructive=true 解封；策略 deny 模式赢过客户端声明"""
+    monkeypatch.setattr(policy, "_POLICY", policy.get_policy())
+
+    # 客户端显式确认 → 放行（confirm 态，与 mcp/launcher 同构）
+    confirmed = _decide("app", _APP_DESTRUCTIVE, {}, {"allowDestructive": True})
+    assert confirmed["blocked"] is False
+    assert confirmed["required_confirm"] is True
+    assert confirmed["audit"]["client_declared"] is True
+
+    # 策略 deny → 命中即拒，且不读客户端声明（H1 修复的同款语义）
+    denied_policy = {
+        **policy.get_policy(),
+        "destructive": {"mode": "deny"},
+    }
+    monkeypatch.setattr(policy, "_POLICY", denied_policy)
+    denied = _decide("app", _APP_DESTRUCTIVE, {}, {"allowDestructive": True})
+    assert denied["blocked"] is True
+    assert denied["error_type"] == "permission_denied"
+    assert "客户端无法自行解除" in denied["reason"]
+
+
+def test_app_gate_audit_line(capsys):
+    """app 种的审计行：action 记 launch_tool、kind 记 app、三态正确"""
+    _decide("app", _APP_DESTRUCTIVE, {})
+    _decide("app", _APP_DESTRUCTIVE, {}, {"allowDestructive": True})
+
+    lines = _audit_lines(capsys)
+    assert len(lines) == 2, f"应每次判定一行审计，实际 {len(lines)} 行"
+    for line in lines:
+        assert line["kind"] == "app"
+        assert line["tool"] == "boom-app"
+        assert line["action"] == "launch_tool"
+        assert line["sub_op"] == "", "启动无子操作，sub_op 应为空"
+    assert lines[0]["decision"] == "block"
+    assert lines[1]["decision"] == "confirm"

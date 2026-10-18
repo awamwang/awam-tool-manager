@@ -1,8 +1,9 @@
 """破坏性门禁判定与部署策略（ARC-P1-05 Phase 1 方案 A，Phase 2 方案 C）。
 
-唯一判定入口 `decide_destructive(kind, tool, sub_op, args)`——两个执行类
-handler（`call_backend_tool` / `run_launcher_action`）只调它，不再各自
-维护判定逻辑。Phase 2 起策略（`data/policy.json`）参与判定：
+唯一判定入口 `decide_destructive(kind, tool, sub_op, args)`——三个执行类
+handler（`call_backend_tool` / `run_launcher_action` / `launch_tool` 的
+execute 路径）只调它，不再各自维护判定逻辑。Phase 2 起策略
+（`data/policy.json`）参与判定：
 
 - `check_call(name)`：`dispatch_tool` 前置的工具级策略（deny 名单优先于
   allow 白名单）；命中即拒绝（permission_denied），完全不进 handler；
@@ -20,6 +21,8 @@ handler（`call_backend_tool` / `run_launcher_action`）只调它，不再各自
 - launcher：条目未标 `destructive` → 放行；有 `destructiveActions`（新字段）
   → 按动作 `id`/`name`/`type` 做大小写不敏感 glob（fnmatch）匹配，命中才拦；
   无该字段 → 回退条目级全拦（现语义，不回退放宽）。
+- app：条目未标 `destructive` → 放行；标了 → 执行启动需
+  `allowDestructive=true`（启动即子操作，无更细粒度可言）。
 
 审计（Q4 裁决：Phase 1 只 stderr）：每次判定（放行/拒绝/确认放行）产出
 一行结构化 JSON 到 stderr，字段 `ts / tool / kind / sub_op / decision /
@@ -225,6 +228,27 @@ def _decide_launcher(
     )
 
 
+def _decide_app(
+    tool: dict | None, sub_op: dict
+) -> tuple[bool, str, str, str]:
+    """app 判定表（`launch_tool` 的 execute=true 路径）。返回四元组同
+    `_decide_mcp` / `_decide_launcher`。
+
+    启动就是唯一的子操作，没有子工具/动作那种细分粒度：条目标了
+    `destructive` 就连「启动它」也要显式确认。`sub_op` 参数保留是为与
+    另外两个 `_decide_*` 同签名（decide_destructive 统一传 {}）。
+    """
+    tool_id = (tool or {}).get("id") or ""
+    if not tool or not tool.get("destructive"):
+        return False, RULE_NOT_DESTRUCTIVE, "目标应用未标记 destructive，放行", ""
+    return (
+        True,
+        RULE_ENTRY_LEVEL,
+        f"目标应用 '{tool_id}' 被标记为 destructive",
+        "，需显式传 allowDestructive=true 才会执行启动",
+    )
+
+
 def _emit_audit(audit: dict) -> None:
     """审计行：stderr 恒输出；audit.log 追加受策略 `audit.destructive` 控制。
 
@@ -307,11 +331,12 @@ def decide_destructive(
     """破坏性门禁的唯一判定入口。
 
     Args:
-        kind: `"mcp"` 或 `"launcher"`（其他值放行——新增 kind 必须显式接入
+        kind: `"mcp"` / `"launcher"` / `"app"`（其他值放行——新增 kind 必须显式接入
             判定表，默认不拦以免拖垮未知类型）。
         tool: 工具条目（`registry.get_tool()` 的返回）；None 表示工具不存在。
         sub_op: 子操作标识。mcp → `{"tool_name": str}`；launcher →
-            `{"action_id", "action_name", "action_type"}`（值可为 None/空串）。
+            `{"action_id", "action_name", "action_type"}`；app → `{}`
+            （启动即子操作，无细分）。值可为 None/空串。
         args: 对外工具的调用参数——只读取 `allowDestructive` 用于审计
             `client_declared`，判定本身与客户端声明无关。
 
@@ -338,6 +363,10 @@ def decide_destructive(
             or ""
         )
         audit_action = "run_launcher_action"
+    elif kind == "app":
+        required, rule_hit, subject, tail = _decide_app(tool, sub_op)
+        sub_op_label = ""
+        audit_action = "launch_tool"
     else:
         required, rule_hit, tail = False, RULE_UNKNOWN_KIND, ""
         subject = f"未知 kind '{kind}'，放行"
