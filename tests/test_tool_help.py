@@ -174,6 +174,25 @@ def test_resolve_help_command_defaults_to_launch_command_and_double_dash():
     }
 
 
+def test_resolve_help_command_falls_back_to_double_dash_not_launch_args():
+    """`launch.args` 有值也**不**当作帮助参数——缺省永远是 `--help`。
+
+    这条是 `video.exe 片源.mp4` 那类条目的兜底：`help` 字段没写 args 时，
+    取 `launch.command` 但参数回落到 `--help`，绝不能回落到「正常启动参数」
+    （否则「取帮助」= 「拿正常参数把应用跑了」）。
+    """
+    resolved = resolve_help_command(
+        {
+            "launch": {
+                "type": "executable",
+                "command": "C:\\Tools\\video.exe",
+                "args": ["D:\\片源.mp4"],
+            }
+        }
+    )
+    assert resolved["args"] == ["--help"], "帮助参数竟回落到了 launch.args"
+
+
 def test_resolve_help_command_prefers_help_fields():
     """help.command / help.args 覆盖 launch（Windows 图形程序要 `/?` 的场景）"""
     resolved = resolve_help_command(
@@ -529,6 +548,7 @@ def test_handler_destructive_entry_blocks_run_until_allowed(tmp_path):
         _help(ctx, {"tool_id": "boom", "run": True})
     payload = json.loads(str(exc.value))
     assert payload["errorType"] == "destructive_blocked"
+    assert "执行帮助命令" in payload["error"], "拒绝文案不该说成「执行启动」"
     assert not marker.exists(), "被门禁拦截了却仍然跑了帮助命令"
 
     res = _help(ctx, {"tool_id": "boom", "run": True, "allowDestructive": True})
