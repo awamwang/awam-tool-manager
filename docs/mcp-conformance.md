@@ -200,7 +200,7 @@ MCP Tool 支持 `annotations`（`title` / `readOnlyHint` / `destructiveHint` / `
 
 | 类别 | 工具 | hints |
 |---|---|---|
-| 只读 | `search_tools` / `list_tools` / `get_tool_info` / `list_backend_tools` / `get_backend_status` / `get_backend_logs` | `readOnlyHint=true`、`destructiveHint=false` |
+| 只读 | `search_tools` / `list_tools` / `get_tool_info` / `list_backend_tools` / `get_backend_status` / `get_backend_logs` / `get_usage_stats` | `readOnlyHint=true`、`destructiveHint=false` |
 | 幂等 | `start_backend` / `stop_backend` / `sync_backend_tools` | `idempotentHint=true` |
 | 副作用静态不可知 | `call_backend_tool` / `launch_tool` / `get_tool_help` | `openWorldHint=true`（**不谎报 readOnly**） |
 

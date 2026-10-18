@@ -25,12 +25,13 @@
 - [x] MCP Server 入口（server.py）：stdio 模式
 - [x] 日志系统（输出到 stderr，不污染协议通道）
 
-### 对外 MCP 工具（16 个）
+### 对外 MCP 工具（17 个）
 - [x] `search_tools` - 搜索工具（关键词 + `kind` / `status` / `publisher` 筛选）
 - [x] `list_tools` - 列出所有工具（同上三个筛选维度，见「筛选维度增强」）
 - [x] `get_tool_info` - 查看工具详情
 - [x] `launch_tool` - 返回启动命令信息；2026-10-18 起支持显式 `execute=true` 真正执行启动（默认仍只返回命令）
 - [x] `get_tool_help` - 工具帮助信息：文档链接 + 能力清单（mcp 子工具 / launcher 动作）+ 帮助命令预览；2026-10-18 新增，`kind=app` 显式 `run=true` 才执行 `--help` 并捕获输出（默认零副作用）
+- [x] `get_usage_stats` - 调用使用统计：2026-10-18 新增（P3），只读 `<runtime>/usage.log` 并按窗口聚合，见「工具使用统计」小节
 - [x] `call_backend_tool` - 路由调用后端 MCP 的子工具
 - [x] `list_backend_tools` - 列出后端子工具（含完整参数 schema）
 - [x] `start_backend` / `stop_backend` / `get_backend_status` - 后端进程管理
@@ -182,8 +183,8 @@
 - [x] 合计 **168 passed**（`c40d80d` 时点签署，9 个贡献用例的文件；P0 修复后为 183，见下节）；
      真实后端子进程启停 + 调用回归通过
 
-> 文件数口径（2026-10-18 更新）：`tests/` 下有 **15 个** `test_*.py`（贡献 pytest
-> 用例），另有 `tests/e2e/` 下的 **7 个** e2e 用例文件——它们**默认不收集**
+> 文件数口径（2026-10-18 更新）：`tests/` 下有 **17 个** `test_*.py`（贡献 pytest
+> 用例），另有 `tests/e2e/` 下的 **8 个** e2e 用例文件（8 个场景）——它们**默认不收集**
 > （`pytest.ini` 的 `addopts = -m "not e2e"`），须 `pytest -m e2e` 显式跑。
 > `tests/e2e/manual_install_gate.py`（原 `tests/test_e2e_install_gate.py`，C 期
 > 改名并去掉 `test_` 前缀）是**手工脚本**，依赖本机 npm，不进 pytest。
@@ -233,9 +234,10 @@
   destructive 门禁摘除的变异本轮被权限策略拦下未跑（同款摘除已在场景⑦验过，
   help 路径的门禁由单测 `test_handler_destructive_entry_blocks_run_until_allowed`
   与场景⑧的断言锁定）
-- **口径**：`pytest tests/ -q` = 314 passed / **8 deselected**；
-  `pytest -m e2e -q` = 8 passed / 314 deselected。说「314」时要带上
+- **口径**：`pytest tests/ -q` = 343 passed / **8 deselected**；
+  `pytest -m e2e -q` = 8 passed / 343 deselected。说「343」时要带上
   「另有 8 个 e2e 默认不收集」，否则会被误读成总数。
+  （本行随每次落地更新：NE-8 时为 314，NE-9「工具使用统计」落地后为 343）
 - **手工脚本**（不在上面 8 个里）：
   `"<pyenv 3.12 python>" tests/e2e/manual_install_gate.py`——验「已授权时
   install.command 真的被提交给 shell」，依赖本机 npm，故保留手工。
@@ -435,6 +437,66 @@
 - [x] **未做 e2e 场景**：纯读路径、无子进程、无副作用；协议回环层已经用真实 SDK
       会话验过校验与投影，再起一个 stdio 子进程不增加覆盖，故不新增场景⑨
 
+### 工具使用统计（P3，2026-10-18）
+
+- [x] **`src/usage.py`（新模块，209 行）** - append-only JSONL 落
+      `<runtime>/usage.log`。选日志而不是内存计数器：上游网关周期性整池回收
+      本 server 进程（架构 §进程回收实测），进程一活内存计数就归零，落在盘上才是真相源。
+      形态刻意与 `policy.py` 的 `audit.log` 一致：audit 只记门禁决策，usage 记所有调用，
+      两份日志互相印证
+- [x] **刻意不记调用参数** - 行字段只有 `ts` / `tool` / `target`（= 参数里的
+      `tool_id`）/ `ok` / `ms`（失败才带 `errorType`）。参数里可能带本机路径、
+      关键词、动作正文，而聚合只需要「哪个对外工具、动的是哪个工具、成没成、快不快」
+- [x] **dispatch 出口埋点（`server.py` `dispatch_tool`）** - 选 dispatch 作为唯一漏斗：
+      它同时是协议入口和单测直调入口，五个出口（成功 / `unknown_tool` /
+      `permission_denied` / handler 业务错 / 意外异常）各记一行，计数不会漏。
+      业务错的 `errorType` 直接从异常正文取（那份 JSON 就是客户端看到的载荷，同源不另编），
+      意外异常记 `internal_error` 并原样再抛。**埋点是旁路**：返回值与异常语义一字未改
+      （`test_dispatch_instrumentation_does_not_change_contract` 锁定），
+      落盘失败只向 stderr 告警
+- [x] **新增第 17 个对外工具 `get_usage_stats`**（`tool_specs.py`，标 `readOnlyHint`）-
+      参数 `days`（按日历日、含今天，缺省 7，越界收敛到 1~365）与 `tool_id`
+      （与记录里的 `target` 精确匹配），均非必填；返回 `window`（自证口径）+
+      `stats`（total / success / failed / byName / targets / byDay / errorTypes）+ `logPath`。
+      `total=0` 时附 `note` 说明覆盖范围——空窗口不解释会被读成「这工具没人用」
+- [x] **载荷嵌套修正（实现期抓到的真问题）** - 聚合视图最初平铺进载荷，
+      `aggregate` 自带的 `success`（成功次数，int）把信封的 `success: true`（bool，
+      `SHARED_OUTPUT_SCHEMA` 唯一必填字段）覆盖掉了：客户端按布尔读「成没成」会全错。
+      改为嵌在 `stats` 下，并补协议回环用例
+      `test_usage_stats_call_carries_boolean_success_over_wire` 钉住「线上顶层
+      `success` 必须是 bool、`stats.success` 才是整数」
+- [x] **窗口按日历日而非 timedelta** - 「最近 7 天」按 `ts` 前 10 位比对日期集合
+      （含今天），避免「7 天前 00:31」这类边界歧义；`ts` 不合法的行留在窗口外但
+      不带 `days` 时仍如实返回
+- [x] **测试：+29 条（314 → 343）** - `tests/test_usage.py` 28 条（`record_call` 行形与
+      参数隐私 / `OSError` 吞异常、`error_type_from` 四种输入、`read_rows` 缺文件与坏行、
+      窗口裁剪、`aggregate` 视图形状、**5 条 dispatch 级集成**、3 条 handler 直通、
+      spec 只读注解），`tests/test_protocol_roundtrip.py` +1 条线上载荷用例
+- [x] **变异红绿（5 组，各打死对应用例后按 sha256 还原）** - M1 去掉成功埋点 →
+      dispatch 集成用例红；M2 `aggregate` 不统计失败 → 2 条红；M3 聚合字段改回平铺 →
+      4 条红（含协议回环）；M4 `record_call` 带上参数 → 2 条红；M5 未知工具出口不记
+      `errorType` → dispatch 集成用例红
+- [x] **golden 重基线（NE-9）** - 纯追加：16→17，diff 35+/0-，前 16 条逐字节不变
+- [x] **文档同步** - `SKILL.md`（核心能力增「使用统计」、工具表新行、用例数 343）、
+      `docs/format.md`（契约行 + 统计口径/嵌套说明块）、`docs/architecture.md`
+      （能力表、目录树、模块表新增 `usage.py` 行与 `tool_specs.py` 922→975、
+      实现索引 `dispatch_tool` / `usage.py` 三段、6.1 工具表、头部落点与
+      顺带修正 `schema.py` 450→470 / `server.py` 464→525 / `policy.py` 426→429 的既有漂移）、
+      `docs/mcp-conformance.md`（只读注解清单加 `get_usage_stats`）
+- [x] **踩到一条文档体例约束并留痕** - `tests/test_error_type_contract.py` 的解析器取
+      文档里**第一个** `` `errorType` `` 反引号 token 作为枚举锚点（体例要求它出现在
+      「`errorType`（取值）：」那一行）。我在 `docs/format.md` 契约表后新写的注释里
+      用了带反引号的 `errorType`，位置在枚举之前 → 守卫立刻红
+      （「解析不到任何 errorType 取值」）。改为「失败行才附带同载荷里的错误类型键」
+      措辞后恢复。**后续在 format.md 枚举锚点之前新增内容时，不要写带反引号的
+      `errorType`**（要么改措辞，要么把注释挪到锚点之后）
+- [x] **未做 e2e 场景** - 纯读 + 只写运行时目录，无子进程、无外部副作用；
+      dispatch 级与协议回环级两层已覆盖埋点与载荷
+- [x] **明确不做** - ①跨进程计数精度不做保证（多实例并发 append 的行序不保证，
+      计数以日志行数为准）；②`usage.log` 不做轮转（与 `audit.log` 同一取舍，
+      首版刻意不做，避免过度工程）；③不做「用户直接启动工具」的统计——
+      那条路径根本不经过本 server
+
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
 - [x] Everything Search MCP（`kind=mcp`，已实测连接、调用、启停跑通）
@@ -466,7 +528,7 @@
       → M02 `d2b4cd2` → M03 `019713d` → M04 `c3b2b08` → M05 `738b843`；M06（本文档 +
       `docs/architecture.md` 同步）与 M07（SKILL.md 工具表守卫 + 全量回归 + 真实 stdio 冒烟
       + P0 install 门禁 e2e 复跑）为收尾两步，哈希见 `git log`
-- [x] **非等价点（显式标注 NE-1~NE-8，U6 要求对用户可见）**：NE-1 `json.dumps` 统一带
+- [x] **非等价点（显式标注 NE-1~NE-9，U6 要求对用户可见）**：NE-1 `json.dumps` 统一带
       `default=str`（5 → 15 个工具；可达输入上的 no-op，单向放宽，不启用 `strict_dumps`
       回退）；NE-2 未知工具失败时机改为查表未命中即失败（错误消息与 errorType 逐字相同，
       完全等价）；NE-3 `validate_specs()` import 期自检（对合法输入零差异，spec 表损坏时
@@ -483,7 +545,12 @@
       NE-8 `search_tools` / `list_tools` 增 `status` / `publisher` 筛选维度
       （2026-10-18 P1 落地，详见「筛选维度增强」小节：**两处既有条目的 description +
       inputSchema 变更**（golden 是修改而非追加，diff 28+/2-），返回体每条新增
-      `publisher` 键；无新工具、无新副作用）
+      `publisher` 键；无新工具、无新副作用）；
+      NE-9 新增第 17 个对外工具 `get_usage_stats` + dispatch 全出口埋点
+      （2026-10-18 P3 落地，详见「工具使用统计」小节：golden 纯追加重基线 16→17，
+      diff 35+/0-；**新增一项本地写副作用**——每次 `tools/call` 往
+      `<runtime>/usage.log` append 一行（不含参数），客户端可见的载荷字段无变化；
+      既有 16 条 spec 逐字节不变）
 
 ### 其他
 - [x] Git 仓库初始化，代码版本管理
@@ -519,6 +586,14 @@
    「条目未写 = `unknown`」（`tool.get("status", "unknown")`）。改任一侧都会动既有条目
    之外的对外返回体，本期只做筛选、不动它；`data/tools/` 现有 5 条都显式写了 status，
    实机无差异。要对齐时应当**一起对齐**并申报独立 NE
+- **使用统计只覆盖「经本 server 分发的调用」**（NE-9 的刻意边界）：用户直接在
+   Quicker / uTools / 开始菜单里启动工具、以及任何其他进程的历史调用都不在
+   `usage.log` 里，因此 `get_usage_stats` 的 `total=0` 不等于「没人用」。
+   `total=0` 时返回体自带 `note` 说明口径，聚合数只作趋势参考、不作事实结论
+- **多实例并发写不保证行序，也不做日志轮转**：`usage.log` 与 `audit.log` 同款
+   append-only、无锁、无轮转（首版刻意不做，避免过度工程）。网关可能同时拉多个
+   server 进程，行与行之间会交错——计数以行数为准（每行自带 `tool`/`ts`，交错不影响
+   聚合正确性），但「第 N 行紧跟第 N+1 行」这类顺序假设不成立
 - ~~`data/backend-tools/*.json` 是自动生成的缓存却受 git 跟踪，多实例在跑时
   `lastSynced` 会被反复改写~~ → 已解决（A14）：运行时缓存整体迁到
   `%LOCALAPPDATA%\.awam-tool-manager`，仓库里只剩人工维护的 `data/tools/`
@@ -558,7 +633,10 @@
 ### P3 - 高级功能
 - [ ] 智能路由：根据用户意图自动选择从哪个安装器安装
 - [ ] 版本检测和更新提醒
-- [ ] 工具使用统计
+- [x] 工具使用统计 — ✅ 已完成（2026-10-18，见「工具使用统计（P3）」小节）：
+      dispatch 五个出口各记一行 JSONL 到 `<runtime>/usage.log`（不含参数），
+      第 17 个对外工具 `get_usage_stats` 按窗口聚合；刻意不做跨进程计数精度保证、
+      不做日志轮转，也无法统计「用户直接启动工具」那条不经过本 server 的路径
 - [ ] 权限控制（哪些工具 AI 可以直接执行）
 
 ---
@@ -664,7 +742,7 @@ awam-tool-manager/
 │   │   └── utools.json         # kind=launcher
 ├── src/
 │   ├── server.py               # MCP Server 入口：协议装配 + 薄分发 + 生命周期
-│   ├── tool_specs.py           # 对外 MCP 工具声明式注册表（SSOT：16 条 spec + handlers）
+│   ├── tool_specs.py           # 对外 MCP 工具声明式注册表（SSOT：17 条 spec + handlers）
 │   ├── policy.py               # 破坏性门禁统一判定 + 部署策略（data/policy.json）
 │   ├── errors.py               # 业务错误出口（ToolError / fail / ensure_success）
 │   ├── store.py                # JSON 存储层（tools 走仓库，缓存走 runtime dir）
@@ -673,11 +751,12 @@ awam-tool-manager/
 │   ├── launcher_client.py      # 启动器适配器（非 MCP：Quicker / uTools）
 │   ├── app_launcher.py         # kind=app 启动执行（launch_tool 的 execute=true 路径）
 │   ├── tool_help.py            # 帮助信息分层取数 + 帮助命令执行（get_tool_help 底座）
+│   ├── usage.py                # 调用使用统计：dispatch 出口记 usage.log + 按窗口聚合
 │   ├── runtime_paths.py        # 运行时目录解析 + 旧路径迁移（A14）
 │   └── schema.py               # 两层数据的 JSON Schema 校验 + **文档生成源**
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                      # 16 个 test_*.py（314 passed）+ 8 个 e2e 场景（默认不收集）
+└── tests/                      # 17 个 test_*.py（343 passed）+ 8 个 e2e 场景（默认不收集）
     ├── test_store.py
     ├── test_registry.py
     ├── test_registry_policy.py

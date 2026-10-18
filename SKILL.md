@@ -23,6 +23,10 @@ description: 统一工具管理器，维护本机工具名单，提供统一的�
 - **依赖自装**：启动命令缺失时按 `install` 元数据安装（**默认不执行，需显式授权**，见「安全约定」；服务启动时后台预热已退化为纯检测）
 - **帮助查看**：汇总工具的文档链接与能力清单；`kind=app` 显式 `run=true` 才执行
   帮助命令并捕获输出（默认只读数据，不 spawn）
+- **使用统计**：每次 `tools/call` 在分发出口记一行（对外工具名、目标 `tool_id`、
+  成败、耗时）到 `<runtime>/usage.log`，`get_usage_stats` 按日历日窗口聚合。
+  刻意**不记调用参数**；统计只覆盖经本 server 分发的调用，用户直接启动工具、
+  以及其他进程的历史调用都不在计数内
 
 ## 目录结构
 
@@ -46,7 +50,7 @@ awam-tool-manager/
 │   └── schema.py             # 两层数据的 JSON Schema 校验 + 文档生成源
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 314 个用例（另有 8 个真实 e2e 用例默认不收集，
+└── tests/                    # 343 个用例（另有 8 个真实 e2e 用例默认不收集，
                               # `pytest -m e2e` 显式跑；含真实 MCP 会话与文档漂移检测）
 ```
 
@@ -85,6 +89,7 @@ awam-tool-manager/
 | `run_launcher_action` | `tool_id`(必填)、`action_id`、`action_name`、`param`、`wait`、`allowDestructive` | 执行启动器动作；Quicker 走命令行（有 stdout 回传），uTools 走 `utools://` 协议唤起（fire-and-forget 无回传）；条目标了 `destructive` 时需 `allowDestructive=true`（配了 `destructiveActions` 时按动作 id/name/type 的 glob 判定，仅命中的动作需确认） |
 | `sync_launcher_actions` | `tool_id`(必填) | 手动同步启动器动作清单 |
 | `get_tool_help` | `tool_id`(必填)、`run`、`timeout`、`allowDestructive` | 取工具帮助信息：文档链接 + 能力清单（mcp 子工具 / launcher 动作）+ 帮助命令预览；**默认只读数据、不 spawn**，`kind=app` 显式 `run=true` 才执行帮助命令（`--help` / 条目 `help.args`）并捕获输出 |
+| `get_usage_stats` | `days`、`tool_id` | 查询调用使用统计（只读 `<runtime>/usage.log`，不碰任何工具）：按天 / 按对外工具 / 按目标 `tool_id` 聚合调用量、成败与耗时；`days` 按日历日含今天、默认 7、越界收敛到 1~365，`tool_id` 按记录里的 `target` 精确匹配 |
 
 > `kind=launcher`（启动器，如 Quicker / uTools）不是 MCP：没有长连接，调用是一次性的。
 > - **Quicker**：`QuickerStarter.exe -c<秒> "runaction:<ID或名称>?参数"`，stdout 回传动作

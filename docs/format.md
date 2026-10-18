@@ -225,6 +225,16 @@
 | `list_launcher_actions` | `tool_id`(必填)、`keyword`、`limit`、`refresh` | 列出/搜索启动器动作（缓存超过 5 分钟自动重扫） |
 | `run_launcher_action` | `tool_id`(必填)、`action_id`/`action_name`(至少一个)、`param`、`wait`、`allowDestructive` | 执行启动器动作（条目或目标标记 `destructive` 时需 `allowDestructive=true`；配 `destructiveActions` 时按动作 id/name/type 的 glob 判定，仅命中的动作需确认） |
 | `get_tool_help` | `tool_id`(必填)、`run`、`timeout`、`allowDestructive` | 取工具帮助信息：文档链接 + 能力清单（`kind=mcp` 子工具 / `kind=launcher` 动作）+ 帮助命令预览。**默认只读数据、不 spawn**；`kind=app` 显式 `run=true` 才执行 `help.command`/`launch.command` + `help.args`（缺省 `--help`）并捕获输出（条目 `destructive` 时需 `allowDestructive=true`；`timeout` 默认 5s、封顶 30s） |
+| `get_usage_stats` | `days`、`tool_id` | 查询调用使用统计（只读 `<runtime>/usage.log`）：按天 / 按对外工具 / 按目标 `tool_id` 聚合调用量、成败与耗时。`days` 按日历日含今天、缺省 7、越界收敛到 1~365；`tool_id` 与记录里的 `target` 精确匹配 |
+
+> **统计的覆盖范围是「经本 server 分发的调用」**：`dispatch_tool` 的每个出口
+> （成功、`unknown_tool`、`permission_denied`、handler 业务错、意外异常）各记一行
+> `ts` / `tool` / `target` / `ok` / `ms`，失败行才附带同载荷里的错误类型键。
+> 用户直接启动工具、其他进程或其他日期的历史调用都不在计数内，因此 `total=0`
+> 时返回体会附 `note` 说明口径。刻意**不记调用参数**：参数里可能带本机路径、
+> 关键词、动作正文。
+> 聚合视图嵌在 `stats` 下而非平铺——`aggregate` 自身有个 `success`（成功次数，int），
+> 平铺会把载荷信封的 `success: true`（bool，`SHARED_OUTPUT_SCHEMA` 唯一必填）覆盖掉。
 
 > **`status` 带 `enum`，拼错的值在校验层就是 `isError`**（`Input validation error: ... is not one of [...]`），
 > 不会静默返回空列表——筛选类接口最坏的一种失败是让调用方把「参数打错」读成「本机没装」。
