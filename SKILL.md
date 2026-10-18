@@ -41,7 +41,7 @@ awam-tool-manager/
 │   └── schema.py             # 两层数据的 JSON Schema 校验 + 文档生成源
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 250 个用例（另有 6 个真实 e2e 用例默认不收集，
+└── tests/                    # 254 个用例（另有 6 个真实 e2e 用例默认不收集，
                               # `pytest -m e2e` 显式跑；含真实 MCP 会话与文档漂移检测）
 ```
 
