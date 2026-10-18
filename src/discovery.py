@@ -57,6 +57,12 @@ VERDICT_INCONCLUSIVE = "inconclusive"
 DEFAULT_DIR_LIMIT = 60
 MAX_DIRS = 200
 
+# Windows 上能真被 CreateProcess 起起来的后缀。`shutil.which` 先按**裸名**试再按
+# PATHEXT 补后缀，而 scoop / pyenv 的 shims 目录里裸名是给 Git Bash 用的脚本，
+# 于是裸名先命中、把不可执行的路径交下去，实跑必报 `[WinError 193] %1 不是有效
+# 的 Win32 应用程序`（真机 discover_tools run_commands=true 首次暴露）。
+WIN_EXEC_SUFFIXES = (".exe", ".com", ".cmd", ".bat")
+
 
 class DiscoveryError(Exception):
     """发现清单不可用（读不了 / JSON 坏了 / 校验失败）或探测参数非法"""
@@ -314,6 +320,49 @@ def _preview_of(cand: dict) -> str:
     return " ".join(argv) if _valid_argv(argv) else ""
 
 
+def _win_exec_suffix_order() -> tuple[str, ...]:
+    """后缀尝试顺序：PATHEXT 的先后为准，只保留可执行集合内的项。
+
+    PATHEXT 里 `.py` `.vbs` `.js` 这类 CreateProcess 起不来的项不参与尝试；PATHEXT
+    取不到（MCP 宿主常不给）时退回 `WIN_EXEC_SUFFIXES` 原序。
+    """
+    pathext = []
+    for item in os.environ.get("PATHEXT", "").split(os.pathsep):
+        if not item:
+            continue
+        suffix = item.lower()
+        if not suffix.startswith("."):
+            suffix = "." + suffix
+        if suffix in WIN_EXEC_SUFFIXES:
+            pathext.append(suffix)
+    return tuple(pathext) or WIN_EXEC_SUFFIXES
+
+
+def resolve_executable(name: str) -> str | None:
+    """PATH 上解析命令名，裸名命中的是不可执行的无扩展名垫片时改取真身。
+
+    只在 Windows 上做二次解析：POSIX 上裸名本来就是正常形态。补后缀时按目录优先
+    （PATH 靠前的目录先赢，与系统解析一致），一个都没找到就仍返回 `which` 的原结果
+    ——让调用方照旧拿到 `available=true` 并在实跑时报出真实错误，不假装没找到。
+    """
+    exe = shutil.which(name)
+    if exe is None or os.name != "nt":
+        return exe
+    if Path(exe).suffix.lower() in _win_exec_suffix_order():
+        return exe
+    for suffix in _win_exec_suffix_order():
+        for directory in (os.environ.get("PATH") or os.defpath).split(os.pathsep):
+            if not directory:
+                continue
+            candidate = Path(directory) / (name + suffix)
+            try:
+                if candidate.is_file():
+                    return str(candidate)
+            except OSError:
+                continue
+    return exe
+
+
 def probe_command(cand: dict, run: bool = False, timeout: float = 8.0) -> dict:
     """命令面探测：`available` 只查 PATH（不 spawn），版本号才需要 `run=True`。
 
@@ -331,7 +380,7 @@ def probe_command(cand: dict, run: bool = False, timeout: float = 8.0) -> dict:
         result["reason"] = "清单未给出可执行的命令面"
         return result
 
-    exe = shutil.which(argv[0])
+    exe = resolve_executable(argv[0])
     result["available"] = exe is not None
     if exe is None:
         if run:
@@ -344,8 +393,14 @@ def probe_command(cand: dict, run: bool = False, timeout: float = 8.0) -> dict:
 
     try:
         # 用 which 解析出的绝对路径执行：.cmd/.bat 垫片在 Windows 上必须是绝对路径
+        #
+        # stdin 必须显式 DEVNULL（与 `backend_client.py:181`、`tool_help.py:186` 同一条
+        # 纪律）：本服务的 stdin 是上游网关的 stdio 协议管道，`.cmd` 垫片经 cmd.exe
+        # 执行时会继承它并从中读走字节，等价于吞掉入站 JSON-RPC——真机实测整个
+        # server 随即退出。
         done = subprocess.run(  # noqa: S603 —— argv 来自仓库内声明的清单，无 shell 拼接
             [exe, *argv[1:]],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             timeout=timeout,
             shell=False,

@@ -14,6 +14,8 @@ token `{AWAM_FAKE_ROOT}`，由 fixture 把它 setenv 到 tmp 目录；真机用�
 """
 import asyncio
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -358,6 +360,64 @@ def test_status_of_table(verdict, status, confidence):
     assert discovery.status_of(verdict) == (status, confidence)
 
 
+# ---------------- resolve_executable（真机 WinError 193 回归） ----------------
+
+
+def make_exec(path: Path) -> Path:
+    """造一个「看起来可执行」的文件（POSIX 上 `which` 还要看 X_OK 位）"""
+    path.write_text("", encoding="utf-8")
+    os.chmod(path, 0o755)
+    return path
+
+
+def test_resolve_replaces_extensionless_shim_with_real_target(fake_bin, monkeypatch):
+    """裸名垫片先命中 → 改取同目录带可执行后缀的真身
+
+    真机现象：Scoop 的 shims 目录里同时有给 Git Bash 用的裸名 `scoop` 和
+    `scoop.cmd`，`shutil.which` 按裸名先返回前者，实跑报
+    `[WinError 193] %1 不是有效的 Win32 应用程序`（pyenv 的 `python` 同因）。
+    """
+    make_exec(fake_bin / "alpha")
+    make_exec(fake_bin / "alpha.cmd")
+    monkeypatch.setattr(discovery.os, "name", "nt")
+
+    assert Path(discovery.shutil.which("alpha")).name == "alpha"
+    assert Path(discovery.resolve_executable("alpha")).name.lower() == "alpha.cmd"
+
+
+def test_resolve_off_windows_keeps_which_result(fake_bin, monkeypatch):
+    """POSIX 上裸名本来就是正常形态，不做二次解析"""
+    make_exec(fake_bin / "alpha")
+    make_exec(fake_bin / "alpha.cmd")
+    monkeypatch.setattr(discovery.os, "name", "posix")
+
+    assert discovery.resolve_executable("alpha") == discovery.shutil.which("alpha")
+
+
+def test_resolve_missing_command_is_none(fake_bin):
+    assert discovery.resolve_executable("nope") is None
+
+
+def test_suffix_order_follows_pathext_and_skips_non_executables(fake_bin, monkeypatch):
+    """顺序以 PATHEXT 为准；`.py` 这类 CreateProcess 起不来的后缀不参与尝试"""
+    for name in ("alpha.exe", "alpha.cmd", "alpha.py"):
+        make_exec(fake_bin / name)
+    monkeypatch.setattr(discovery.os, "name", "nt")
+
+    monkeypatch.setenv("PATHEXT", ".PY;.CMD;.EXE")
+    assert Path(discovery.resolve_executable("alpha")).name.lower() == "alpha.cmd"
+    monkeypatch.setenv("PATHEXT", ".EXE;.CMD")
+    assert Path(discovery.resolve_executable("alpha")).name.lower() == "alpha.exe"
+
+
+def test_resolve_keeps_which_hit_when_no_executable_sibling(fake_bin, monkeypatch):
+    """补不到真身就照旧交回裸名：`available` 不降级，失败由实跑如实报出"""
+    make_exec(fake_bin / "alpha")
+    monkeypatch.setattr(discovery.os, "name", "nt")
+
+    assert Path(discovery.resolve_executable("alpha")).name == "alpha"
+
+
 # ---------------- 命令面 ----------------
 
 
@@ -419,6 +479,32 @@ def test_run_commands_executes_and_parses_version(fake_bin, monkeypatch):
     assert Path(captured["argv"][0]).parent == fake_bin
     assert captured["argv"][1:] == ["--version"]
     assert captured["kw"]["shell"] is False
+    # stdin 必须 DEVNULL：子进程继承网关的 stdio 协议管道会把入站 JSON-RPC 读走
+    # （真机实测：`.cmd` 垫片经 cmd.exe 执行后整个 server 直接退出）
+    assert captured["kw"]["stdin"] is subprocess.DEVNULL
+
+
+def test_run_executes_the_real_target_not_the_bare_shim(fake_bin, monkeypatch):
+    """实跑用的是补出来的真身，不是裸名垫片（WinError 193 的用户可见面）"""
+    make_exec(fake_bin / "alpha")
+    make_exec(fake_bin / "alpha.cmd")
+    monkeypatch.setattr(discovery.os, "name", "nt")
+    captured = {}
+
+    class Done:
+        returncode = 0
+        stdout = "alpha 1.0"
+        stderr = ""
+
+    def fake_run(argv, **kw):
+        captured["argv"] = argv
+        return Done()
+
+    monkeypatch.setattr(discovery.subprocess, "run", fake_run)
+    row = discovery.probe_command(cand("a", command={"argv": ["alpha"]}), run=True)
+
+    assert Path(row["path"]).name.lower() == "alpha.cmd"
+    assert Path(captured["argv"][0]).name.lower() == "alpha.cmd"
 
 
 def test_run_without_version_pattern_keeps_output(fake_bin, monkeypatch):
