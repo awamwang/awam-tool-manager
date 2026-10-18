@@ -298,7 +298,11 @@ PLUGIN_TRANSLATE = {
 }
 
 
-def build_fake_asar(files: dict[str, bytes], offset_as_str: bool = True) -> bytes:
+def build_fake_asar(
+    files: dict[str, bytes],
+    offset_as_str: bool = True,
+    str_len_mod: int | None = None,
+) -> bytes:
     """按真实 uTools asar 的 Pickle 布局现场构造假 asar（不引 @electron/asar）。
 
     布局照 2026-10-18 对本机 44 个真实插件的实测（勘察脚本 build_catalog.py
@@ -313,6 +317,11 @@ def build_fake_asar(files: dict[str, bytes], offset_as_str: bool = True) -> byte
 
     offset 默认写成**字符串**——真实 header 里确实是字符串（size 反而是整数），
     解析端必须 int() 强转；offset_as_str=False 时写整数，两种都验。
+
+    str_len_mod：刻意把 header JSON 长度调到非 4 倍数（1/2/3），制造其后带
+    1~3 字节对齐 pad 的 fixture。做法是在 header 里加一个解析端根本不看、
+    只作长度配重的 "_pad" 键（纯 ASCII，一字一字节）。不传时 header 与原来
+    逐字节一致——现有 fixture 全部不受影响。
     """
     entries: dict[str, dict] = {}
     offset = 0
@@ -324,7 +333,12 @@ def build_fake_asar(files: dict[str, bytes], offset_as_str: bool = True) -> byte
         }
         body += content
         offset += len(content)
-    header_json = json.dumps({"files": entries}, ensure_ascii=False).encode("utf-8")
+    header: dict = {"files": entries}
+    if str_len_mod is not None:
+        header["_pad"] = ""
+        need = (str_len_mod - len(json.dumps(header, ensure_ascii=False).encode())) % 4
+        header["_pad"] = "x" * need
+    header_json = json.dumps(header, ensure_ascii=False).encode("utf-8")
     str_len = len(header_json)
     aligned = (str_len + 3) // 4 * 4  # Chromium Pickle 按 4 字节对齐补 pad
     prefix = b"".join([
@@ -411,6 +425,34 @@ def test_scan_utools_accepts_integer_offsets(tmp_path):
     )
     actions, _ = client._scan_utools()
     assert {a["id"] for a in actions} == {"翻译/翻译", "翻译/translate"}
+
+
+@pytest.mark.parametrize("str_len_mod", [1, 2, 3])
+def test_scan_utools_handles_header_alignment_pad(tmp_path, str_len_mod):
+    """header JSON 长度非 4 倍数 → 其后必有 1~3 字节对齐 pad，基址必须含 pad
+
+    文件数据基址 = 8 + [4:8]（Pickle 按 4 字节对齐补了 pad），**不是**朴素的
+    16 + str_len：pad>0 时后者会早 pad 字节开始读，plugin.json 前面粘着
+    NUL，json.loads 必炸、整个 asar 被跳过。本用例即为此而存在——现有
+    fixture 的 str_len 都是无意间凑的（仅 2 个非 4 倍数，且没有覆盖
+    %4==1 即 pad==3 的情况），这里三个余数各构造一个 deliberate 用例。
+    """
+    asar = build_fake_asar(
+        {"plugin.json": json.dumps(PLUGIN_TRANSLATE, ensure_ascii=False).encode("utf-8")},
+        str_len_mod=str_len_mod,
+    )
+    # 先钉住 fixture 自身：header 确实带 pad（否则测了个寂寞）
+    header_payload_size = struct.unpack_from("<I", asar, 4)[0]
+    actual_str_len = struct.unpack_from("<i", asar, 12)[0]
+    assert actual_str_len % 4 == str_len_mod
+    aligned = (actual_str_len + 3) // 4 * 4
+    assert aligned > actual_str_len, "fixture 必须带 1~3 字节 pad"
+    assert header_payload_size == 8 + aligned
+
+    client = make_utools_client(tmp_path, {"a.asar": asar})
+    actions, source = client._scan_utools()
+    assert {a["id"] for a in actions} == {"翻译/翻译", "翻译/translate"}
+    assert source == "auto"
 
 
 def test_scan_utools_skips_broken_asar(tmp_path):
@@ -599,6 +641,43 @@ def test_run_utools_encodes_space_in_param(monkeypatch, tmp_path):
         "utools://%E4%BB%BB%E5%8A%A1%E6%B8%85%E5%8D%95/%E4%BB%BB%E5%8A%A1%E6%B8%85%E5%8D%95"
         "?hello%20world"
     )
+
+
+def test_run_utools_encodes_slash_in_keyword(monkeypatch, tmp_path):
+    """路径段里的 "/" 必须全编码成 %2F——关键词含斜杠的 deliberate 用例
+
+    缺口背景：本机 44 个真实插件的关键词零 "/"，`safe=''` 与 `safe='/'`
+    对无斜杠输入完全等价，现有编码用例（中文/空格/&）在路径段退化成
+    `safe='/'` 时全绿。关键词里的斜杠若原样留在路径段里，会被误当成
+    `utools://` 后 label/payload 之间的分隔符（uTools 按 "/" 拆两个
+    组分，见 src/launcher_client.py 路径段注释）——这条用例把
+    `safe=''` 钉死。
+
+    不另设「插件名含 /」用例：动作 ID 经 partition 按第一个 "/" 拆开后，
+    插件段不可能再含斜杠，`safe=''`/`safe='/'` 对插件段恒等价，真正
+    load-bearing 的只有关键词段。
+    """
+    plugin = {
+        "name": "kbd",
+        "pluginName": "kbd",
+        "features": [{"code": "main", "explain": "快捷键", "cmds": ["a/b"]}],
+    }
+    client = make_utools_client(tmp_path, {"a.asar": _asar_plugin(plugin)})
+    client.sync_actions()
+    capture: dict = {}
+    patch_process(monkeypatch, FakeProcess(), capture)
+
+    asyncio.run(client.run_action(action_id="kbd/a/b", wait=0))
+
+    url = capture["args"][4]
+    # 与既有编码用例同款风格：整个协议 URL 逐字比对
+    assert url == "utools://kbd/a%2Fb"
+    # 结构上再钉一层：label/payload 之间只剩唯一一个原始 "/"，
+    # payload 段内没有任何原始斜杠（关键词里的都该是 %2F）
+    label, separator, payload = url[len("utools://"):].partition("/")
+    assert label == "kbd"
+    assert separator == "/"
+    assert "/" not in payload, "payload 段里不该再有原始斜杠（都该是 %2F）"
 
 
 def test_run_utools_does_not_require_command(monkeypatch, tmp_path):
