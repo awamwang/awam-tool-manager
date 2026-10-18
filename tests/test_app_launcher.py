@@ -12,15 +12,21 @@
 """
 
 import asyncio
+import json
 import os
 import signal
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import app_launcher
 from app_launcher import LAUNCH_WAIT_DEFAULT, LAUNCH_WAIT_MAX, launch_app
+from registry import ToolRegistry
+from store import JsonStore
+from tool_specs import ToolContext, _handle_launch_tool
 
 # 探针源码（现场写进 tmp，不落仓库）
 PROBE_OK = """import sys
@@ -205,3 +211,144 @@ def test_args_are_coerced_to_strings(tmp_path):
     )
     assert result["success"] is True, result
     assert marker.exists()
+
+
+# ---- handler 级：_handle_launch_tool 的 execute 分支与门禁 ----
+#
+# 直接构造 ToolContext（tmp JsonStore），不走 server.dispatch_tool——
+# 后者用仓库真实 data/tools/，execute=true 会把本机 Everything 真拉起来。
+# dispatch / 协议层的覆盖在 e2e 场景⑦（真实 stdio 会话 + tmp 仓库副本）。
+
+
+def _write_entry(tmp_path: Path, entry: dict) -> None:
+    tools_dir = tmp_path / "tools"
+    tools_dir.mkdir(parents=True, exist_ok=True)
+    (tools_dir / f"{entry['id']}.json").write_text(
+        json.dumps(entry, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def _ctx_for(tmp_path: Path) -> ToolContext:
+    store = JsonStore(tmp_path)
+    return ToolContext(
+        registry=ToolRegistry(store),
+        backend_manager=None,
+        launcher_manager=None,
+        store=store,
+        log=lambda _msg: None,
+    )
+
+
+def _probe_entry(script: Path, marker: Path, tool_id="probe", **extra) -> dict:
+    return {
+        "id": tool_id,
+        "name": tool_id,
+        "displayName": "启动探针",
+        "kind": "app",
+        "description": "handler 级启动探针",
+        "launch": {
+            "type": "executable",
+            "command": sys.executable,
+            "args": [str(script), str(marker)],
+        },
+        "readOnly": True,
+        "destructive": False,
+        **extra,
+    }
+
+
+def test_handler_default_path_does_not_execute(tmp_path):
+    """execute 缺省：只返回命令——没有 executed 字段、探针没被跑"""
+    script = _write_probe(tmp_path, "probe_ok.py", PROBE_OK)
+    marker = tmp_path / "marker.txt"
+    _write_entry(tmp_path, _probe_entry(script, marker))
+
+    res = asyncio.run(_handle_launch_tool({"tool_id": "probe"}, _ctx_for(tmp_path)))
+
+    assert res["success"] is True
+    assert "executed" not in res, "默认路径不该出现执行字段"
+    assert res["launch"]["command"] == sys.executable
+    assert not marker.exists(), "默认路径竟然执行了探针"
+
+
+def test_handler_execute_runs_probe(tmp_path):
+    """execute=true：真跑探针，回传 executed/exitCode/running"""
+    script = _write_probe(tmp_path, "probe_ok.py", PROBE_OK)
+    marker = tmp_path / "marker.txt"
+    _write_entry(tmp_path, _probe_entry(script, marker))
+
+    res = asyncio.run(
+        _handle_launch_tool(
+            {"tool_id": "probe", "execute": True, "wait": LAUNCH_WAIT_MAX},
+            _ctx_for(tmp_path),
+        )
+    )
+
+    assert res["success"] is True, res
+    assert res["executed"] is True
+    assert res["exitCode"] == 0
+    assert res["running"] is False
+    assert marker.exists(), "execute=true 没真正执行探针"
+
+
+def test_handler_execute_failure_raises_typed_error(tmp_path):
+    """退出码非 0 → ToolError（isError），载荷带 errorType/exitCode"""
+    script = _write_probe(tmp_path, "probe_fail.py", PROBE_FAIL)
+    marker = tmp_path / "marker.txt"
+    _write_entry(tmp_path, _probe_entry(script, marker))
+
+    with pytest.raises(Exception) as exc:
+        asyncio.run(
+            _handle_launch_tool(
+                {"tool_id": "probe", "execute": True, "wait": LAUNCH_WAIT_MAX},
+                _ctx_for(tmp_path),
+            )
+        )
+    payload = json.loads(str(exc.value))
+    assert payload["success"] is False
+    assert payload["errorType"] == "runtime_error"
+    assert payload["executed"] is True
+    assert payload["exitCode"] == 3
+
+
+def test_handler_execute_gated_by_entry_destructive(tmp_path):
+    """条目标 destructive：无 allowDestructive 拦截（探针没跑）；带了才放行"""
+    script = _write_probe(tmp_path, "probe_ok.py", PROBE_OK)
+    marker = tmp_path / "marker.txt"
+    _write_entry(
+        tmp_path, _probe_entry(script, marker, destructive=True)
+    )
+    ctx = _ctx_for(tmp_path)
+
+    with pytest.raises(Exception) as exc:
+        asyncio.run(
+            _handle_launch_tool({"tool_id": "probe", "execute": True}, ctx)
+        )
+    payload = json.loads(str(exc.value))
+    assert payload["errorType"] == "destructive_blocked"
+    assert not marker.exists(), "被门禁拦截了却仍然执行了探针"
+
+    res = asyncio.run(
+        _handle_launch_tool(
+            {"tool_id": "probe", "execute": True, "allowDestructive": True,
+             "wait": LAUNCH_WAIT_MAX},
+            ctx,
+        )
+    )
+    assert res["success"] is True, res
+    assert marker.exists(), "显式确认后探针应被真正执行"
+
+
+def test_handler_execute_missing_command_raises_config_error(tmp_path):
+    """execute=true 但命令不存在 → config_error（不是原生 OSError 文案）"""
+    entry = _probe_entry(Path("no-such.py"), Path("no-marker.txt"))
+    entry["launch"]["command"] = "awam-no-such-exe-xyz"
+    _write_entry(tmp_path, entry)
+
+    with pytest.raises(Exception) as exc:
+        asyncio.run(
+            _handle_launch_tool({"tool_id": "probe", "execute": True}, _ctx_for(tmp_path))
+        )
+    payload = json.loads(str(exc.value))
+    assert payload["errorType"] == "config_error"
+    assert payload["executed"] is False

@@ -26,6 +26,7 @@ except ImportError:  # pragma: no cover
     ToolAnnotations = None
 
 from errors import ErrorType, ToolError, fail, ensure_success  # noqa: F401（handler 侧经本模块转手）
+from app_launcher import launch_app
 from launcher_client import LauncherError
 from policy import decide_destructive
 
@@ -205,7 +206,32 @@ async def _handle_get_tool_info(arguments: dict, ctx: ToolContext) -> dict:
 async def _handle_launch_tool(arguments: dict, ctx: ToolContext) -> dict:
     tool_id = arguments.get("tool_id", "")
     res = ensure_success(ctx.registry.launch_tool(tool_id))
-    return res
+    if not arguments.get("execute"):
+        # 默认路径逐字保持旧行为：只返回命令，不 spawn（e2e 场景②钉住的
+        # 硬契约）。execute 缺省/False 时本函数与改造前完全等价。
+        return res
+    # 执行路径：调用方显式 execute=true 才启动。条目级 destructive 门禁走
+    # policy（与 call_backend_tool / run_launcher_action 同一判定入口）；
+    # install 门禁（ARC-P0-01）防的是「无意图执行」，本路径的意图就是
+    # 这次显式调用本身。
+    target_tool = ctx.registry.get_tool(tool_id)
+    decision = decide_destructive("app", target_tool, {}, arguments)
+    if decision["blocked"]:
+        fail(
+            decision["reason"],
+            error_type=decision["error_type"],
+            toolId=tool_id,
+        )
+    if decision["required_confirm"]:
+        ctx.log(f"⚠️ 已确认执行启动: {tool_id}")
+
+    ctx.log(f"执行启动: {tool_id}")
+    exec_res = await launch_app(
+        res["launch"], tool_id, res.get("toolName", ""), arguments.get("wait")
+    )
+    res.update(exec_res)
+    # 执行失败（退出码非 0 等）与其它工具的失败载荷同路：转协议层 isError
+    return ensure_success(res)
 
 
 async def _handle_get_backend_status(arguments: dict, ctx: ToolContext) -> dict:
@@ -416,18 +442,31 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
     ServerToolSpec(
         name="launch_tool",
         handler=_handle_launch_tool,
-        description="取指定工具的启动命令（只返回命令，不实际执行启动）",
+        description="取指定工具的启动命令；传 execute=true 可真正执行启动（默认只返回命令，不执行）",
         input_schema={
             "type": "object",
             "properties": {
                 "tool_id": {
                     "type": "string",
                     "description": "工具 ID"
+                },
+                "execute": {
+                    "type": "boolean",
+                    "description": "是否真正执行启动（默认 false：只返回命令、不 spawn 进程）"
+                },
+                "wait": {
+                    "type": "number",
+                    "description": "可选，执行后等待早退的观察窗口秒数（默认 5，封顶 30）；窗口内退出即报退出码，超时仍运行则报 running=true"
+                },
+                "allowDestructive": {
+                    "type": "boolean",
+                    "description": "工具被标记为 destructive 时，执行启动需显式传 true"
                 }
             },
             "required": ["tool_id"]
         },
-        annotations={"readOnlyHint": True, "destructiveHint": False},
+        # execute=true 会真的 spawn 进程，与 run_launcher_action 同款只标 openWorld
+        annotations={"openWorldHint": True},
     ),
     ServerToolSpec(
         name="call_backend_tool",

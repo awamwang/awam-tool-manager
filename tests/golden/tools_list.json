@@ -98,13 +98,25 @@
   },
   {
     "name": "launch_tool",
-    "description": "取指定工具的启动命令（只返回命令，不实际执行启动）",
+    "description": "取指定工具的启动命令；传 execute=true 可真正执行启动（默认只返回命令，不执行）",
     "inputSchema": {
       "type": "object",
       "properties": {
         "tool_id": {
           "type": "string",
           "description": "工具 ID"
+        },
+        "execute": {
+          "type": "boolean",
+          "description": "是否真正执行启动（默认 false：只返回命令、不 spawn 进程）"
+        },
+        "wait": {
+          "type": "number",
+          "description": "可选，执行后等待早退的观察窗口秒数（默认 5，封顶 30）；窗口内退出即报退出码，超时仍运行则报 running=true"
+        },
+        "allowDestructive": {
+          "type": "boolean",
+          "description": "工具被标记为 destructive 时，执行启动需显式传 true"
         }
       },
       "required": [
@@ -112,8 +124,7 @@
       ]
     },
     "annotations": {
-      "readOnlyHint": true,
-      "destructiveHint": false
+      "openWorldHint": true
     },
     "outputSchema": {
       "type": "object",
