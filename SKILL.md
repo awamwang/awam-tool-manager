@@ -79,6 +79,7 @@ awam-tool-manager/
 | `list_launcher_actions` | `tool_id`(必填)、`keyword`、`limit`、`refresh` | 列出/搜索启动器（Quicker / uTools）的动作；返回带 `lastSynced`/`source` |
 | `run_launcher_action` | `tool_id`(必填)、`action_id`、`action_name`、`param`、`wait`、`allowDestructive` | 执行启动器动作；Quicker 走命令行（有 stdout 回传），uTools 走 `utools://` 协议唤起（fire-and-forget 无回传）；条目标了 `destructive` 时需 `allowDestructive=true`（配了 `destructiveActions` 时按动作 id/name/type 的 glob 判定，仅命中的动作需确认） |
 | `sync_launcher_actions` | `tool_id`(必填) | 手动同步启动器动作清单 |
+| `get_tool_help` | `tool_id`(必填)、`run`、`timeout`、`allowDestructive` | 取工具帮助信息：文档链接 + 能力清单（mcp 子工具 / launcher 动作）+ 帮助命令预览；**默认只读数据、不 spawn**，`kind=app` 显式 `run=true` 才执行帮助命令（`--help` / 条目 `help.args`）并捕获输出 |
 
 > `kind=launcher`（启动器，如 Quicker / uTools）不是 MCP：没有长连接，调用是一次性的。
 > - **Quicker**：`QuickerStarter.exe -c<秒> "runaction:<ID或名称>?参数"`，stdout 回传动作

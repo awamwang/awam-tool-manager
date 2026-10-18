@@ -29,6 +29,13 @@ from errors import ErrorType, ToolError, fail, ensure_success  # noqa: F401（ha
 from app_launcher import launch_app
 from launcher_client import LauncherError
 from policy import decide_destructive
+from tool_help import (
+    backend_summary,
+    entry_help,
+    launcher_summary,
+    resolve_help_command,
+    run_help_command,
+)
 
 if TYPE_CHECKING:  # 运行期零耦合：handler 只从 ctx 取 manager，不 import 它们
     from backend_client import BackendManager
@@ -232,6 +239,81 @@ async def _handle_launch_tool(arguments: dict, ctx: ToolContext) -> dict:
     res.update(exec_res)
     # 执行失败（退出码非 0 等）与其它工具的失败载荷同路：转协议层 isError
     return ensure_success(res)
+
+
+async def _handle_get_tool_help(arguments: dict, ctx: ToolContext) -> dict:
+    """取工具的帮助信息。
+
+    默认路径**零副作用**：文档链接 + 能力清单（mcp 子工具 / launcher 动作）+
+    将要执行的帮助命令预览。显式 `run=true` 且 `kind=app` 才真的 spawn 捕获输出
+    ——与 `launch_tool` 的「默认只返回」同一取舍。
+    """
+    tool_id = arguments.get("tool_id", "")
+    tool = ctx.registry.get_tool(tool_id)
+    if not tool:
+        fail(f"未找到工具: {tool_id}", error_type=ErrorType.NOT_FOUND, toolId=tool_id)
+
+    kind = tool.get("kind", "unknown")
+    payload = {
+        "success": True,
+        "toolId": tool_id,
+        "toolName": tool.get("displayName", tool.get("name", "")),
+        "kind": kind,
+    }
+    payload.update(entry_help(tool))
+
+    if kind == "mcp":
+        backend_tools = ctx.registry.list_backend_tools(tool_id)
+        payload["backendTools"] = backend_summary(backend_tools)
+        payload["backendToolCount"] = len(backend_tools)
+        if not backend_tools:
+            payload["note"] = (
+                "后端子工具缓存为空：先 start_backend 或 sync_backend_tools 再取帮助"
+            )
+    elif kind == "launcher":
+        catalog = ctx.store.load_launcher_catalog(tool_id) or {}
+        actions = catalog.get("actions") or []
+        payload["actions"] = launcher_summary(actions)
+        payload["actionCount"] = len(actions)
+        payload["lastSynced"] = catalog.get("lastSynced")
+        payload["source"] = catalog.get("source")
+        if not actions:
+            payload["note"] = "动作清单缓存为空：先 sync_launcher_actions 再取帮助"
+
+    if not arguments.get("run"):
+        return payload
+
+    if kind != "app":
+        # 缓存里已有的就是它的全部「帮助」，没有可执行的 --help 这回事
+        payload["note"] = f"kind={kind} 没有可执行的帮助命令，已返回数据层来源"
+        return payload
+
+    resolved = resolve_help_command(tool, arguments.get("timeout"))
+    if not resolved:
+        fail(
+            f"工具 '{tool_id}' 未配置帮助来源（launch.command / help.command 均缺失）",
+            error_type=ErrorType.CONFIG_ERROR,
+            toolId=tool_id,
+        )
+
+    # 跑 --help 同样是一次 spawn：条目 destructive → 需 allowDestructive
+    # （与 launch_tool execute 走同一判定入口）。这不是过度设防——图形程序
+    # 不认 --help 时会把它当普通启动参数跑起来。
+    decision = decide_destructive("app", tool, {"action": "get_tool_help"}, arguments)
+    if decision["blocked"]:
+        fail(
+            decision["reason"],
+            error_type=decision["error_type"],
+            toolId=tool_id,
+        )
+    if decision["required_confirm"]:
+        ctx.log(f"⚠️ 已确认执行帮助命令: {tool_id}")
+
+    ctx.log(f"执行帮助命令: {tool_id}")
+    exec_res = await run_help_command(resolved)
+    payload.update(exec_res)
+    # 帮助命令自身失败（命令缺失 / 无输出 / 超时）照旧转协议层 isError
+    return ensure_success(payload)
 
 
 async def _handle_get_backend_status(arguments: dict, ctx: ToolContext) -> dict:
@@ -704,6 +786,35 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
             "required": ["tool_id"]
         },
         # 执行动作会真的跑起来，只标 openWorld
+        annotations={"openWorldHint": True},
+    ),
+    ServerToolSpec(
+        name="get_tool_help",
+        handler=_handle_get_tool_help,
+        description="取工具的帮助信息（文档链接 / 后端能力清单 / 启动器动作清单）；kind=app 传 run=true 可执行帮助命令并捕获输出",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tool_id": {
+                    "type": "string",
+                    "description": "工具 ID"
+                },
+                "run": {
+                    "type": "boolean",
+                    "description": "是否真的执行帮助命令（默认 false：只返回文档链接、能力清单与命令预览，不 spawn）"
+                },
+                "timeout": {
+                    "type": "number",
+                    "description": "可选，执行帮助命令的超时秒数（覆盖条目 help.timeout；默认 5，封顶 30）"
+                },
+                "allowDestructive": {
+                    "type": "boolean",
+                    "description": "工具被标记为 destructive 时，执行帮助命令需显式传 true"
+                }
+            },
+            "required": ["tool_id"]
+        },
+        # 默认路径是只读取数，但 run=true 会 spawn 子进程 → 与 launch_tool 同款只标 openWorld
         annotations={"openWorldHint": True},
     ),
 )

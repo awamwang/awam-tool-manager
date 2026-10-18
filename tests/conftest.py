@@ -45,6 +45,7 @@ EXPECTED_TOOL_NAMES = {
     "sync_launcher_actions",
     "list_launcher_actions",
     "run_launcher_action",
+    "get_tool_help",
 }
 
 

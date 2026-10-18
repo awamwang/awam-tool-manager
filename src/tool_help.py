@@ -46,12 +46,13 @@ def _clamp_timeout(timeout: object) -> float:
     return max(0.0, min(value, HELP_TIMEOUT_MAX))
 
 
-def resolve_help_command(tool: dict) -> dict[str, Any] | None:
+def resolve_help_command(tool: dict, timeout: object = None) -> dict[str, Any] | None:
     """解析该条目的帮助命令（不执行）。
 
     优先条目 `help.command`，回落 `launch.command`；参数优先 `help.args`，
     回落 `DEFAULT_HELP_ARGS`。两者都取不到 command → 返回 None（该条目没有
-    可执行的帮助来源）。
+    可执行的帮助来源）。`timeout` 是调用方本次传入的覆盖值（优先级高于条目
+    `help.timeout`），同样过归一化。
     """
     help_field = tool.get("help") or {}
     launch = tool.get("launch") or {}
@@ -64,7 +65,9 @@ def resolve_help_command(tool: dict) -> dict[str, Any] | None:
     return {
         "command": command,
         "args": [str(a) for a in args],
-        "timeout": _clamp_timeout(help_field.get("timeout")),
+        "timeout": _clamp_timeout(
+            timeout if timeout is not None else help_field.get("timeout")
+        ),
     }
 
 
@@ -135,13 +138,21 @@ def _decode(raw: bytes) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
-def _failure(command: list[str], error_type: str, error: str) -> dict[str, Any]:
+def _failure(
+    command: list[str], error_type: str, error: str, executed: bool = False
+) -> dict[str, Any]:
+    """失败载荷。
+
+    `executed` 的语义是「**是否真的 spawn 过进程**」：预检失败（命令不存在 /
+    无帮助来源）为 False；跑起来但没拿到输出、或超时被杀，进程副作用已经发生，
+    必须报 True——否则调用方以为什么都没跑。
+    """
     return {
         "success": False,
         "errorType": error_type,
         "error": error,
         "command": command,
-        "executed": False,
+        "executed": executed,
     }
 
 
@@ -199,6 +210,7 @@ async def run_help_command(resolved: dict[str, Any] | None) -> dict[str, Any]:
             ErrorType.RUNTIME_ERROR,
             f"帮助命令超过 {timeout}s 未退出，已终止"
             + (f"；超时前的输出：\n{text}" if text else ""),
+            executed=True,
         )
 
     exit_code = process.returncode
@@ -209,11 +221,17 @@ async def run_help_command(resolved: dict[str, Any] | None) -> dict[str, Any]:
 
     if not text.strip():
         if exit_code == 0:
-            return _failure(argv, ErrorType.RUNTIME_ERROR, "帮助命令无任何输出")
+            return _failure(
+                argv,
+                ErrorType.RUNTIME_ERROR,
+                "帮助命令无任何输出",
+                executed=True,
+            )
         return _failure(
             argv,
             ErrorType.RUNTIME_ERROR,
             f"帮助命令退出码 {exit_code} 且无输出",
+            executed=True,
         )
 
     payload: dict[str, Any] = {

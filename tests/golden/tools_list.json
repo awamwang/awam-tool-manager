@@ -540,5 +540,48 @@
       ],
       "additionalProperties": true
     }
+  },
+  {
+    "name": "get_tool_help",
+    "description": "取工具的帮助信息（文档链接 / 后端能力清单 / 启动器动作清单）；kind=app 传 run=true 可执行帮助命令并捕获输出",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "tool_id": {
+          "type": "string",
+          "description": "工具 ID"
+        },
+        "run": {
+          "type": "boolean",
+          "description": "是否真的执行帮助命令（默认 false：只返回文档链接、能力清单与命令预览，不 spawn）"
+        },
+        "timeout": {
+          "type": "number",
+          "description": "可选，执行帮助命令的超时秒数（覆盖条目 help.timeout；默认 5，封顶 30）"
+        },
+        "allowDestructive": {
+          "type": "boolean",
+          "description": "工具被标记为 destructive 时，执行帮助命令需显式传 true"
+        }
+      },
+      "required": [
+        "tool_id"
+      ]
+    },
+    "annotations": {
+      "openWorldHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
   }
 ]

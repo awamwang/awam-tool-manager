@@ -66,6 +66,13 @@ PROBE_SLEEP = """import time
 time.sleep(30)
 """
 
+# 既留下 spawn 铁证（marker）又有输出文本的帮助探针
+PROBE_MARKER_PRINT = """import sys
+from pathlib import Path
+Path(sys.argv[1]).write_text("ran", encoding="utf-8")
+print("usage from marker probe")
+"""
+
 
 def _probe(tmp_path: Path, name: str, source: str) -> Path:
     path = tmp_path / name
@@ -301,4 +308,281 @@ def test_run_help_timeout_kills_the_process(tmp_path):
     assert result["success"] is False
     assert result["errorType"] == "runtime_error"
     assert "未退出" in result["error"]
-    assert result["executed"] is False  # 失败载荷的统一形状
+    # 进程真的被 spawn 过（随后被终止）：executed 报的是副作用有没有发生
+    assert result["executed"] is True
+
+
+# ---- handler 级：_handle_get_tool_help 的分层与门禁 ----
+#
+# 直接构造 ToolContext（tmp JsonStore），不走 server.dispatch_tool——后者用
+# 仓库真实 data/tools/，run=true 会把本机真实程序拉起来跑 --help。
+# dispatch / 协议层的覆盖在 e2e 场景⑧（真实 stdio 会话 + tmp 仓库副本）。
+
+import json  # noqa: E402
+
+import pytest  # noqa: E402
+
+from errors import ToolError  # noqa: E402
+import policy as policy_mod  # noqa: E402
+from registry import ToolRegistry  # noqa: E402
+from store import JsonStore  # noqa: E402
+from tool_specs import ToolContext, _handle_get_tool_help  # noqa: E402
+
+
+def _ctx(tmp_path: Path) -> ToolContext:
+    store = JsonStore(tmp_path)
+    return ToolContext(
+        registry=ToolRegistry(store),
+        backend_manager=None,
+        launcher_manager=None,
+        store=store,
+        log=lambda _msg: None,
+    )
+
+
+def _write_entry(tmp_path: Path, entry: dict) -> None:
+    tools_dir = tmp_path / "tools"
+    tools_dir.mkdir(parents=True, exist_ok=True)
+    (tools_dir / f"{entry['id']}.json").write_text(
+        json.dumps(entry, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def _app_entry(tool_id: str, script: Path, **extra) -> dict:
+    return {
+        "id": tool_id,
+        "name": tool_id,
+        "displayName": "帮助探针",
+        "kind": "app",
+        "description": "handler 级帮助探针",
+        "launch": {"type": "executable", "command": sys.executable, "args": [str(script)]},
+        "readOnly": True,
+        "destructive": False,
+        **extra,
+    }
+
+
+def _help(ctx, args):
+    return asyncio.run(_handle_get_tool_help(args, ctx))
+
+
+def test_handler_default_path_returns_data_without_running(tmp_path):
+    """run 缺省：只给文档链接 + 命令预览，探针绝不落地（零副作用硬契约）"""
+    marker = tmp_path / "marker.txt"
+    script = _probe(
+        tmp_path,
+        "p_marker.py",
+        "import sys\nfrom pathlib import Path\nPath(sys.argv[1]).write_text('ran', encoding='utf-8')\n",
+    )
+    _write_entry(
+        tmp_path,
+        {
+            **_app_entry("probe", script),
+            "launch": {
+                "type": "executable",
+                "command": sys.executable,
+                "args": [str(script), str(marker)],
+            },
+            "docUrl": "https://example.org/doc",
+        },
+    )
+
+    res = _help(_ctx(tmp_path), {"tool_id": "probe"})
+
+    assert res["success"] is True
+    assert res["kind"] == "app"
+    assert res["docUrl"] == "https://example.org/doc"
+    assert res["helpCommand"]["command"] == sys.executable
+    assert "executed" not in res, "默认路径不该出现执行字段"
+    assert not marker.exists(), "默认路径竟然跑了帮助命令"
+
+
+def test_handler_run_true_captures_help_output(tmp_path):
+    script = _probe(tmp_path, "p_out.py", PROBE_STDOUT)
+    _write_entry(
+        tmp_path,
+        {**_app_entry("probe", script), "help": {"args": [str(script)], "timeout": 10}},
+    )
+
+    res = _help(_ctx(tmp_path), {"tool_id": "probe", "run": True})
+
+    assert res["success"] is True
+    assert res["executed"] is True
+    assert "Usage: demo --thing" in res["output"]
+    # 数据层与执行层同体返回：调用方一次调用既拿到链接也拿到文本
+    assert res["helpCommand"]["args"] == [str(script)]
+
+
+def test_help_command_never_reuses_launch_args(tmp_path):
+    """帮助命令**不带** `launch.args`——那是正常启动参数，跟着 `--help` 一起传
+    等于「想看帮助却把应用真跑了」（如 `video.exe 片源.mp4 --help`）。"""
+    marker = tmp_path / "marker.txt"
+    script = _probe(
+        tmp_path,
+        "p_marker.py",
+        "import sys\nfrom pathlib import Path\nPath(sys.argv[1]).write_text('ran', encoding='utf-8')\n",
+    )
+    _write_entry(
+        tmp_path,
+        {
+            **_app_entry("probe", script),
+            # launch.args 指向 marker 脚本：若被带进帮助命令，marker 就会落地
+            "launch": {
+                "type": "executable",
+                "command": sys.executable,
+                "args": [str(script), str(marker)],
+            },
+            "help": {"args": ["--version"], "timeout": 10},
+        },
+    )
+
+    res = _help(_ctx(tmp_path), {"tool_id": "probe", "run": True})
+
+    assert res["helpCommand"]["args"] == ["--version"]
+    assert not marker.exists(), "帮助命令竟然带上了 launch.args"
+
+
+def test_handler_missing_tool_is_not_found(tmp_path):
+    with pytest.raises(ToolError) as exc:
+        _help(_ctx(tmp_path), {"tool_id": "nope"})
+    assert json.loads(str(exc.value))["errorType"] == "not_found"
+
+
+def test_handler_mcp_kind_summarises_backend_catalog(tmp_path):
+    """mcp 种：帮助来自子工具缓存的摘要，并带空缓存提示"""
+    store = JsonStore(tmp_path)
+    _write_entry(tmp_path, {"id": "mcp1", "name": "mcp1", "kind": "mcp"})
+    store.save_backend_tools(
+        "mcp1",
+        [
+            {
+                "name": "search_files",
+                "description": "搜文件",
+                "inputSchema": {"properties": {"q": {}}, "required": ["q"]},
+            }
+        ],
+    )
+    ctx = ToolContext(
+        registry=ToolRegistry(store),
+        backend_manager=None,
+        launcher_manager=None,
+        store=store,
+        log=lambda _m: None,
+    )
+
+    res = _help(ctx, {"tool_id": "mcp1"})
+    assert res["backendToolCount"] == 1
+    assert res["backendTools"][0]["params"] == ["q"]
+    assert "note" not in res
+
+    # 缓存为空 → 不报错，但给出可操作的 note
+    _write_entry(tmp_path, {"id": "mcp2", "name": "mcp2", "kind": "mcp"})
+    res2 = _help(ctx, {"tool_id": "mcp2"})
+    assert res2["backendTools"] == []
+    assert "sync_backend_tools" in res2["note"]
+
+
+def test_handler_launcher_kind_summarises_actions(tmp_path):
+    """launcher 种：帮助来自动作清单缓存，带 lastSynced / source 让调用方知道多旧"""
+    store = JsonStore(tmp_path)
+    _write_entry(tmp_path, {"id": "q1", "name": "q1", "kind": "launcher"})
+    store.save_launcher_actions(
+        "q1", [{"id": "a1", "name": "剪贴板", "type": "group"}], source="partial"
+    )
+    ctx = ToolContext(
+        registry=ToolRegistry(store),
+        backend_manager=None,
+        launcher_manager=None,
+        store=store,
+        log=lambda _m: None,
+    )
+
+    res = _help(ctx, {"tool_id": "q1"})
+    assert res["actionCount"] == 1
+    assert res["actions"][0]["name"] == "剪贴板"
+    assert res["source"] == "partial"
+    assert res["lastSynced"]
+
+    # launcher 传 run=true 也不 spawn：它没有 --help 这回事，只回 note
+    res_run = _help(ctx, {"tool_id": "q1", "run": True})
+    assert "executed" not in res_run
+    assert "没有可执行的帮助命令" in res_run["note"]
+
+
+def test_handler_destructive_entry_blocks_run_until_allowed(tmp_path):
+    """destructive 条目：run=true 需 allowDestructive=true，门禁在 spawn 之前"""
+    marker = tmp_path / "marker.txt"
+    script = _probe(tmp_path, "p_marker.py", PROBE_MARKER_PRINT)
+    _write_entry(
+        tmp_path,
+        {
+            **_app_entry("boom", script, destructive=True),
+            "help": {
+                "args": [str(script), str(marker)],
+                "timeout": 10,
+            },
+        },
+    )
+    ctx = _ctx(tmp_path)
+
+    with pytest.raises(ToolError) as exc:
+        _help(ctx, {"tool_id": "boom", "run": True})
+    payload = json.loads(str(exc.value))
+    assert payload["errorType"] == "destructive_blocked"
+    assert not marker.exists(), "被门禁拦截了却仍然跑了帮助命令"
+
+    res = _help(ctx, {"tool_id": "boom", "run": True, "allowDestructive": True})
+    assert res["executed"] is True
+    assert marker.exists()
+
+
+def test_handler_gate_audit_row_labels_help_entry(tmp_path, monkeypatch):
+    """handler 落给门禁的 action 是 get_tool_help——记成 launch_tool 就是审计失真"""
+    log_path = tmp_path / "audit.log"
+    monkeypatch.setattr(policy_mod, "AUDIT_LOG", log_path)
+    marker = tmp_path / "marker.txt"
+    script = _probe(tmp_path, "p_marker.py", PROBE_MARKER_PRINT)
+    _write_entry(
+        tmp_path,
+        {
+            **_app_entry("boom", script, destructive=True),
+            "help": {"args": [str(script), str(marker)], "timeout": 10},
+        },
+    )
+
+    with pytest.raises(ToolError):
+        _help(_ctx(tmp_path), {"tool_id": "boom", "run": True})
+
+    rows = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if '"destructive_gate"' in line
+    ]
+    assert len(rows) == 1, f"应恰好一行门禁审计，实际 {len(rows)} 行"
+    assert rows[0]["action"] == "get_tool_help"
+    assert rows[0]["kind"] == "app"
+    assert rows[0]["decision"] == "block"
+
+
+def test_handler_run_without_help_source_is_config_error(tmp_path):
+    """app 条目既无 launch 也无 help → run=true 报 config_error，而不是空成功"""
+    _write_entry(tmp_path, {"id": "nolaunch", "name": "nolaunch", "kind": "app"})
+    ctx = _ctx(tmp_path)
+
+    # 默认路径仍可返回文档层（没有可执行预览而已）
+    res = _help(ctx, {"tool_id": "nolaunch"})
+    assert res["success"] is True
+    assert "helpCommand" not in res
+
+    with pytest.raises(ToolError) as exc:
+        _help(ctx, {"tool_id": "nolaunch", "run": True})
+    assert json.loads(str(exc.value))["errorType"] == "config_error"
+
+
+def test_handler_timeout_override_reaches_clamp(tmp_path):
+    """调用方传超大 timeout 也被封顶（不封顶 = 一次调用能堵死 MCP 通道）"""
+    script = _probe(tmp_path, "p_out.py", PROBE_STDOUT)
+    _write_entry(tmp_path, _app_entry("probe", script))
+    res = _help(_ctx(tmp_path), {"tool_id": "probe", "run": True, "timeout": 9999})
+    assert res["success"] is True
+    assert tool_help.HELP_TIMEOUT_MAX == 30.0  # 封顶值变更时此用例显式提醒

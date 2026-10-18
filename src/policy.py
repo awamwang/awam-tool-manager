@@ -335,8 +335,8 @@ def decide_destructive(
             判定表，默认不拦以免拖垮未知类型）。
         tool: 工具条目（`registry.get_tool()` 的返回）；None 表示工具不存在。
         sub_op: 子操作标识。mcp → `{"tool_name": str}`；launcher →
-            `{"action_id", "action_name", "action_type"}`；app → `{}`
-            （启动即子操作，无细分）。值可为 None/空串。
+            `{"action_id", "action_name", "action_type"}`；app → `{}` 或
+            `{"action": str}`（执行入口名，只用于审计标注）。值可为 None/空串。
         args: 对外工具的调用参数——只读取 `allowDestructive` 用于审计
             `client_declared`，判定本身与客户端声明无关。
 
@@ -366,7 +366,9 @@ def decide_destructive(
     elif kind == "app":
         required, rule_hit, subject, tail = _decide_app(tool, sub_op)
         sub_op_label = ""
-        audit_action = "launch_tool"
+        # app 种有两个执行入口（launch_tool 执行启动 / get_tool_help 跑帮助命令），
+        # 审计里的 action 跟着实际入口走，否则 help 的判定被记成启动
+        audit_action = str(sub_op.get("action") or "launch_tool")
     else:
         required, rule_hit, tail = False, RULE_UNKNOWN_KIND, ""
         subject = f"未知 kind '{kind}'，放行"

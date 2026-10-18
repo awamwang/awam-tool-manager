@@ -322,3 +322,13 @@ def test_app_gate_audit_line(capsys):
         assert line["sub_op"] == "", "启动无子操作，sub_op 应为空"
     assert lines[0]["decision"] == "block"
     assert lines[1]["decision"] == "confirm"
+
+
+def test_app_gate_audit_action_follows_execution_entry(capsys):
+    """app 种的两个执行入口各自标注：help 的判定不能记成 launch_tool"""
+    _decide("app", _APP_DESTRUCTIVE, {"action": "get_tool_help"})
+
+    lines = _audit_lines(capsys)
+    assert len(lines) == 1, f"应每次判定一行审计，实际 {len(lines)} 行"
+    assert lines[0]["action"] == "get_tool_help"
+    assert lines[0]["decision"] == "block"
