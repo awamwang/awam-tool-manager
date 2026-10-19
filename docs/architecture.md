@@ -35,6 +35,7 @@
 | 调用使用统计（dispatch 出口记日志 + 按窗口聚合） | `usage.py` | ✅ |
 | 本机工具发现（声明式候选清单 + 只读探测，默认零 spawn） | `discovery.py` | ✅ 代码与单测就位；真机结论由客户端调 `discover_tools` 给出 |
 | 包管理器适配（列已装 / 搜可装 / 启包 / 装包，默认零 spawn） | `pkgman.py` | ✅ 读盘部分已真机实测；安装路径需 `execute=true` + `allowDestructive=true` |
+| Steam 游戏库（读 `libraryfolders.vdf` + `appmanifest_*.acf` 列游戏，`-applaunch` 启动） | `steam_library.py` + `launcher_client.py` | ✅ 读盘与门禁已真机实测；真实启动要 `allowDestructive=true`（会拉起全屏客户端） |
 | 工具详情查询（app / mcp 分支） | `server.py` | ✅ |
 | 工具启动信息返回（默认只返回命令；`execute=true` 才启动） | `registry.py` + `app_launcher.py` | ✅ |
 | 后端 MCP 路由调用 | `backend_client.py` | ✅ 已实测跑通 |
@@ -91,16 +92,17 @@ awam-tool-manager/
 │   ├── registry.py           # 工具注册中心（含条目校验过滤）
 │   ├── schema.py             # 两层数据的 JSON Schema 与校验（**文档生成源**）
 │   ├── backend_client.py     # 后端 MCP 客户端与连接池
-│   ├── launcher_client.py    # 启动器适配器（非 MCP：Quicker / uTools）
+│   ├── launcher_client.py    # 启动器适配器（非 MCP：Quicker / uTools / Steam）
 │   ├── app_launcher.py       # kind=app 启动执行（launch_tool 的 execute=true 路径）
 │   ├── tool_help.py          # 帮助信息分层取数 + 帮助命令执行（get_tool_help 的底座）
 │   ├── discovery.py          # 本机工具发现（声明清单 + 只读探测，默认零 spawn）
 │   ├── pkgman.py             # 包管理器适配层（scoop：读盘列包 / 搜 bucket / 解析入口 / 构造安装命令）
+│   ├── steam_library.py      # Steam 库只读解析（libraryfolders.vdf + appmanifest_*.acf）
 │   ├── usage.py              # 调用使用统计：dispatch 出口记 usage.log + 按窗口聚合
 │   └── runtime_paths.py      # 运行时目录解析 + 旧路径迁移
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 20 个用例文件，517 passed（含真实 MCP 会话与文档漂移检测）
+└── tests/                    # 22 个用例文件，557 passed（含真实 MCP 会话与文档漂移检测）
                               # 另有 tests/e2e/ 9 个真实会话用例，默认不收集
     └── e2e/                  # 真实子进程 / 真实 stdio 端到端层（ARC-P3-02）：9 个用例
                               # **默认不收集**（起真实子进程、慢、依赖本机解释器），
@@ -108,9 +110,9 @@ awam-tool-manager/
                               # manual_install_gate.py（依赖本机 npm，手工跑，不进 pytest）
 ```
 
-> **用例数口径（2026-10-19 更新）**：`pytest tests/ -q` = **517 passed**（另有 9 个
-> e2e 用例被 deselect）。517 **不是**全部用例数——真实 e2e 层不进默认收集，
-> 总数应表述为「517（默认）+ 9（e2e，`pytest -m e2e`）= 526」。
+> **用例数口径（2026-10-19 更新）**：`pytest tests/ -q` = **557 passed**（另有 9 个
+> e2e 用例被 deselect）。557 **不是**全部用例数——真实 e2e 层不进默认收集，
+> 总数应表述为「557（默认）+ 9（e2e，`pytest -m e2e`）= 566」。
 
 运行时数据（**不在仓库**，A14 起）：`%LOCALAPPDATA%\.awam-tool-manager/`
 （环境变量 `AWAM_RUNTIME_DIR` 可覆盖；server 启动时自动从旧路径迁移）
@@ -277,6 +279,24 @@ bucket / 4287 份清单），所以先按文件名筛、只对命中项读 JSON�
 `winget` / `npm` **未接线**（`BACKENDS = ("scoop",)`）：`winget list` 没有可靠的纯读盘
 来源，必须 spawn，属执行面，另立项再接。
 
+### 4.6 Steam 的本机布局（P0，`src/steam_library.py` 的读盘对象）
+
+同 4.5：这节记的是**别人写在盘上的东西**，没有 schema、只有实测结论（本机
+`S:\Program Files (x86)\Steam`），每条都决定了适配层的一处形状。
+
+| 观察 | 形状 | 适配层的应对 |
+|---|---|---|
+| 权威位置不在 `Program Files` | 注册表 `HKCU\Software\Valve\Steam` 的 `SteamPath` / `SteamExe`；本机装在 `S:` 盘，值还是**正斜杠**（`s:/program files (x86)/steam`） | `resolve_root()`：条目 `dataDir` → 注册表 → 穷举常见位置（来源写明「未经登记值确认」）；正斜杠归一化成路径 |
+| 库清单 | `steamapps/libraryfolders.vdf`：顶层 `libraryfolders`，数字键下 `path` / `label` / `apps{appid: size}` | 出库列表与 `declaredAppTotal`，路径按根目录相对展开 |
+| 「装着」的证据只有 acf | `steamapps/appmanifest_*.acf`：顶层 `AppState`，取 `appid` / `name` / `installdir` / `StateFlags` / `SizeOnDisk` / `LastPlayed` / `buildid` | **games 只来自 acf**；vdf 声明而盘上没有的 appid 不进清单 |
+| 库会失踪 | 本机 vdf 声明 3 库 / 27 个 appid，盘上只有 16 份 acf（`S:` 5 + `D:\03Games\SteamLibrary` 11），`E:\Games\SteamLibrary` 目录已不存在 | 失踪库进 `missingLibraries` + note，`source=partial`——不造出 11 个点不开的游戏 |
+| VDF 是嵌套文本不是 JSON | 制表符缩进的 `"key" "value"` / `"key" { … }`，路径里反斜杠**成对**出现（`\\`） | 自写 tokenizer：截断的块、键后没有值 → 抛 `SteamError` 快速失败；显式写全的空 `{}` 接受 |
+
+启动只有一条路：`steam.exe -applaunch <appid>`（`run_launcher_action`，action id 形如
+`app:400040`）。ID 在 spawn **之前**校验（非数字直接拒），命令缺失时回退注册表
+`SteamExe`；执行站点复用 `app_launcher.launch_app`，不新开 spawn 路径。客户端是单实例、
+命令只做投递，退出码 0 只代表 steam.exe 收到了请求，故返回体带 `deliveryOnly: true`。
+
 ---
 
 ## 5. 模块架构
@@ -332,7 +352,8 @@ bucket / 4287 份清单），所以先按文件名筛、只对命中项读 JSON�
 | `schema.py` | 470 | 两层数据的 JSON Schema 与校验（`jsonschema` 可选，缺失时降级）；**同时是 `docs/format.md` 字段表的唯一生成源** | `jsonschema`(可选) |
 | `registry.py` | 188 | 工具查询语义（列表 / 搜索含 `id` / 详情 / 启动信息），加载时过滤不合规条目；`kind` 之外的筛选维度（`status` 精确、`publisher` 子串，均大小写不敏感、先归一化再判空）集中在 `_apply_filters` | `store`、`schema` |
 | `backend_client.py` | 1593 | 后端 MCP 子进程的连接管理、调用转发、缓存、心跳、日志、**install 执行门禁（P0）** | `mcp`、`store`、`runtime_paths` |
-| `launcher_client.py` | 628 | 启动器适配器（非 MCP，Quicker / uTools）：Quicker 走 states 目录解析 + `runaction:` 命令行回传；uTools 走 `plugins/*.asar` 的 plugin.json 纯 Python 解析（Chromium Pickle 封包）+ `utools://` 协议唤起（fire-and-forget） | `store` |
+| `launcher_client.py` | 761 | 启动器适配器（非 MCP，Quicker / uTools / Steam）：Quicker 走 states 目录解析 + `runaction:` 命令行回传；uTools 走 `plugins/*.asar` 的 plugin.json 纯 Python 解析（Chromium Pickle 封包）+ `utools://` 协议唤起（fire-and-forget）；Steam 走 `steam_library` 读盘列游戏 + `steam.exe -applaunch <appid>`（执行委托给 `app_launcher.launch_app`，ID 在 spawn 前校验、命令缺失回退注册表 `SteamExe`，结果标 `deliveryOnly`）。适配器判别靠 `launcher.type`，`SUPPORTED_ADAPTERS` 必须与 `schema` 的 enum 逐字一致（有守卫测试） | `store`、`steam_library`、`app_launcher` |
+| `steam_library.py` | 282 | Steam 库**只读**解析（不动客户端、不联网）：`registry_steam_values()` / `steam_executable()`（`HKCU\Software\Valve\Steam`，只 `QueryValueEx`）+ `resolve_root()`（条目 `dataDir` → 注册表 `SteamPath` → 穷举兜底，兜底来源写明「未经登记值确认」；登记值是正斜杠，统一归一化）+ `parse_vdf()`（自写 tokenizer：嵌套块、成对 `\\` 转义、值可以是字符串化的数字；截断的块与「键后没有值」抛 `SteamError` 快速失败，显式写全的空 `{}` 接受）+ `_library_paths()`（无 vdf 只当主库并如实标 `libraryFolders=missing`）+ `read_manifest()`（无 `AppState` / 无 `appid` 的清单跳过并给原因）+ `installed_games()`（**games 只来自 acf**，vdf 声明的 appid 只汇成 `declaredAppTotal`；失踪库进 `missingLibraries` + note，逐库带 `exists` / `manifests`） | 标准库（Windows 另用 `winreg`） |
 | `errors.py` | 92 | 业务错误出口：`ErrorType` 常量枚举 + `ToolError` / `fail` / `ensure_success`（P1-04 从 server.py 原样搬出——tool_specs 的 handlers 要用，留在 server.py 会形成循环 import；server 命名空间继续 re-export；P1-03 补齐枚举至 16 种） | 标准库 |
 | `app_launcher.py` | 188 | `kind=app` 的启动执行（`launch_tool` 的 `execute=true` 路径）：`create_subprocess_exec` 无 shell、stdio 三件套 DEVNULL（A8）、`shutil.which` 预检、观察窗口（默认 5s / 封顶 30s）区分「早退报退出码」与「仍在运行报 running」；运行中进程由模块级注册表强引用保活（CPython transport.close() 会 kill 运行中子进程） | `errors`、`anyio` |
 | `tool_help.py` | 256 | 帮助信息分层（`get_tool_help` 的底座）：`resolve_help_command()`（`help.command` > `launch.command`，`help.args` > `--help`，**永不复用 `launch.args`**；timeout 默认 5s / 封顶 30s）+ `entry_help` / `backend_summary` / `launcher_summary` 纯取数 + `run_help_command()`（`create_subprocess_exec` 无 shell、PIPE 捕获、UTF-8→GBK→replace 三级解码、超时必 kill、>20000 字符截断、非零但有文本仍算成功） | `errors`、`anyio` |
@@ -650,7 +671,8 @@ python src/server.py
 | `tool_specs.py` `SERVER_TOOL_SPECS` / `build_mcp_tools()` | 22 个对外工具的声明表（SSOT）与 `Tool` 构造：annotations / outputSchema 在此统一挂载；`validate_specs()` 在 import 期自检 |
 | `server.py` `call_tool` | `tools/call` 入口，含意外异常兜底 |
 | `server.py` `dispatch_tool` | 22 个工具的查表分发（`policy.check_call` 策略前置 → `get_spec` → handler → 统一 `json.dumps`；未命中即 `unknown_tool`，策略拒绝即 `permission_denied`）。P3 起五个出口（成功 / `unknown_tool` / `permission_denied` / handler 业务错 / 意外异常）各调一次 `_record()` 记使用统计：业务错的 `errorType` 直接从异常正文取（与客户端看到的载荷同源），意外异常记 `internal_error`；埋点是旁路，返回值与异常语义一字未改（`tests/test_usage.py` 的 dispatch 层用例锁定） |
-| `launcher_client.py` `LauncherClient` | 启动器（非 MCP）适配器：`_scan_quicker` 解析动作清单、**先 json.loads 再取字符串**才能拿到动作名；`run_action` 走一次性外部命令（`-c<秒> "runaction:<ID>?参数"`），输出按 GBK 解码、失败按文本判定（退出码恒为 0） |
+| `launcher_client.py` `LauncherClient` | 启动器（非 MCP）适配器：`_scan_quicker` 解析动作清单、**先 json.loads 再取字符串**才能拿到动作名；`run_action` 走一次性外部命令（`-c<秒> "runaction:<ID>?参数"`），输出按 GBK 解码、失败按文本判定（退出码恒为 0）；`sync_actions` 按 `launcher.type` 三分支（steam 先判，`dataDir` 可空、回退注册表），`_scan_steam` 把 acf 行折成 `app:<appid>` 动作（描述带库名与 MB，`source` 随失踪库降为 `partial`），`_run_steam` 在 spawn 前校验 ID 并委托 `launch_app` |
+| `steam_library.py` `parse_vdf` / `resolve_root` / `installed_games` | P0 Steam 只读解析的三段：`parse_vdf()` 是 VDF tokenizer（`"key" "value"` / `"key" { … }`、成对 `\\` 转义、字符串化的数字保持原样），**只对真的坏掉的文件抛**——块缺右括号、键后没有值都判 `SteamError`，而显式写全的 `"key" {}` 是合法的空对象（截断和作者本意得区分开，半份清单比没有清单更坏）；`resolve_root()` 按 条目 `dataDir` → 注册表 `SteamPath` → 穷举兜底，兜底命中会在来源里写明「未经登记值确认」，且把注册表里的正斜杠归一化；`installed_games()` 以 acf 为唯一「装着」的证据，vdf 声明的 appid 只汇成 `declaredAppTotal`，盘上失踪的库进 `missingLibraries` 并附 note（本机实测：声明 3 库 / 27 appid，盘上 16 份 acf） |
 | `app_launcher.py` `launch_app` | `kind=app` 的启动执行：`launch_tool` 传 `execute=true` 才走到这里；只支持 `launch.type=executable`，失败一律走返回载荷（`config_error` 预检不通过 / `runtime_error` 退出码非 0），不抛异常 |
 | `tool_help.py` `resolve_help_command` / `run_help_command` | `get_tool_help` 的两段：前者把条目折成一条帮助命令（`help.command` > `launch.command`、`help.args` > `--help`，**绝不复用 `launch.args`**，timeout 归一化封顶 30s），后者只在显式 `run=true` 时被调用——`shutil.which` 预检 → `create_subprocess_exec` 捕获 stdout/stderr（UTF-8→GBK→replace 三级解码）→ 超时 kill 并报 `runtime_error`；`executed` 字段如实反映「是否真的 spawn 过」 |
 | `discovery.py` `expand_path` / `resolve_executable` / `fold_verdicts` / `probe_command` / `_probe_registry_value` | P1 工具发现的五段：`expand_path()` 把 `{ENV}` 模板展开成绝对路径，进程环境与注册表回退两处都取不到才返回「没检查成」而不是相对路径；`resolve_executable()` 在 Windows 上把 `shutil.which` 的无扩展名垫片结果换成真目标（裸名优先是 `WinError 193` 的根因）；`fold_verdicts()` 把逐条证据折成 `hit` / `miss` / `inconclusive`（miss 要求**所有**能下结论的维度都说没有，且没有维度没检查成）；`probe_command()` 默认只解析 PATH 判可用性（不 spawn），`run=True` 才用绝对路径无 shell 执行、`stdin=DEVNULL`（子进程继承 server 的 stdio 管道会偷走 inbound JSON-RPC，真机上打死过整个网关）、按 `version_pattern` 取版本号，超时与 OSError 都折成结论返回而不抛；`_probe_registry_value()` 读安装器自己写的登记值，读数四档里只有「不存在 / 空 / 指向的路径已失效」算 miss，权限与展开失败算 inconclusive（Steam 装 `S:` 盘那次假阴性的修法） |

@@ -150,18 +150,22 @@ TOOL_ENTRY_SCHEMA: dict[str, Any] = {
             "properties": {
                 "type": {
                     "type": "string",
-                    "enum": ["quicker", "utools"],
+                    "enum": ["quicker", "utools", "steam"],
                     "description": (
                         "适配器类型：`quicker` 走 QuickerStarter 命令行（有 stdout 回传）；"
-                        "`utools` 走 utools:// 协议唤起（fire-and-forget，无回传，结果只在 uTools UI）"
+                        "`utools` 走 utools:// 协议唤起（fire-and-forget，无回传，结果只在 uTools UI）；"
+                        "`steam` 读安装器自己写的库清单（`libraryfolders.vdf` + "
+                        "`appmanifest_*.acf`）出游戏列表，调用是 `steam.exe -applaunch <appid>`"
+                        "（退出码只代表指令已投递，游戏起没起无从回传）"
                     ),
                 },
-                "command": {"type": "string", "description": "启动器可执行文件路径（如 QuickerStarter.exe；utools 协议调用不需要）"},
+                "command": {"type": "string", "description": "启动器可执行文件路径（如 QuickerStarter.exe；utools 协议调用不需要；steam 省略时按注册表 SteamPath 推 steam.exe）"},
                 "dataDir": {
                     "type": "string",
                     "description": (
                         "启动器数据目录（Quicker 的 states 所在目录；uTools 的插件 asar 所在目录，"
-                        "utools 适配器会展开 %APPDATA% 等环境变量）"
+                        "utools 适配器会展开 %APPDATA% 等环境变量；steam 是客户端安装根，"
+                        "省略则回退 `HKCU\\Software\\Valve\\Steam` 的 SteamPath）"
                     ),
                 },
                 "timeout": {

@@ -8,7 +8,7 @@ description: 统一工具管理器，维护本机工具名单，提供统一的�
 统一管理本机各类工具，提供统一的注册、搜索、启动与**后端路由调用**能力。
 
 工具有三类 `kind`：MCP 工具（`kind=mcp`）、普通应用（`kind=app`）与启动器（`kind=launcher`，
-如 Quicker、uTools——不是 MCP，调用为一次性外部命令），三者共用同一套 `tool_id` 体系。
+如 Quicker、uTools、Steam——不是 MCP，调用为一次性外部命令），三者共用同一套 `tool_id` 体系。
 
 ## 核心能力
 
@@ -44,6 +44,15 @@ description: 统一工具管理器，维护本机工具名单，提供统一的�
   `execute=true`；安装额外要 `allowDestructive=true`（`kind=package` 门禁是
   fail-closed 的，见「安全约定」）。`winget` / `npm` 没有可靠的纯读盘来源，
   属执行面，尚未接线
+- **Steam 游戏库**：`kind=launcher` + `launcher.type=steam`，用现成的三个启动器工具
+  （`sync_launcher_actions` / `list_launcher_actions` / `run_launcher_action`）覆盖，
+  **没有新增对外 MCP 工具**。清单自己读盘：`libraryfolders.vdf` 出库、`appmanifest_*.acf`
+  出游戏，动作 id 是 `app:<appid>`；根目录以注册表 `HKCU\Software\Valve\Steam\SteamPath`
+  为权威（条目 `dataDir` 优先，两处都没有再穷举常见安装位置）。**以 acf 为准**——
+  vdf 里声明的 appid 只是「曾经装过」，盘上没有 acf 就是没装着，这类库会进
+  `missingLibraries` 且 `source=partial`，不会造出一批点不开的游戏。启动走
+  `steam.exe -applaunch <appid>`，客户端是单实例、命令只做投递，退出码 0 不等于
+  游戏已运行（结果里 `deliveryOnly: true`）
 
 ## 目录结构
 
@@ -63,14 +72,15 @@ awam-tool-manager/
 │   ├── store.py              # JSON 存储层（tools 走仓库，缓存走运行时目录）
 │   ├── registry.py           # 工具注册中心（查询语义）
 │   ├── backend_client.py     # 后端 MCP 客户端与连接池
-│   ├── launcher_client.py    # 启动器适配器（非 MCP：Quicker / uTools）
+│   ├── launcher_client.py    # 启动器适配器（非 MCP：Quicker / uTools / Steam）
 │   ├── discovery.py          # 本机工具发现（声明清单 + 只读探测，默认零 spawn）
 │   ├── pkgman.py             # 包管理器适配层（scoop：读盘列包 / 搜 bucket / 解析入口 / 构造安装命令）
+│   ├── steam_library.py      # Steam 库只读解析（libraryfolders.vdf + appmanifest_*.acf，以 acf 为准）
 │   ├── runtime_paths.py      # 运行时目录解析 + 旧路径迁移
 │   └── schema.py             # 两层数据的 JSON Schema 校验 + 文档生成源
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 517 个用例（另有 9 个真实 e2e 用例默认不收集，
+└── tests/                    # 557 个用例（另有 9 个真实 e2e 用例默认不收集，
                               # `pytest -m e2e` 显式跑；含真实 MCP 会话与文档漂移检测）
 ```
 
@@ -105,8 +115,8 @@ awam-tool-manager/
 | `get_backend_logs` | `tool_id`(必填)、`level`、`limit` | 查看后端日志（`limit<=0` 返回空） |
 | `set_backend_log_level` | `tool_id`、`level`(必填) | 设置后端日志级别（低于该级别的日志不再入队/打印） |
 | `sync_backend_tools` | `tool_id`(必填) | 手动同步子工具目录 |
-| `list_launcher_actions` | `tool_id`(必填)、`keyword`、`limit`、`refresh` | 列出/搜索启动器（Quicker / uTools）的动作；返回带 `lastSynced`/`source` |
-| `run_launcher_action` | `tool_id`(必填)、`action_id`、`action_name`、`param`、`wait`、`allowDestructive` | 执行启动器动作；Quicker 走命令行（有 stdout 回传），uTools 走 `utools://` 协议唤起（fire-and-forget 无回传）；条目标了 `destructive` 时需 `allowDestructive=true`（配了 `destructiveActions` 时按动作 id/name/type 的 glob 判定，仅命中的动作需确认） |
+| `list_launcher_actions` | `tool_id`(必填)、`keyword`、`limit`、`refresh` | 列出/搜索启动器（Quicker / uTools / Steam）的动作；返回带 `lastSynced`/`source` |
+| `run_launcher_action` | `tool_id`(必填)、`action_id`、`action_name`、`param`、`wait`、`allowDestructive` | 执行启动器动作；Quicker 走命令行（有 stdout 回传），uTools 走 `utools://` 协议唤起（fire-and-forget 无回传），Steam 走 `steam.exe -applaunch <appid>`（只保证投递）；条目标了 `destructive` 时需 `allowDestructive=true`（配了 `destructiveActions` 时按动作 id/name/type 的 glob 判定，仅命中的动作需确认） |
 | `sync_launcher_actions` | `tool_id`(必填) | 手动同步启动器动作清单 |
 | `get_tool_help` | `tool_id`(必填)、`run`、`timeout`、`allowDestructive` | 取工具帮助信息：文档链接 + 能力清单（mcp 子工具 / launcher 动作）+ 帮助命令预览；**默认只读数据、不 spawn**，`kind=app` 显式 `run=true` 才执行帮助命令（`--help` / 条目 `help.args`）并捕获输出 |
 | `get_usage_stats` | `days`、`tool_id` | 查询调用使用统计（只读 `<runtime>/usage.log`，不碰任何工具）：按天 / 按对外工具 / 按目标 `tool_id` 聚合调用量、成败与耗时；`days` 按日历日含今天、默认 7、越界收敛到 1~365，`tool_id` 按记录里的 `target` 精确匹配 |
@@ -116,7 +126,7 @@ awam-tool-manager/
 | `launch_package` | `manager`、`package`(必填)、`entry`、`execute`、`wait` | 启动已安装的包：入口按 **快捷方式 → bin → shim** 取，只挑「文件在盘上且扩展名可直接 spawn」的候选（真机实测 `.ps1` 抛 WinError 193，不可直接起）；**默认只预览**（回 `path` / `kind` / 全部候选及其 `exists`/`runnable`），显式 `execute=true` 才与 `launch_tool` 走同一条 spawn 路径；不改动已装清单，故不要求 `allowDestructive`（但留门禁审计行） |
 | `install_package` | `manager`、`package`(必填)、`execute`、`allowDestructive`、`timeout` | 安装一个包：默认只回将要执行的 `argv` 与 `alreadyInstalled`；真的装要**同时**传 `execute=true`（意图）+ `allowDestructive=true`（授权）——门禁 `kind=package` 是 fail-closed 的（不看条目标记，名单外操作一律要确认；策略 `destructive.mode=deny` 时客户端无法自解）；命令跑完再读回 `apps/<包>`，退出码 0 却读不到时明示「不要当成安装成功」 |
 
-> `kind=launcher`（启动器，如 Quicker / uTools）不是 MCP：没有长连接，调用是一次性的。
+> `kind=launcher`（启动器，如 Quicker / uTools / Steam）不是 MCP：没有长连接，调用是一次性的。
 > - **Quicker**：`QuickerStarter.exe -c<秒> "runaction:<ID或名称>?参数"`，stdout 回传动作
 >   结果（失败时退出码仍是 0，按输出文本判定）。`source=partial` 表示部分动作只拿到 ID
 >   （`quicker.db` 是加密的，名称只能从 state 缓存 + 运行日志尽力解析）。
@@ -128,6 +138,13 @@ awam-tool-manager/
 >   观察窗口」（等 renderer 起来，默认取条目 timeout、封顶 5s）。
 >   面板在投递后约 1s 才真正呈现（呈现后失焦不自动隐藏），所以「调用后看一眼屏幕
 >   说没反应」不成立——要判断呈现必须连续采样，`success` 也只代表协议被系统接收。
+> - **Steam**：`steam.exe -applaunch <appid>`。动作清单由 `steam_library.py` 纯读盘生成：
+>   `libraryfolders.vdf` 出库、每库 `appmanifest_*.acf` 出游戏，id 形如 `app:400040`。
+>   根目录以注册表 `HKCU\Software\Valve\Steam` 的 `SteamPath` 为权威（登记值是正斜杠，
+>   解析时会归一化），条目 `dataDir` 优先于它。**acf 才是「装着」的证据**：vdf 声明了
+>   某个库或 appid 而盘上没有，该库进 `missingLibraries`、`source=partial`，对应游戏
+>   不进清单。单实例客户端只做投递，`success` / 退出码 0 不代表游戏已经跑起来，
+>   返回体带 `deliveryOnly: true` 明示此事。
 >
 > 动作清单缓存在运行时目录的 `launcher-actions/{tool_id}.json`。
 >
@@ -186,7 +203,9 @@ CallToolResult 透传；生产环境 pyenv 3.12 即 1.29.0）。
   - launcher：配 `destructiveActions`（新增可选字段，glob、大小写不敏感，匹配动作
     `id`/`name`/`type` 任一）时只拦命中的动作，未配则所有动作都拦。默认不启用——
     启用该字段等于放宽安全属性（未命中的动作由拦转放），须部署者按实际动作清单
-    核对后显式配置。
+    核对后显式配置。`run_launcher_action` **没有 dry-run**，唯一的意图旋钮就是
+    `allowDestructive`，所以三个同型启动器条目（quicker / utools / steam）一律标
+    `destructive: true` 且不配 `destructiveActions`。
   - package（`install_package` / `launch_package`）：**没有条目可标**，破坏性由操作
     本身定且方向是 fail-closed——只有一张「不需要授权」白名单
     `policy.PACKAGE_CONFIRMED_OPS`（当前仅 `launch_package`：起的是用户早就装好的
@@ -205,7 +224,9 @@ CallToolResult 透传；生产环境 pyenv 3.12 即 1.29.0）。
   子进程若继承这条 stdin（Windows 上 `.cmd` / `.bat` 垫片经 cmd.exe 尤其如此），
   会**从协议通道里读走字节**，等价于吞掉入站 JSON-RPC——真机实测整个 server 随即退出。
   `backend_client.py` / `app_launcher.py` / `tool_help.py` / `discovery.py` /
-  `pkgman.py` 五条 spawn 路径都按这条纪律走，新增第六条时不要漏
+  `pkgman.py` 五条 spawn 路径都按这条纪律走，新增第六条时不要漏。启动器适配器里
+  Quicker 与 uTools 各自 `create_subprocess_exec`（两处都显式 `stdin=DEVNULL`），
+  Steam 不自己 spawn，复用 `app_launcher.launch_app` 这处唯一执行站点
 - **改完服务端代码要用 MCP 客户端验证前，先重启那条连接**：stdio server 是常驻进程，
   Python 只在 import 期读源码，不重启则拿到的仍是旧行为的结论
 - **`install.command` 默认不被自动执行**（P0 修复）：它写在进版本库的数据文件里、
@@ -233,8 +254,9 @@ CallToolResult 透传；生产环境 pyenv 3.12 即 1.29.0）。
 2. 普通应用写 `kind=app` + `launch`；MCP 工具写 `kind=mcp` + `connection`。
    帮助命令与默认 `--help` 不同的应用（GUI 程序常为 `/?`）再补可选 `help`
    （`command` / `args` / `timeout`），`get_tool_help` 会优先按它取
-3. 启动器写 `kind=launcher` + `launcher` 配置（`type=quicker`/`utools`、数据目录、
-   超时；uTools 的 `dataDir` 可写 `%APPDATA%` 等环境变量，由适配器展开），
+3. 启动器写 `kind=launcher` + `launcher` 配置（`type=quicker`/`utools`/`steam`、数据目录、
+   超时；uTools 的 `dataDir` 可写 `%APPDATA%` 等环境变量，由适配器展开；Steam 的
+   `dataDir` / `command` 可留空，适配器会回退查注册表 `SteamPath` / `SteamExe`），
    动作清单由 `sync_launcher_actions` 从启动器本地数据自动生成
 4. MCP 工具调用 `start_backend(tool_id=...)` 建立连接并自动同步子工具目录；
    启动命令不在 PATH 时**默认不安装**，返回 `install_required`——需要自动安装

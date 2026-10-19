@@ -1,0 +1,39 @@
+{
+  "id": "steam",
+  "name": "Steam",
+  "displayName": "Steam 游戏平台",
+  "kind": "launcher",
+  "description": "Valve 的游戏平台客户端：本机游戏库以安装器自己写的清单为准（libraryfolders.vdf 声明有哪些库、每个库 steamapps/appmanifest_*.acf 声明装了哪个游戏），列出/搜索已装游戏并按 appid 启动",
+  "version": "latest",
+  "status": "installed",
+  "publisher": "Valve",
+  "website": "https://store.steampowered.com/",
+  "docUrl": "https://developer.valvesoftware.com/wiki/Command_line_options",
+  "icon": "S:\\Program Files (x86)\\Steam\\steam.exe",
+  "launch": {
+    "type": "executable",
+    "command": "S:\\Program Files (x86)\\Steam\\steam.exe",
+    "args": []
+  },
+  "launcher": {
+    "type": "steam",
+    "command": "S:\\Program Files (x86)\\Steam\\steam.exe",
+    "dataDir": "S:\\Program Files (x86)\\Steam",
+    "timeout": 20
+  },
+  "tags": ["游戏平台", "游戏", "启动器", "VR"],
+  "actions": ["list", "search", "run", "launch"],
+  "capabilities": ["launch", "search", "game-library"],
+  "readOnly": false,
+  "destructive": true,
+  "metadata": {
+    "installPath": "S:\\Program Files (x86)\\Steam",
+    "registryAuthority": "HKCU\\Software\\Valve\\Steam 的 SteamPath / SteamExe（真机实测值写作正斜杠形式 s:/program files (x86)/steam，Windows 一样认）；条目里的绝对路径按登记值核对过",
+    "detectionNote": "2026-10-18 晚真机 discover_tools 曾因清单只声明 C 盘两处而把 Steam 判成 not_installed（NE-10 缺陷④），加了 registry_value 探针后纠正；本机装在 S 盘，穷举 Program Files 永远穷举不出「装在非常规盘」",
+    "libraryNote": "2026-10-19 实测：vdf 声明 3 个库 / 27 个 appid，盘上只有 2 个库的 16 份 appmanifest（S 盘 5 + D:\\03Games 11），E:\\Games\\SteamLibrary 目录已不存在 → 那 11 个 appid 不计入清单（「Steam 记得装过」不等于「现在能启动」），同步因此报 source=partial",
+    "actionIdFormat": "动作 ID = `app:<appid>`（也接受纯数字 appid）；调用形式 `steam.exe -applaunch <appid>`",
+    "notes": "destructive=true 是刻意的：`run_launcher_action` 没有 dry-run（一次调用就是一次执行），而启动游戏会拉起全屏客户端、可能顺带触发更新下载。执行因此必须显式传 allowDestructive=true，与 Quicker / uTools 两个同型启动器一致。另外 appid 228980「Steamworks Common Redistributables」是共享运行库而不是游戏，acf 里存在就照样列出，本条目不代管这类区分；Steam 没有动作传参通道，`param` 会被忽略并回显在 `ignoredParam`"
+  },
+  "createdAt": "2026-10-18T17:37:09Z",
+  "updatedAt": "2026-10-18T17:37:09Z"
+}

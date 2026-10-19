@@ -253,13 +253,14 @@
     存在理由——前三条在单测层用桩就能验。
   - 红绿：摘掉 `stdin=subprocess.DEVNULL` → 场景⑨ 9.33s 内红（客户端先断），
     单测 `test_run_commands_executes_and_parses_version` 同时红；还原后全绿
-- **口径**：`pytest tests/ -q` = 517 passed / **9 deselected**；
-  `pytest -m e2e -q` = 9 passed / 517 deselected。说「517」时要带上
+- **口径**：`pytest tests/ -q` = 557 passed / **9 deselected**；
+  `pytest -m e2e -q` = 9 passed / 557 deselected。说「557」时要带上
   「另有 9 个 e2e 默认不收集」，否则会被误读成总数。
   （本行随每次落地更新：NE-8 时为 314，NE-9「工具使用统计」落地后为 343，
   NE-10「工具自动发现」落地后为 411，真机端到端 + 发现层三处修复后为 425，
   Steam 假阴性纠正（`registry_value` 探针）后为 441，
-  P2-07「包管理适配」落地（适配层 + handler + 门禁）后为 517）
+  P2-07「包管理适配」落地（适配层 + handler + 门禁）后为 517，
+  P0「Steam 接入」（库解析 + 启动器适配器）落地后为 557）
 - **手工脚本**（不在上面 9 个里）：
   `"<pyenv 3.12 python>" tests/e2e/manual_install_gate.py`——验「已授权时
   install.command 真的被提交给 shell」，依赖本机 npm，故保留手工。
@@ -795,6 +796,80 @@
 - [x] **顺带纠一个会腐烂的字面量** - e2e 场景⑨ 里 `assert tools_after == 18` 改成
       `== len(EXPECTED_TOOL_NAMES)`：写死数字的用例每次加工具都要跟着改，等于没在断言任何东西
 
+### Steam 接入（P0，2026-10-19）
+- [x] **形态选定并落地** - 用户口径「自研读本地文件 + 登记 app 条目」。落地时把「登记条目」
+      收敛成 **`kind=launcher` + `launcher.type=steam`**，不是 `kind=app`：游戏清单是动态的、
+      每个 appid 一条 `data/tools/*.json` 会立刻腐烂，而启动器面已经有
+      `sync_launcher_actions` / `list_launcher_actions` / `run_launcher_action` 三个工具在管
+      「一个启动器下面的 N 个可执行项」这件事。**因此对外工具数没有从 22 变成 23**——
+      能力全部走现成三件套，`tool_specs.py` 零改动。`kind=app` 那条路同时留着：条目里写了
+      `launch`，所以 `launch_tool` 依然能启动 Steam 客户端本体（查得到、预览得出命令）。
+      也不接第三方 `steam-local-mcp`：那是个 MCP 后端，等于把「读本地清单」这件事
+      交给一个不受我们控制、且要长连接和门禁配 `destructiveTools` 的子进程
+- [x] **本机实测布局（全部来自只读勘察，不是从文档推）** - 权威位置是注册表
+      `HKCU\Software\Valve\Steam` 的 `SteamPath` = `s:/program files (x86)/steam`
+      （**正斜杠**，且不在 `C:\Program Files`）；`libraryfolders.vdf` 声明 **3 个库 / 27 个 appid**，
+      盘上只有 **16 份 `appmanifest_*.acf`**（`S:\Program Files (x86)\Steam` 5 +
+      `D:\03Games\SteamLibrary` 11），`E:\Games\SteamLibrary` 目录当前已不存在。
+      「vdf 声明了 ≠ 装着」是本节的核心事实：那 11 个只在 vdf 里出现的 appid 是历史残留，
+      认了就会造出 11 个点不开的游戏
+- [x] **`src/steam_library.py`（282 行，纯只读）** - `resolve_root()`：条目 `dataDir` →
+      注册表 `SteamPath` → 穷举常见位置（兜底命中时来源说明写明「未经登记值确认」），
+      正斜杠归一化；`parse_vdf()`：自写 tokenizer（制表符缩进、成对 `\\` 转义、
+      字符串化的数字保持原样），**截断的块和「键后没有值」抛 `SteamError` 快速失败**，
+      而显式写全的 `"key" {}` 判合法——半份清单比没有清单更坏，但作者手写的空对象不是错误；
+      `installed_games()`：games 只来自 acf，vdf 声明量汇成 `declaredAppTotal`，
+      失踪库进 `missingLibraries` + note，逐库带 `exists` / `manifests` / `count`
+- [x] **适配器接线** - `launcher_client.py`（628 → 761 行）：`SUPPORTED_ADAPTERS =
+      ("quicker", "utools", "steam")` 与 `schema` 的 `launcher.type` enum 逐字一致（有守卫测试
+      钉住，两边漏改任一侧即红）；`sync_actions` 先判 steam 分支（`dataDir` 可空、回退注册表），
+      其余分支保持原样；`_scan_steam()` 把 acf 折成 `{id: "app:<appid>", name, type: "game",
+      description: "库 <libname> / <MB>", appid, installdir, library, sizeOnDisk, lastPlayed}`，
+      有失踪库时 `source` 降为 `partial`；`_run_steam()` **在 spawn 之前**校验 ID
+      （`STEAM_ACTION_RE`，非数字直接拒），命令缺失回退 `SteamExe`，执行委托给
+      `app_launcher.launch_app`（不新开 spawn 路径），返回体标 `deliveryOnly: true`
+      ——客户端单实例、命令只做投递，退出码 0 不代表游戏起来了
+- [x] **门禁按同型启动器口径配** - `data/tools/steam.json`：`destructive: true` 且
+      **故意不配 `destructiveActions`**（配了就是把未命中的动作由拦转放，等于放宽安全属性），
+      `run_launcher_action` 没有 dry-run、唯一的意图旋钮是 `allowDestructive`，
+      所以启动游戏必须显式传 `allowDestructive=true`；`version` 写 `latest` 而不是猜一个号
+      （版本要从 `version.dll` / `appinfo.vdf` 之类内部文件取，超出「只读解析本地库清单」的约定范围，
+      勘察时也被权限分类器拦下，未重试）
+- [x] **真机 stdio 会话七次调用**（`.scratch/p2-probe/live_steam_tools.py`，走
+      `tests/e2e/helpers.stdio_session`，非本会话的客户端快照）：
+      ①`search_tools {keyword:"Steam"}` → `count: 1`；
+      ②`sync_launcher_actions {tool_id:"steam"}` → `count: 16, source: "partial"`，
+      行形如 `{"id":"app:1509960","name":"PICO PARK","description":"库 SteamLibrary / 76 MB",
+      "library":"D:\\03Games\\SteamLibrary"}`，服务端日志
+      「Steam 根=s:\program files (x86)\steam（来源：注册表 SteamPath），库 3 个 / 清单 16 份 /
+      已装 16 项 / vdf 声明 27 项」；③`list_launcher_actions`（不带 keyword）→ 16 条；
+      ④`list_launcher_actions {keyword:"PICO"}` → 1 条；⑤`get_tool_info {tool_id:"steam"}` → OK；
+      ⑥`launch_tool {tool_id:"steam"}` → 预览
+      `{"command":"S:\\Program Files (x86)\\Steam\\steam.exe","args":[]}`，**未 spawn**；
+      ⑦`run_launcher_action {tool_id:"steam", action_id:"app:400040"}`（不传授权）→
+      `errorType: destructive_blocked`，`audit.log` 同步落一行
+      `{"event":"destructive_gate","action":"run_launcher_action","tool":"steam",
+      "kind":"launcher","sub_op":"app:400040","decision":"block","rule_hit":"entry_level",
+      "client_declared":false,"policy_mode":"require_confirm"}`
+- [x] **测试 517 → 557** - 新增 `tests/test_steam_library.py`（20 条：嵌套块、`\\` 解转义、
+      三处 `SteamError` 拒绝、空 `{}` 接受、`resolve_root` 优先级与兜底标注、
+      失踪库不变成 games、逐库 `exists`、坏清单跳过并给原因、无 vdf 只当主库、
+      「vdf 在但一个库都没解析出来」要抛）与 `tests/test_steam_launcher.py`（19 条：
+      动作 id 顺序与 `source` 两态、关键词搜名称/库、注册表定位（无 `dataDir`）、
+      定位不到根目录的报错、argv 逐字 `["-applaunch","400040"]`、`tool_id` 透传、
+      `deliveryOnly`、非数字 ID **在 spawn 前**被拒、`ignoredParam`、`wait` 透传、
+      退出码 1 折成失败载荷、enum↔`SUPPORTED_ADAPTERS` 守卫、仓库 steam 条目形状、
+      以及走真实 `server.dispatch_tool` 的未授权拦截）。
+      `launcher_client.launch_app` 全程被打桩，**新测试一次真 spawn 都没有**。
+      口径核对：摘掉这两个新文件后基线是 **518**，即此前已有 1 条用例没写进「517」这个数
+      （518 + 39 = 557），本次按实测改口径而不是把差值摊平
+- [x] **未跑的路径（明确留白）** - `run_launcher_action(..., allowDestructive=true)` 真启动
+      游戏没有执行：会拉起全屏客户端，属对用户机器的可见副作用，需用户在场。
+      同样只留白不猜的是 Steam 版本号（见上条 `version: "latest"`）
+- [x] **顺带** - 提交级 e2e 场景仍是 9 个，Steam 这轮的复现证据同样在 `.scratch/p2-probe/`
+      （gitignore）：合成树能钉的行为已全在 `test_steam_*`，真机数字（3 库 / 27 声明 / 16 份 acf）
+      不可复现，不升格成用例
+
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
 - [x] Everything Search MCP（`kind=mcp`，已实测连接、调用、启停跑通）
@@ -802,6 +877,11 @@
       2 个子工具带完整 schema、查询与安装双路径路由验证；2026-10-16 深夜按网关真实链路
       复跑端到端（start → tools/list → `find-winget-packages` 返回真实包数据 → stop），
       查询免确认放行、安装仍被子工具级门禁拦截
+- [x] **Steam（`kind=launcher` + `launcher.type=steam`）** - 2026-10-19 完成，见「Steam 接入
+      （P0，2026-10-19）」：自研只读解析 `libraryfolders.vdf` + `appmanifest_*.acf`，
+      真机 `sync_launcher_actions` 得 16 个 `app:<appid>` 动作（`source=partial`，
+      声明 3 库/27 appid、盘上 16 份 acf），关键词搜索命中（"PICO"→1 条），
+      启动走 `steam.exe -applaunch`，未授权时被破坏性门禁拦下（真机验过 `destructive_blocked`）
 - [x] **Toolport 集成** - 已注册为 Toolport 的后端（registry `source: manual`，default profile），
       daemon 真实链路实测：启停、状态、子工具列表、路由调用全通
 - [x] **WorkBuddy 直连 MCP** - `~/.workbuddy/mcp.json` 新增 `awam-tool-manager` 条目
@@ -943,23 +1023,34 @@
 - ~~**Quicker 调用的成功路径尚未真实执行验证**~~ → 已验证（2026-10-16 22:11:06，
   用户授权执行动作「识别二维码」`9f530d6e-…`）：`QuickerStarter` 返回 `OK`、
   exitCode 0，Quicker 日志确认 `执行动作：识别二维码` 真的跑了
+- **Steam 的「声明」不等于「装着」**：`libraryfolders.vdf` 里 `apps{appid: size}` 记的是
+  历史安装意图，本机声明 27 个 appid、盘上只有 16 份 `appmanifest_*.acf`，且其中一个库
+  （`E:\Games\SteamLibrary`）目录已经不存在。适配层只认 acf，所以清单比 vdf 少 11 项——
+  这是刻意的：认了就会造出 11 个点不开的游戏。代价是**卸载残留不会出现在任何一面**，
+  只看 `declaredAppTotal` 与 `count` 的差值和 `missingLibraries` 才知道有没有掉东西
+- **Steam 启动只保证投递**：客户端单实例，`steam.exe -applaunch <appid>` 的退出码 0 只代表
+  steam.exe 收到了请求，不代表游戏起来了（返回体 `deliveryOnly: true`）。同理 `version`
+  填 `latest` 不猜号——真版本号在 `appinfo.vdf` / `version.dll` 这类客户端内部文件里，
+  超出本项目「只读解析库清单」的约定范围
 
 ---
 
 ## 三、待完成 ⏳
 
 ### P0 - 核心打通
-- [ ] 接入 Steam（steam-local-mcp）— ⚠️ **阻塞不是「本机没装」，是「还没接」**（2026-10-18 晚纠正）：
-      本机 Steam 装着，位置在 `S:\Program Files (x86)\Steam`（权威登记值
-      `HKCU\Software\Valve\Steam` 的 `SteamPath` / `SteamExe`），library 声明 3 个
-      （`S:\Program Files (x86)\Steam` 5 个 appmanifest、`D:\03Games\SteamLibrary` 11 个、
-      `E:\Games\SteamLibrary` 目录当前不存在），合计 16 个已安装 appid。
+- [x] 接入 Steam — ✅ **已完成（2026-10-19，见「Steam 接入（P0，2026-10-19）」）**：
+      形态定为**自研只读解析本地文件**，不接第三方 steam-local-mcp；条目登记为
+      `kind=launcher` + `launcher.type=steam`（不是每个游戏一条 `kind=app`），
+      因此**没有新增对外 MCP 工具**，能力走现成的 `sync_launcher_actions` /
+      `list_launcher_actions` / `run_launcher_action` 三件套。
+      本机实测复核：位置 `S:\Program Files (x86)\Steam`（权威登记值
+      `HKCU\Software\Valve\Steam` 的 `SteamPath` / `SteamExe`，值是正斜杠），
+      `libraryfolders.vdf` 声明 3 个库 / 27 个 appid（`S:` 主库 5 份 acf、
+      `D:\03Games\SteamLibrary` 11 份、`E:\Games\SteamLibrary` 目录已不存在），
+      盘上合计 16 个已安装 appid → 同步得 16 条动作、`source=partial`。
       早先那句「真机 `discover_tools` 判 `not_installed` / 中信心，佐证本机没有 Steam」
       是**发现清单的假阴性**——它只声明了 `C:\Program Files` 两处位置，装在 S 盘就全落空；
       已随第四类探针 `registry_value` 修掉，现在判 `installed` / 高信心。
-      所以这条 P0 本机可实测条件齐备，要先定的是接入形态：读本地 `appmanifest_*.acf` /
-      `libraryfolders.vdf` 自研，还是接第三方 steam-local-mcp（后者是 MCP 后端，
-      走 `kind=mcp` + `connection`，破坏性门禁要按实际子工具清单配 `destructiveTools`）
 - [ ] 接入 npm（npm MCP）— ⚠️ 需求待澄清：npm 官方无 MCP server，需明确接哪个包
 
 ### P1 - 体验完善
@@ -1136,17 +1227,18 @@ awam-tool-manager/
 │   ├── store.py                # JSON 存储层（tools 走仓库，缓存走 runtime dir）
 │   ├── registry.py             # 工具注册中心
 │   ├── backend_client.py       # 后端 MCP 客户端与连接池（stdio）
-│   ├── launcher_client.py      # 启动器适配器（非 MCP：Quicker / uTools）
+│   ├── launcher_client.py      # 启动器适配器（非 MCP：Quicker / uTools / Steam）
 │   ├── app_launcher.py         # kind=app 启动执行（launch_tool 的 execute=true 路径）
 │   ├── tool_help.py            # 帮助信息分层取数 + 帮助命令执行（get_tool_help 底座）
 │   ├── discovery.py            # 本机工具发现（声明清单 + 只读探测，默认零 spawn）
 │   ├── pkgman.py               # 包管理器适配层（scoop：读盘列包 / 搜 bucket / 解析入口 / 构造安装命令）
+│   ├── steam_library.py          # Steam 库只读解析（libraryfolders.vdf + appmanifest_*.acf，以 acf 为准）
 │   ├── usage.py                # 调用使用统计：dispatch 出口记 usage.log + 按窗口聚合
 │   ├── runtime_paths.py        # 运行时目录解析 + 旧路径迁移（A14）
 │   └── schema.py               # 两层数据的 JSON Schema 校验 + **文档生成源**
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                      # 20 个 test_*.py（517 passed）+ 9 个 e2e 场景（默认不收集）
+└── tests/                      # 22 个 test_*.py（557 passed）+ 9 个 e2e 场景（默认不收集）
     ├── test_store.py
     ├── test_registry.py
     ├── test_registry_policy.py

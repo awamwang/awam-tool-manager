@@ -22,6 +22,14 @@
 asar 里的声明是**完整**的（有 explain、有全部触发词），不存在 Quicker
 那种「尽力而为补名」问题，`source` 恒为 `auto`；代价是调用只有「唤起」
 没有「回传」（`run_action` 的 utools 分支，fire-and-forget）。
+
+第三个实现是 Steam。它既不是动作数据库也不是插件目录，而是一堆**安装器自己
+写的清单文件**：`libraryfolders.vdf` 声明有哪些库，每个库的 `steamapps/
+appmanifest_*.acf` 声明装了哪个游戏。解析规则都在 `steam_library.py`，
+本模块只做适配（动作 ID = `app:<appid>`，调用 = `steam.exe -applaunch <appid>`）。
+它与前两个的最大差别是**动作可枚举完整**：acf 在就一定列得出，`source` 只会因为
+「vdf 声明了某个库但盘上不在了」降级成 `partial`——那 11 个 appid 是真起不来，
+不是名称没拿到。
 """
 
 from __future__ import annotations
@@ -38,6 +46,9 @@ from typing import Any
 from urllib.parse import quote
 
 import anyio
+
+from app_launcher import launch_app
+import steam_library
 
 DEFAULT_TIMEOUT = 20.0
 
@@ -81,6 +92,14 @@ UTOOLS_MAX_OBSERVE_SECONDS = 5.0
 # `cmd /c start` 本身应秒退（ShellExecute 不等待被拉起的应用）；超过这个
 # 时间说明 start 卡住了，按超时杀掉不留孤儿。
 UTOOLS_SPAWN_TIMEOUT = 10.0
+
+# Steam 动作 ID 的形态：`app:<appid>`，也接受调用方直接甩一个纯数字
+# （`-applaunch` 收的就是 appid，多写一层前缀不带来任何信息）
+STEAM_ACTION_RE = re.compile(r"^(?:app:)?(\d+)$")
+
+# 已接线的适配器。schema 的 `launcher.type` enum 必须与这里逐字一致，
+# 否则「清单里合法、跑起来报不支持」——由 test_launcher_client 钉住
+SUPPORTED_ADAPTERS = ("quicker", "utools", "steam")
 
 
 class LauncherError(Exception):
@@ -177,15 +196,18 @@ class LauncherClient:
 
     def sync_actions(self) -> dict[str, Any]:
         """扫描启动器本地数据，把动作清单落到 launcher-actions/"""
-        if self.adapter not in ("quicker", "utools"):
+        if self.adapter not in SUPPORTED_ADAPTERS:
             raise LauncherError(f"暂不支持的启动器类型: {self.adapter}")
-        if not self.data_dir:
-            raise LauncherError("未配置 launcher.dataDir，无法扫描动作")
-
-        if self.adapter == "utools":
-            actions, source = self._scan_utools()
+        if self.adapter == "steam":
+            # steam 的 dataDir 是可选的：条目没写就用 Steam 自己登记的 SteamPath
+            actions, source = self._scan_steam()
         else:
-            actions, source = self._scan_quicker()
+            if not self.data_dir:
+                raise LauncherError("未配置 launcher.dataDir，无法扫描动作")
+            if self.adapter == "utools":
+                actions, source = self._scan_utools()
+            else:
+                actions, source = self._scan_quicker()
         self.store.save_launcher_actions(self.tool_id, actions, source)
         _log(self.tool_id, "info", f"动作清单已同步：{len(actions)} 个（source={source}）")
         return {
@@ -316,6 +338,57 @@ class LauncherClient:
 
         actions = sorted(found.values(), key=lambda a: (a.get("name") or "~", a["id"]))
         return actions, "auto"
+
+    def _scan_steam(self) -> tuple[list[dict[str, Any]], str]:
+        """扫 Steam 本机库（以 acf 为准），返回 (游戏动作清单, source)。
+
+        动作 ID = `app:<appid>`——正是 `steam.exe -applaunch <appid>` 要的那个数。
+        `source` 只有在「vdf 声明了某个库、但那个库盘上不在了」时才降级为
+        `partial`：那批 appid 真的起不来（换盘/删库/移动硬盘没插），列出来只会
+        让调用方以为能启动。这与 Quicker 的 partial 不同向——那边是「ID 有、名称
+        没拿到，搜索会漏」，这边是「清单本身不完整」。
+        """
+        configured = str(self.data_dir) if self.data_dir else None
+        root, root_source = steam_library.resolve_root(configured)
+        if root is None:
+            raise LauncherError(f"定位不到 Steam 根目录：{root_source}")
+        try:
+            data = steam_library.installed_games(root)
+        except steam_library.SteamError as exc:
+            raise LauncherError(f"读取 Steam 库失败: {exc}") from None
+
+        actions: list[dict[str, Any]] = []
+        for game in data["games"]:
+            appid = str(game.get("appid") or "")
+            if not appid:
+                continue
+            size = game.get("sizeOnDisk")
+            description = " / ".join(
+                part for part in (
+                    f"库 {Path(str(game.get('library') or '')).name or game.get('library')}",
+                    f"{int(size) // (1024 * 1024)} MB" if size and str(size).isdigit() else "",
+                ) if part
+            )
+            actions.append({
+                "id": f"app:{appid}",
+                "name": str(game.get("name") or f"Steam App {appid}"),
+                "type": "game",
+                "app": "",
+                "description": description,
+                "appid": appid,
+                "installdir": game.get("installdir") or "",
+                "library": game.get("library") or "",
+                "sizeOnDisk": size,
+                "lastPlayed": game.get("lastPlayed"),
+            })
+        _log(
+            self.tool_id,
+            "info",
+            f"Steam 根={root}（来源：{root_source}），库 {len(data['libraries'])} 个 / "
+            f"清单 {data['scannedManifests']} 份 / 已装 {len(actions)} 项 / "
+            f"vdf 声明 {data['declaredAppTotal']} 项",
+        )
+        return actions, "partial" if data.get("missingLibraries") else "auto"
 
     def _scan_quicker_log_names(self) -> dict[str, str]:
         """从 Quicker 日志（含轮转文件）解析 动作ID → 名称"""
@@ -452,8 +525,9 @@ class LauncherClient:
         param: str | None = None,
         wait: float | None = None,
     ) -> dict[str, Any]:
-        if not self.command and self.adapter != "utools":
-            # utools 走 utools:// 协议唤起，不需要可执行文件路径
+        if not self.command and self.adapter not in ("utools", "steam"):
+            # utools 走 utools:// 协议唤起，不需要可执行文件路径；
+            # steam 未配置 command 时按 Steam 自己登记的 SteamPath 推 steam.exe
             raise LauncherError("未配置 launcher.command，无法调用动作")
         if not action_id and not action_name:
             raise LauncherError("必须指定 action_id 或 action_name")
@@ -466,6 +540,8 @@ class LauncherClient:
 
         if self.adapter == "utools":
             return await self._run_utools(target, resolved_name, param, wait)
+        if self.adapter == "steam":
+            return await self._run_steam(target, resolved_name, param, wait)
 
         wait_seconds = max(1, int(wait if wait is not None else self.timeout))
         argument = f"runaction:{target}" + (f"?{param}" if param else "")
@@ -578,6 +654,63 @@ class LauncherClient:
         result["message"] = (
             "已通过 utools:// 协议唤起（fire-and-forget，无结果回传，结果只在 uTools UI）"
         )
+        return result
+
+    async def _run_steam(
+        self,
+        target: str,
+        resolved_name: str,
+        param: str | None,
+        wait: float | None,
+    ) -> dict[str, Any]:
+        """`steam.exe -applaunch <appid>`（执行经 `app_launcher.launch_app`）。
+
+        复用 app_launcher 而不是在这里自己 spawn：`stdin=DEVNULL`、进程保活、
+        观察窗口与结构化失败载荷都在那边，多一条 spawn 路径就多一处会漏的纪律
+        （A8 那次网关被子进程偷走 stdin 的教训已经证明这件事）。
+
+        成功判定的诚实边界：退出码 0 只代表 **steam.exe 接受了指令**。Steam 是
+        单实例客户端，`-applaunch` 由它转达给游戏进程，本进程随即退出；游戏
+        起没起、是不是在更新，没有任何回传。所以这里给 `deliveryOnly`，
+        与 uTools 的 `fireAndForget` 同义但不同形——那条连进程都不代表。
+        """
+        matched = STEAM_ACTION_RE.match(str(target).strip())
+        if not matched:
+            raise LauncherError(
+                f"steam 动作 ID 必须是 app:<appid> 或纯数字 appid（收到: {target!r}）；"
+                "可先 list_launcher_actions(tool_id='steam') 查本机已装游戏"
+            )
+        appid = matched.group(1)
+        command = self.command
+        if not command:
+            root, root_source = steam_library.resolve_root(
+                str(self.data_dir) if self.data_dir else None
+            )
+            if root is None:
+                raise LauncherError(f"未配置 launcher.command，且定位不到 Steam 根目录：{root_source}")
+            command = str(steam_library.steam_executable(root))
+
+        argv = [command, "-applaunch", appid]
+        _log(self.tool_id, "info", f"启动 Steam 游戏: {resolved_name or appid}（appid={appid}）")
+        res = await launch_app(
+            {"type": "executable", "command": command, "args": ["-applaunch", appid]},
+            self.tool_id,
+            resolved_name or f"Steam App {appid}",
+            wait,
+        )
+        result: dict[str, Any] = {
+            **res,
+            "actionId": f"app:{appid}",
+            "actionName": resolved_name,
+            "command": " ".join(argv),
+            "deliveryOnly": True,
+        }
+        note = "退出码只代表 steam.exe 收到 -applaunch 指令，游戏是否真的启动无从回传"
+        if param:
+            # 不悄悄吞掉：调用方传了 param 却什么都没发生，是最难查的一种失败
+            result["ignoredParam"] = param
+            note += f"；Steam 侧没有动作传参通道，param 已被忽略（收到: {param!r}）"
+        result["note"] = note
         return result
 
 
