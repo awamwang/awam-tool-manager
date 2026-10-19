@@ -783,7 +783,8 @@
       它会拉起 7zFM 这样的 GUI，属于对用户机器的可见副作用，需要用户在场确认。
       该路径由单测钉住参数传递（`seen["tool_id"] == "scoop/goodpkg"`），
       底层 `launch_app` 本身早在「`launch_tool` 真正执行启动」一节真机验证过。
-      本次探针脚本在 `.scratch/p2-probe/`（gitignore），**没有升格成提交级 e2e 场景**：
+      本次探针脚本曾在 `.scratch/p2-probe/`（gitignore，本轮收尾时已清理，结论逐条记在本节），
+      **没有升格成提交级 e2e 场景**：
       它读的是真机 scoop 布局，数字不可复现；可复现的部分（三态、入口挑选、门禁、
       错误码）已经全部在 `test_pkgman*` 的合成树里钉住
 - [x] **测试 425 → 517** - 新增 `tests/test_pkgman.py`（51 条，全部 `tmp_path` 合成 scoop 树，
@@ -835,8 +836,9 @@
       所以启动游戏必须显式传 `allowDestructive=true`；`version` 写 `latest` 而不是猜一个号
       （版本要从 `version.dll` / `appinfo.vdf` 之类内部文件取，超出「只读解析本地库清单」的约定范围，
       勘察时也被权限分类器拦下，未重试）
-- [x] **真机 stdio 会话七次调用**（`.scratch/p2-probe/live_steam_tools.py`，走
-      `tests/e2e/helpers.stdio_session`，非本会话的客户端快照）：
+- [x] **真机 stdio 会话七次调用**（探针脚本 `.scratch/p2-probe/live_steam_tools.py`，走
+      `tests/e2e/helpers.stdio_session`，非本会话的客户端快照；该目录已在收尾时清理，
+      逐条结果与审计行原样记在下面）：
       ①`search_tools {keyword:"Steam"}` → `count: 1`；
       ②`sync_launcher_actions {tool_id:"steam"}` → `count: 16, source: "partial"`，
       行形如 `{"id":"app:1509960","name":"PICO PARK","description":"库 SteamLibrary / 76 MB",
@@ -866,9 +868,9 @@
 - [x] **未跑的路径（明确留白）** - `run_launcher_action(..., allowDestructive=true)` 真启动
       游戏没有执行：会拉起全屏客户端，属对用户机器的可见副作用，需用户在场。
       同样只留白不猜的是 Steam 版本号（见上条 `version: "latest"`）
-- [x] **顺带** - 提交级 e2e 场景仍是 9 个，Steam 这轮的复现证据同样在 `.scratch/p2-probe/`
-      （gitignore）：合成树能钉的行为已全在 `test_steam_*`，真机数字（3 库 / 27 声明 / 16 份 acf）
-      不可复现，不升格成用例
+- [x] **顺带** - 提交级 e2e 场景仍是 9 个，Steam 这轮的复现证据同样只落在探针脚本里
+      （`.scratch/` 走本地 exclude，收尾时已整体清理）：合成树能钉的行为已全在 `test_steam_*`，
+      真机数字（3 库 / 27 声明 / 16 份 acf）不可复现，不升格成用例
 
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
@@ -951,7 +953,7 @@
   旧结论「投递成功但界面不渲染」的两条成因：① **取证方式**——单次快照落在 1.1s
   呈现延迟之前、或落在面板已被关掉之后，就得到 `visible=False`；② 当时 uTools
   只剩托盘、零可见窗口的会话状态。教训是**判断呈现必须连续采样，不能单跑快照**
-  （脚本 `.scratch/utools-ui-2026-10-18/`，不进版本库）。
+  （脚本曾在 `.scratch/utools-ui-2026-10-18/`，走本地 exclude、不进版本库，已清理）。
   仍然成立的边界：这是 fire-and-forget，返回体的 `success` 只代表「系统接收了协议」，
   不代表 UI 呈现、更不代表功能执行结果——要结果只有 MCP 通道或 HTTP 传输两条路
 - 真正的「后端永不重启」需要外部 supervisor（后端生命周期移出网关控制的进程），
