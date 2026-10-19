@@ -276,8 +276,10 @@ bucket / 4287 份清单），所以先按文件名筛、只对命中项读 JSON�
 `<root>\shims\scoop.cmd install <包>`（`anyio.fail_after` 限时、stdout/stderr 各留尾部
 4000 字符）。包名过 `validate_name` 字符集白名单——它会参与路径拼接，`..` 与分隔符一律拒。
 
-`winget` / `npm` **未接线**（`BACKENDS = ("scoop",)`）：`winget list` 没有可靠的纯读盘
-来源，必须 spawn，属执行面，另立项再接。
+`winget` / `npm` **未接线**（`BACKENDS = ("scoop",)`）：两者都没有可靠的纯读盘清单来源，
+列包必须 spawn，属执行面。`winget` 另立项再接；**`npm` 决定不接**（2026-10-19 用户口径：
+npm 官方无 MCP server，需求澄清不到可选型的程度）——将来真要接，正确形态是给 `pkgman.py`
+加一个 `npm` 后端（全局包读 `<prefix>/node_modules/*/package.json`），不是新增一条 MCP 接入项。
 
 ### 4.6 Steam 的本机布局（P0，`src/steam_library.py` 的读盘对象）
 

@@ -1051,7 +1051,14 @@
       早先那句「真机 `discover_tools` 判 `not_installed` / 中信心，佐证本机没有 Steam」
       是**发现清单的假阴性**——它只声明了 `C:\Program Files` 两处位置，装在 S 盘就全落空；
       已随第四类探针 `registry_value` 修掉，现在判 `installed` / 高信心。
-- [ ] 接入 npm（npm MCP）— ⚠️ 需求待澄清：npm 官方无 MCP server，需明确接哪个包
+- [x] ~~接入 npm（npm MCP）~~ → **决定不接（2026-10-19，用户口径「把 NPM 标记不接」）**：
+      npm 官方没有 MCP server，「接 npm」实际是「接某个第三方包」，需求始终没能澄清到
+      可以选型的程度；而且 npm 的已装清单没有可靠的纯读盘来源（不像 scoop 那样有
+      `apps/*/current/manifest.json`），要列包就得 `spawn`，与本项目「默认零 spawn」的
+      姿态相反。同类需求已由包管理面（P2-07）承载：`list_packages` / `search_packages` /
+      `launch_package` / `install_package` 的后端是 `BACKENDS` 里登记过的安装器，
+      将来若要接 npm，正确形态是给 `src/pkgman.py` 加一个 `npm` 后端（全局包读
+      `<prefix>/node_modules/*/package.json`），而不是新增一条 P0「MCP 接入」
 
 ### P1 - 体验完善
 - [x] 工具自动发现 — ✅ 已完成（2026-10-18，见「工具自动发现（P1）」小节）：

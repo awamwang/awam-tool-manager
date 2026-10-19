@@ -42,8 +42,8 @@ description: 统一工具管理器，维护本机工具名单，提供统一的�
   回落版本目录并如实标 `current_broken`）、搜可装包读 `buckets/*/*.json` 的文件名、
   挑启动入口看 `shortcuts` / `bin` / `shims/<包名>`。启动与安装都要显式
   `execute=true`；安装额外要 `allowDestructive=true`（`kind=package` 门禁是
-  fail-closed 的，见「安全约定」）。`winget` / `npm` 没有可靠的纯读盘来源，
-  属执行面，尚未接线
+  fail-closed 的，见「安全约定」）。`winget` / `npm` 没有可靠的纯读盘来源，属执行面，
+  尚未接线（`winget` 另立项再接；**`npm` 决定不接**，见 TASKS.md P0）
 - **Steam 游戏库**：`kind=launcher` + `launcher.type=steam`，用现成的三个启动器工具
   （`sync_launcher_actions` / `list_launcher_actions` / `run_launcher_action`）覆盖，
   **没有新增对外 MCP 工具**。清单自己读盘：`libraryfolders.vdf` 出库、`appmanifest_*.acf`
