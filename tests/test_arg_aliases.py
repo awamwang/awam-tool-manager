@@ -14,7 +14,9 @@
    不做校验的客户端；
 3. 使用统计按**归一后**的参数计，别名调用不会漏进 `targets` 维度；
 4. 退役参数名（`mcp_tool_id` / `launcher_id`）不得借别名复活；
-5. 别名表与声明表不冲突（别名不撞已声明参数），导出 schema 不改动声明表。
+5. 别名表与声明表不冲突（别名不撞已声明参数），导出 schema 不改动声明表；
+6. 词汇主要由 **description** 承载（每个必填名必须出现在导出描述里），别名属性
+   则按上下文预算收敛到最小集——被砍掉的名字既不进 schema，也不再被归一化接受。
 """
 import asyncio
 import json
@@ -31,9 +33,11 @@ import tool_specs  # noqa: E402
 import usage  # noqa: E402
 from errors import ErrorType, ToolError  # noqa: E402
 from tool_specs import (  # noqa: E402
+    DEFAULT_ARG_ALIASES,
     RETIRED_PARAM_NAMES,
     SERVER_TOOL_SPECS,
     build_mcp_tools,
+    export_description,
     export_input_schema,
     get_spec,
     normalize_arguments,
@@ -66,19 +70,15 @@ def _result_payload(result) -> dict:
 
 
 @pytest.mark.parametrize(
-    "tool_name, alias_args",
+    "tool_name, alias_args, canon_args",
     [
-        ("search_tools", {"query": "文件"}),
-        ("search_tools", {"q": "文件"}),
-        ("get_tool_info", {"id": "everything"}),
-        ("get_tool_info", {"name": "everything"}),
-        ("get_tool_info", {"toolId": "everything"}),
+        ("search_tools", {"query": "文件"}, {"keyword": "文件"}),
+        ("search_packages", {"query": "git"}, {"keyword": "git"}),
+        ("get_tool_info", {"id": "everything"}, {"tool_id": "everything"}),
     ],
 )
-def test_alias_call_survives_protocol_and_matches_canonical(tool_name, alias_args):
+def test_alias_call_survives_protocol_and_matches_canonical(tool_name, alias_args, canon_args):
     """别名调用不被入站校验拦掉，且结果与规范名调用逐字等价"""
-    canon_args = {"tool_id": "everything"} if tool_name == "get_tool_info" else {"keyword": "文件"}
-
     alias_result = run(_call(tool_name, alias_args))
     canon_result = run(_call(tool_name, canon_args))
 
@@ -86,6 +86,21 @@ def test_alias_call_survives_protocol_and_matches_canonical(tool_name, alias_arg
     assert _result_payload(alias_result) == _result_payload(canon_result), (
         f"{tool_name} 的别名 {list(alias_args)} 与规范名结果不等价"
     )
+
+
+def test_two_required_params_fold_independently():
+    """两个必填各有一组任选名，折叠互不干扰（call_backend_tool 的 name 指后端子工具）"""
+    spec = get_spec("call_backend_tool")
+
+    assert normalize_arguments(spec, {"id": "x", "name": "y"}) == {"tool_id": "x", "tool_name": "y"}
+    assert normalize_arguments(spec, {"tool_id": "x", "tool_name": "y"}) == {
+        "tool_id": "x",
+        "tool_name": "y",
+    }
+    # id 只喂给 tool_id 那一组，name 只喂给 tool_name 那一组，不会互相顶掉
+    with pytest.raises(ToolError) as exc:
+        normalize_arguments(spec, {"id": "x"})
+    assert payload_of(exc)["param"] == "tool_name"
 
 
 def test_canonical_only_call_still_works():
@@ -116,7 +131,7 @@ def test_missing_required_is_self_describing():
     payload = payload_of(exc)
     assert payload["errorType"] == ErrorType.INVALID_PARAMS
     assert payload["param"] == "tool_id"
-    assert payload["acceptedParams"] == ["tool_id", "id", "toolId", "name"]
+    assert payload["acceptedParams"] == ["tool_id", "id"]
     assert payload["example"] == {"tool_id": "everything"}
     assert "缺少必填参数 tool_id" in payload["error"]
     assert "查看工具的详细信息" in payload["error"], "消息没带上工具用途，Agent 无从纠偏"
@@ -164,7 +179,7 @@ def test_blank_alias_reaches_our_self_describing_error():
     assert result.isError
     payload = _result_payload(result)
     assert payload["errorType"] == ErrorType.INVALID_PARAMS
-    assert payload["acceptedParams"] == ["tool_id", "id", "toolId", "name"]
+    assert payload["acceptedParams"] == ["tool_id", "id"]
     assert payload["example"] == {"tool_id": "everything"}
 
 
@@ -303,3 +318,101 @@ async def _noop_handler(arguments: dict, ctx) -> dict:
 def test_build_mcp_tools_still_covers_all_specs():
     """别名改造没碰工具集本身：22 个工具一个不少、顺序不变"""
     assert [t.name for t in build_mcp_tools()] == [s.name for s in SERVER_TOOL_SPECS]
+
+
+# ---- 6. 必填名由 description 承载，别名按预算收敛 ----
+
+
+def test_exported_description_names_every_required_param():
+    """根因守卫：模型在延迟加载下多半只看到描述，所以**每个必填名必须写在描述里**。
+
+    实测改造前 17 个带必填参数的工具，描述里一个参数名都没提；这条一旦变红，
+    等于又把词汇的唯一载体交回给「客户端会去读 schema」这个已被否证的假设。
+    """
+    for spec in SERVER_TOOL_SPECS:
+        exported = export_description(spec)
+        for name in spec.input_schema.get("required", []):
+            assert name in exported, f"{spec.name}: 必填 {name} 没进对外描述"
+
+
+def test_description_export_is_additive_pure_and_cheap():
+    """描述只做追加：原文在前、声明表不改、单工具增量不超过实测上限。
+
+    上限 40 字符来自实测（最大 `call_backend_tool` +37，全表合计 +334），
+    写死是为了让「往描述里堆别名词表」这种膨胀当场可见。
+    """
+    before = {s.name: s.description for s in SERVER_TOOL_SPECS}
+    for spec in SERVER_TOOL_SPECS:
+        exported = export_description(spec)
+        assert exported.startswith(spec.description), spec.name
+        delta = len(exported) - len(spec.description)
+        assert delta <= 40, f"{spec.name}: 描述增量 {delta} 超预算"
+        assert export_description(spec) == exported, spec.name
+
+    assert {s.name: s.description for s in SERVER_TOOL_SPECS} == before
+
+
+def test_wire_tools_carry_both_description_hint_and_alias_props():
+    """从**真正下发的 Tool 对象**读，而不是只从导出函数读。
+
+    `build_mcp_tools()` 若哪天不再走 `export_description` / `export_input_schema`，
+    机制仍在、外面收到的仍是旧契约，这条会红。
+    """
+    by_name = {s.name: s for s in SERVER_TOOL_SPECS}
+    for tool in build_mcp_tools():
+        spec = by_name[tool.name]
+        for name in spec.input_schema.get("required", []):
+            assert name in tool.description, f"{tool.name}: 上线描述没提必填 {name}"
+        props = set(tool.inputSchema.get("properties", {}))
+        accepted = {a for aliases in tool_specs.aliases_for(spec).values() for a in aliases}
+        assert accepted <= props, f"{tool.name}: 别名 {accepted - props} 没进上线 schema"
+
+
+def test_default_alias_table_is_the_agreed_minimum():
+    """别名表钉死在商量好的最小集：加名字要连同成本一起过（见源码注释）。"""
+    assert DEFAULT_ARG_ALIASES == {
+        "tool_id": ("id",),
+        "keyword": ("query",),
+        "package": ("name",),
+    }
+
+
+def test_alias_property_budget():
+    """别名属性总数钉死。别名属性平均 111 字符/个，且全表 schema 要整体下发给调用方。"""
+    total = 0
+    for spec in SERVER_TOOL_SPECS:
+        total += sum(len(aliases) for aliases in tool_specs.aliases_for(spec).values())
+    assert total == 22
+
+
+@pytest.mark.parametrize(
+    "tool_name, alias_args",
+    [
+        ("get_tool_info", {"toolId": "everything"}),
+        ("get_tool_info", {"name": "everything"}),
+        ("search_tools", {"q": "文件"}),
+        ("search_tools", {"text": "文件"}),
+        ("run_launcher_action", {"actionId": "x"}),
+    ],
+)
+def test_dropped_aliases_are_rejected_at_protocol_layer(tool_name, alias_args):
+    """砍掉的名字（camelCase、`q`/`text`、`tool_id ← name`）口子真的关了：
+    只给它们会被入站校验拦下，而不是悄悄折成规范名跑通。
+    """
+    result = run(_call(tool_name, alias_args))
+
+    assert result.isError, f"{tool_name} 仍接受已退役写法 {alias_args}"
+    assert '"acceptedParams"' not in result.content[0].text
+
+
+def test_dropped_names_absent_from_every_exported_schema():
+    """全表扫描：这些名字既不是属性也不出现在任选组里。
+    `name` 不在列——它仍是 `package`/`tool_name`/`action_name` 的合法别名。
+    """
+    dumped = json.dumps(
+        [export_input_schema(s) for s in SERVER_TOOL_SPECS], ensure_ascii=False
+    )
+    for dropped in ("toolId", "actionId", "actionName", "log_level", "pkg"):
+        assert f'"{dropped}"' not in dumped, f"{dropped} 又出现在对外 schema 里"
+    for spec in SERVER_TOOL_SPECS:
+        assert "q" not in tool_specs.aliases_for(spec).get("keyword", ())

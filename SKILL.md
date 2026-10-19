@@ -1,6 +1,6 @@
 ---
 name: awam-tool-manager
-description: 统一工具管理器，维护本机工具名单，提供统一的工具注册、搜索、启动能力。作为 MCP Server 暴露给 AI 客户端，支持搜索工具、列出工具、启动工具、路由调用后端 MCP、管理后端进程等。
+description: 统一工具管理器，维护本机工具名单，提供统一的工具注册、搜索、启动能力。作为 MCP Server 暴露给 AI 客户端，支持搜索工具、列出工具、启动工具、路由调用后端 MCP、管理后端进程等。调用入参：目标工具一律用 `tool_id`（也可写 `id`），搜索词用 `keyword`（也可写 `query`），包名用 `package`（也可写 `name`）。
 ---
 
 # awam-tool-manager 技能
@@ -101,7 +101,7 @@ awam-tool-manager/
 
 后端相关工具统一使用 **`tool_id`** 指定目标工具（不存在 `mcp_tool_id` / `launcher_id`）。
 
-### 入参别名
+### 入参别名与参数名披露
 
 规范名只有一个（上表的参数名），但**调用方写别名也能通**：`inputSchema` 导出时把
 必填规范名展开成 `anyOf`（多必填时 `allOf` 包多个 `anyOf`）的「任选其一」组，
@@ -110,16 +110,25 @@ awam-tool-manager/
 我们的代码，Agent 只能收到 `params must have required property 'tool_id'` 这种无法自救
 的错误（实测因此退化成自己起 shell 探路径）。
 
-| 规范名 | 可接受别名 | 例外 |
+**别名刻意收敛到「每个规范名一个」**，词汇改由更便宜的一层承载：每条工具的对外
+`description` 会自动追加 `。必填：<参数名>（可写 <别名>）`（实测 17/17 个带必填参数的
+工具覆盖，合计 +334 字符，平均每工具 15；对照每个别名属性平均 111 字符）。理由：延迟加载下模型通常只看到
+工具名与描述，`inputSchema` 要再调一次发现接口才拿到——改造前 17 个工具的描述里一个
+参数名都没提，模型只能按生态先验猜写法。
+
+| 规范名 | 可接受别名 | 生效范围 |
 |---|---|---|
-| **`tool_id`** | **`id`** / **`toolId`** / **`name`** | `call_backend_tool`、`run_launcher_action` 只接 `toolId`（那里的 `id`/`name` 指子工具 / 动作） |
-| **`keyword`** | **`query`** / **`q`** / **`text`** | — |
-| **`package`** | **`name`** / **`id`** / **`pkg`** | — |
-| **`level`** | **`log_level`** | — |
-| **`tool_name`**（后端子工具名） | **`name`** / **`backend_tool_name`** / **`sub_tool_name`** | 仅 `call_backend_tool` |
-| **`action_id`** / **`action_name`** | **`id`** / **`actionId`**；**`name`** / **`actionName`** | 仅 `run_launcher_action` |
+| **`tool_id`** | **`id`** | 14 个带 `tool_id` 的工具；`run_launcher_action` 例外（它的 `id` 归 `action_id`，`tool_id` 只认规范名） |
+| **`keyword`** | **`query`** | `search_tools`、`search_packages`、`list_launcher_actions` |
+| **`package`** | **`name`** | `launch_package`、`install_package` |
+| **`tool_name`**（后端子工具名） | **`name`** | 仅 `call_backend_tool` |
+| **`action_id`** / **`action_name`** | **`id`** / **`name`** | 仅 `run_launcher_action` |
 
 19/22 个工具带别名（`list_tools`、`discover_tools`、`list_packages` 无必填参数，不带别名）。
+不再接受的写法：camelCase `toolId` / `actionId` / `actionName`（与全表 snake_case 自相
+矛盾）、`q` / `text` / `pkg`（生态里没有这条惯例）、`log_level`（`level` 才是 syslog 的
+标准写法，方向本来就是反的）、`tool_id ← name`（MCP 协议自己的 `tools/call.name` 指
+「调哪个工具」，留着会把错层写法收成假命中）。
 两条边界：规范名与别名同时给且**取值不同** → `invalid_params`（两个目标 ID 不猜意图）；
 一个参数都不给（`{}`）会被入站校验先拦下，我们的自描述文案覆盖的是「传了键但值为空」
 与不校验的客户端。退役名 `mcp_tool_id` / `launcher_id` **不得**作为别名出现。

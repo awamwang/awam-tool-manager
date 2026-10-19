@@ -43,7 +43,9 @@
 ### 协议合规
 - [x] 后端工具参数名统一为 `tool_id`（移除历史遗留的 mcp_tool_id / launcher_id）
 - [x] 入参别名兼容 + 必填缺失自描述错误（2026-10-19，见「入参别名与必填自描述错误」）：
-      对外 schema 认 `id`/`toolId`/`query` 这类直觉名，dispatch 入口折回规范名，退役名不得复活
+      对外 schema 认 `id`/`query`/`name` 这类直觉名，dispatch 入口折回规范名，退役名不得复活。
+      **同日二次收敛**（见「别名二次收敛」）：词汇改由 `description` 承载（17/17 覆盖必填名），
+      别名表砍到最小集，对外上下文净减 5338 字符
 - [x] `read_resource` 参数归一化：SDK 传的是 `AnyUrl`，直接与字符串比较会全部落到未知资源
 - [x] `get_prompt` 按协议返回 `GetPromptResult`（老版本 SDK 退回裸列表）
 - [x] 失败返回 MCP 协议层 `isError`（此前 success:false 被协议层当成成功）
@@ -187,7 +189,7 @@
 - [x] 合计 **168 passed**（`c40d80d` 时点签署，9 个贡献用例的文件；P0 修复后为 183，见下节）；
      真实后端子进程启停 + 调用回归通过
 
-> 文件数口径（2026-10-19 更新）：`tests/` 下有 **20 个** `test_*.py`（贡献 pytest
+> 文件数口径（2026-10-19 更新）：`tests/` 下有 **23 个** `test_*.py`（贡献 pytest
 > 用例），另有 `tests/e2e/` 下的 **9 个** e2e 用例文件（9 个场景）——它们**默认不收集**
 > （`pytest.ini` 的 `addopts = -m "not e2e"`），须 `pytest -m e2e` 显式跑。
 > `tests/e2e/manual_install_gate.py`（原 `tests/test_e2e_install_gate.py`，C 期
@@ -255,15 +257,16 @@
     存在理由——前三条在单测层用桩就能验。
   - 红绿：摘掉 `stdin=subprocess.DEVNULL` → 场景⑨ 9.33s 内红（客户端先断），
     单测 `test_run_commands_executes_and_parses_version` 同时红；还原后全绿
-- **口径**：`pytest tests/ -q` = 579 passed / **9 deselected**；
-  `pytest -m e2e -q` = 9 passed / 579 deselected。说「579」时要带上
+- **口径**：`pytest tests/ -q` = 589 passed / **9 deselected**；
+  `pytest -m e2e -q` = 9 passed / 589 deselected。说「589」时要带上
   「另有 9 个 e2e 默认不收集」，否则会被误读成总数。
   （本行随每次落地更新：NE-8 时为 314，NE-9「工具使用统计」落地后为 343，
   NE-10「工具自动发现」落地后为 411，真机端到端 + 发现层三处修复后为 425，
   Steam 假阴性纠正（`registry_value` 探针）后为 441，
   P2-07「包管理适配」落地（适配层 + handler + 门禁）后为 517，
   P0「Steam 接入」（库解析 + 启动器适配器）落地后为 557，
-  「入参别名与必填自描述错误」落地（含别名属性顺序守卫）后为 579）
+  「入参别名与必填自描述错误」落地（含别名属性顺序守卫）后为 579，
+  「别名二次收敛」（描述承载必填名 + 6 条新守卫 + 别名表钉死）后为 589）
 - **手工脚本**（不在上面 9 个里）：
   `"<pyenv 3.12 python>" tests/e2e/manual_install_gate.py`——验「已授权时
   install.command 真的被提交给 shell」，依赖本机 npm，故保留手工。
@@ -876,6 +879,12 @@
       真机数字（3 库 / 27 声明 / 16 份 acf）不可复现，不升格成用例
 
 ### 入参别名与必填自描述错误（P1，2026-10-19）
+
+> 本节记录**首次**落地的机制与当时的真机复核。别名表的范围已被同日的
+> 「别名二次收敛」小节改掉：`toolId` / `actionId` / `actionName` / `q` / `text` / `pkg` /
+> `log_level` / `tool_id ← name` **均已不再接受**，`acceptedParams` 的清单也相应变短。
+> 当前对外契约以「别名二次收敛」与 `SKILL.md` 的别名表为准。
+
 - [x] **起因是真实会话里的两次空转**（用户截图）：同一个意图先
       `search_tools {"query":"everything"}` → `params must have required property 'keyword'`，
       再 `get_tool_info {"id":"everything"}` → `params must have required property 'tool_id'`，
@@ -977,6 +986,52 @@
       它会在宿主重新同步 MCP（server 重注册 / 工具集变动）时刷新。所以判定顺序是
       **先 `mcp_get` 核对 schema 是不是新版**，是就直接走宿主通道，仍旧再退到 stdio 子进程会话，
       不要一上来就绕道
+
+### 别名二次收敛：词汇改由 description 承载（P1，2026-10-19 同日）
+- [x] **上一条的宿主复核顺带否证了「别名是主修复」** - 复核里那些成功调用是**我按新 schema
+      手写**的；回看失败原图，Agent 两次猜名之前并没有拉过 `inputSchema`（宿主延迟加载只把
+      **工具名**放进上下文，`description` 才是稳定可见的那段）。也就是说：给它别名属性它也不看，
+      而它真正会读的那段文本里，一个参数名都没提
+- [x] **勘察口径（实测，非推断）** - `build_mcp_tools()` 改造前：22 个工具、**17 个带必填参数，
+      这 17 份描述里必填名出现 0 次**；别名属性 65 个，`inputSchema` 相对无别名基线净增
+      **8744 字符**（6240 → 14984）。别名是花在最不被阅读的那段文本上的钱
+- [x] **① description 承载必填名** - 新增 `export_description()`：对**没提过**的必填名追加
+      `。必填：<名>（可写 <别名>）`（别名只带第一个），`build_mcp_tools()` 的 `description`
+      改用它。落地后 17/17 覆盖，净增 **334 字符**（1055 → 1389，平均 15/工具，
+      最大 `call_backend_tool` +37）。技能 `description`（frontmatter）同步补上
+      `tool_id`/`keyword`/`package` 三个名字与各自写法
+- [x] **② 保留 `anyOf`，不退回单一 `required`** - 它的拒绝文案**自带可接受名字清单**
+      （宿主那句 `params must have required property 'tool_id', ... 'id', ... params must
+      match a schema in anyOf`），等于白拿一次自描述；砍掉任选组会把这个免费能力也丢掉
+- [x] **③ 别名表砍到最小集：65 → 22 个属性** - `DEFAULT_ARG_ALIASES` 只留
+      `tool_id ← id`、`keyword ← query`、`package ← name`（三条都是「业界公认 + 真实会话里
+      被写过」的交集）；spec 覆盖同步收窄（`call_backend_tool` 留 `tool_name ← name`，
+      `run_launcher_action` 留 `action_id ← id` / `action_name ← name` 并把 `tool_id` 的
+      别名置空——它的 `required` 只有 `tool_id`，把 `id` 同时给两个规范名会在
+      `validate_specs` 里以「同一参数取值不同」误伤）。
+      砍掉并**连归一化口子一起关**：camelCase `toolId`/`actionId`/`actionName`（与全表
+      snake_case 自相矛盾）、`q`/`text`/`pkg`（生态里没这条惯例）、`log_level`（标准写法是
+      `level`，方向本来反了）、`tool_id ← name`（协议自己的 `tools/call.name` 指「调哪个
+      工具」，留着把错层写法收成假命中）
+- [x] **净账（对照上一版 65 别名，全部实测自 golden 差异）** - 去掉 43 个别名属性
+      （平均 **111 字符/个**，`properties` 段 -4772），`inputSchema` 全表 14984 → 9312，
+      描述 +334，**对外上下文合计 -5338 字符**（16039 → 10701）；与此同时必填名的可读覆盖
+      从 0/17 变成 17/17。相对无别名基线的代价从 +8744 降到 **+3406**
+- [x] **纠正两处自己写错的数字** - 源码注释与 `SKILL.md` 此前写「别名属性 88 字符/个」，
+      实测平均 111（43 个去掉 4772 字符），按实测改回；描述成本从「约 +15/工具」补全为
+      「+334 合计、最大 +37」
+- [x] **测试 579 → 589（`test_arg_aliases.py` 22 → 32 条）** - 新增第六面：每个必填名必须出现在
+      导出描述里 / 从**真正下发的 `Tool` 对象**读（`build_mcp_tools()` 若绕过两个导出函数即红）/
+      描述只做追加且单工具增量 ≤40、声明表不被改写 / `DEFAULT_ARG_ALIASES` 钉死为最小集 /
+      别名属性总数钉死 22 / 被砍写法（`toolId`、`get_tool_info` 的 `name`、`q`、`text`、
+      `actionId`）在**协议层**就被拒而不是悄悄折回。
+      红绿：`build_mcp_tools` 退回 `spec.description` → 上线描述守卫 1 条红；内存里把
+      `tool_id` 加宽回 `("id","toolId")` → 预算 36≠22、`toolId` 又能折回，两类守卫同时感知。
+      口径 `589 passed / 9 deselected`，`-m e2e` = `9 passed / 589 deselected`
+- [x] **golden 重采并复核稳定** - `scripts/regenerate_tools_golden.py` 重写后 `--check` 在
+      `PYTHONHASHSEED=0/1/7/42/123` 下五次一致通过，落盘 0 个 `\r\n`；新基线里
+      16 份 schema 带任选组（`run_launcher_action` 的 `tool_id` 别名置空后退回普通
+      `required`），`mcp_tool_id`/`launcher_id` 仍全文不出现
 
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
@@ -1363,7 +1418,7 @@ awam-tool-manager/
 ├── scripts/
 │   ├── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
 │   └── regenerate_tools_golden.py  # 重采对外 tools/list 基线（`--check` 只比对，不落盘）
-└── tests/                      # 23 个 test_*.py（579 passed）+ 9 个 e2e 场景（默认不收集）
+└── tests/                      # 23 个 test_*.py（589 passed）+ 9 个 e2e 场景（默认不收集）
     ├── test_store.py
     ├── test_registry.py
     ├── test_registry_policy.py

@@ -132,14 +132,23 @@ SHARED_OUTPUT_SCHEMA: dict = {
 
 RETIRED_PARAM_NAMES = frozenset({"mcp_tool_id", "launcher_id"})
 
-# 规范名 → 可接受别名。按规范名共享；`name` / `id` 在个别工具里语义不同
-# （call_backend_tool 的 name 指后端子工具、run_launcher_action 的 id 指动作），
-# 那两处用 `ServerToolSpec.arg_aliases` 覆盖，不在默认表里一刀切。
+# 规范名 → 可接受别名。**刻意收敛到每个规范名一个**，取舍依据两条：
+# ① 成本实测——别名属性平均 111 个字符（43 个砍掉的属性去掉 4772 字符），而全表
+#    schema 要整体下发进调用方上下文；② 收益面——别名只对「确实读了 schema」的
+#    客户端有用，而勘察结论是模型多半**没读到 schema**（见 `export_description`）。
+# 留下的三个都是「业界公认 + 真实会话里被写过」的交集：
+# - `tool_id ← id`：REST/GraphQL 的实体主键写法；
+# - `keyword ← query`：搜索类工具的事实标准；
+# - `package ← name`：scoop / brew / winget 都把包标识叫「名称」。
+# 砍掉的（连同它们的归一化口子一起关）：camelCase `toolId`/`actionId`/`actionName`
+# （与全表 snake_case 自相矛盾）、`q`/`text`/`pkg`（工具生态里没有这条惯例）、
+# `log_level`（`level` 才是 syslog/logging 的标准写法，方向本来就是反的）、
+# `tool_id ← name`（MCP 协议自己的 `tools/call.name` 指「要调哪个工具」，留着会把
+# 错层写法收成假命中）。
 DEFAULT_ARG_ALIASES: dict[str, tuple[str, ...]] = {
-    "tool_id": ("id", "toolId", "name"),
-    "keyword": ("query", "q", "text"),
-    "package": ("name", "id", "pkg"),
-    "level": ("log_level",),
+    "tool_id": ("id",),
+    "keyword": ("query",),
+    "package": ("name",),
 }
 
 # 必填缺失时消息里给的示例取值：让 Agent 一次就照抄对，不用再猜第二轮。
@@ -229,6 +238,33 @@ def export_input_schema(spec: ServerToolSpec) -> dict:
     elif len(groups) > 1:
         exported["allOf"] = [{"anyOf": g} for g in groups]
     return exported
+
+
+def export_description(spec: ServerToolSpec) -> str:
+    """把**必填参数名**（及其可接受的别名）追加进对外 description。
+
+    这是比别名属性更便宜的一层，来自根因勘察：宿主在延迟加载下只把工具名交给
+    模型（要 schema 得再调一次发现接口），而改造前实测**17 个带必填参数的工具，
+    描述里一个参数名都没提**——模型没拿到词汇，只能按生态先验写 `query` / `id`。
+    description 是裁剪时最先保住、也几乎唯一保得住的文本，所以把必填名写进去。
+    成本实测：全表 +334 字符（平均每工具 15，最大 `call_backend_tool` +37），
+    对比别名属性的平均 111 字符/个。
+
+    只补**没提过**的必填名（描述里已经出现该词就不重复）；别名只带第一个，
+    再多就是拿上下文换覆盖率。声明表本身不被改动。
+    """
+    base = spec.description
+    alias_map = aliases_for(spec)
+    hints = []
+    for name in spec.input_schema.get("required", []):
+        if name in base:
+            continue
+        aliases = alias_map.get(name)
+        hints.append(f"{name}（可写 {aliases[0]}）" if aliases else name)
+    if not hints:
+        return base
+    sep = "" if base.endswith("。") else "。"
+    return f"{base}{sep}必填：{'、'.join(hints)}"
 
 
 def normalize_arguments(spec: ServerToolSpec, arguments: dict) -> dict:
@@ -1102,9 +1138,9 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
         },
         # 这里的 `name` 指的是**后端子工具**名，不是本服务的工具 ID——
         # 所以不能用默认表（那条会把 name 映射到 tool_id，语义正好反）。
+        # `tool_id` 仍吃默认表的 `id`，两个名字在本工具里不打架。
         arg_aliases={
-            "tool_id": ("toolId",),
-            "tool_name": ("name", "backend_tool_name", "sub_tool_name"),
+            "tool_name": ("name",),
         },
         # 转发到后端 MCP，属于"与外部世界交互"但静态无法判定副作用
         annotations={"openWorldHint": True},
@@ -1317,10 +1353,13 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
         },
         # 本工具的 `id` / `name` 天然指**动作**（调用方通常已把 tool_id 写全），
         # 不能让默认表把它们当成 tool_id 的别名——那会把动作名折成工具 ID。
+        # 而且这里 tool_id 与动作是**两个都要给**的参数：`id` 若同时归 tool_id，
+        # `{"tool_id":"quicker","id":"<动作>"}` 会撞成「同一参数取值不同」直接报错。
+        # 所以 `id`/`name` 让给 action_id/action_name，tool_id 在本工具显式不接别名。
         arg_aliases={
-            "tool_id": ("toolId",),
-            "action_id": ("id", "actionId"),
-            "action_name": ("name", "actionName"),
+            "tool_id": (),
+            "action_id": ("id",),
+            "action_name": ("name",),
         },
         # 执行动作会真的跑起来，只标 openWorld
         annotations={"openWorldHint": True},
@@ -1549,15 +1588,17 @@ def build_mcp_tools() -> list[Tool]:
 
     挂载逻辑与搬迁前 `list_tools()` 逐行等价（`if ToolAnnotations is not None
     and spec.annotations:` 的真值判断、`output_schema or SHARED_OUTPUT_SCHEMA`
-    的回落都原样）；**唯一有意的差异**是 `inputSchema` 现在过
-    `export_input_schema()`：带别名的工具在对外 schema 里多出别名属性与
-    `anyOf`/`allOf` 任选组（声明表本身仍只写规范名）。无别名的工具零差异。
+    的回落都原样）；**有意的差异有两处**，都在「对外」这一侧：
+    - `inputSchema` 过 `export_input_schema()`：带别名的工具多出别名属性与
+      `anyOf`/`allOf` 任选组；
+    - `description` 过 `export_description()`：末尾补上必填参数名与别名。
+    声明表本身仍只写规范名，两处导出都是纯函数。
     """
     tools: list[Tool] = []
     for spec in SERVER_TOOL_SPECS:
         tool = Tool(
             name=spec.name,
-            description=spec.description,
+            description=export_description(spec),
             inputSchema=export_input_schema(spec),
         )
         if ToolAnnotations is not None and spec.annotations:

@@ -1,7 +1,7 @@
 [
   {
     "name": "search_tools",
-    "description": "搜索已注册的工具，按关键词匹配名称、描述、标签，可按类型、安装状态、发布者筛选",
+    "description": "搜索已注册的工具，按关键词匹配名称、描述、标签，可按类型、安装状态、发布者筛选。必填：keyword（可写 query）",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -29,14 +29,6 @@
         "query": {
           "type": "string",
           "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：搜索关键词"
-        },
-        "q": {
-          "type": "string",
-          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：搜索关键词"
-        },
-        "text": {
-          "type": "string",
-          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：搜索关键词"
         }
       },
       "anyOf": [
@@ -48,16 +40,6 @@
         {
           "required": [
             "query"
-          ]
-        },
-        {
-          "required": [
-            "q"
-          ]
-        },
-        {
-          "required": [
-            "text"
           ]
         }
       ]
@@ -123,7 +105,7 @@
   },
   {
     "name": "get_tool_info",
-    "description": "查看工具的详细信息",
+    "description": "查看工具的详细信息。必填：tool_id（可写 id）",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -132,14 +114,6 @@
           "description": "工具 ID，如 everything、everything-search-mcp"
         },
         "id": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID，如 everything、everything-search-mcp"
-        },
-        "toolId": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID，如 everything、everything-search-mcp"
-        },
-        "name": {
           "type": "string",
           "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID，如 everything、everything-search-mcp"
         }
@@ -153,16 +127,6 @@
         {
           "required": [
             "id"
-          ]
-        },
-        {
-          "required": [
-            "toolId"
-          ]
-        },
-        {
-          "required": [
-            "name"
           ]
         }
       ]
@@ -186,7 +150,7 @@
   },
   {
     "name": "launch_tool",
-    "description": "取指定工具的启动命令；传 execute=true 可真正执行启动（默认只返回命令，不执行）",
+    "description": "取指定工具的启动命令；传 execute=true 可真正执行启动（默认只返回命令，不执行）。必填：tool_id（可写 id）",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -209,14 +173,6 @@
         "id": {
           "type": "string",
           "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID"
-        },
-        "toolId": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID"
-        },
-        "name": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID"
         }
       },
       "anyOf": [
@@ -228,16 +184,6 @@
         {
           "required": [
             "id"
-          ]
-        },
-        {
-          "required": [
-            "toolId"
-          ]
-        },
-        {
-          "required": [
-            "name"
           ]
         }
       ]
@@ -260,7 +206,7 @@
   },
   {
     "name": "call_backend_tool",
-    "description": "路由调用：转发请求到指定 MCP 工具的后端 Server 执行具体操作",
+    "description": "路由调用：转发请求到指定 MCP 工具的后端 Server 执行具体操作。必填：tool_id（可写 id）、tool_name（可写 name）",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -280,19 +226,11 @@
           "type": "boolean",
           "description": "目标工具被标记为 destructive 时，需显式传 true 才会转发"
         },
-        "toolId": {
+        "id": {
           "type": "string",
           "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID（如 everything-search-mcp）"
         },
         "name": {
-          "type": "string",
-          "description": "`tool_name` 的别名（与 tool_name 二选一，两者都给以 tool_name 为准）：要调用的后端工具名"
-        },
-        "backend_tool_name": {
-          "type": "string",
-          "description": "`tool_name` 的别名（与 tool_name 二选一，两者都给以 tool_name 为准）：要调用的后端工具名"
-        },
-        "sub_tool_name": {
           "type": "string",
           "description": "`tool_name` 的别名（与 tool_name 二选一，两者都给以 tool_name 为准）：要调用的后端工具名"
         }
@@ -307,7 +245,7 @@
             },
             {
               "required": [
-                "toolId"
+                "id"
               ]
             }
           ]
@@ -322,16 +260,6 @@
             {
               "required": [
                 "name"
-              ]
-            },
-            {
-              "required": [
-                "backend_tool_name"
-              ]
-            },
-            {
-              "required": [
-                "sub_tool_name"
               ]
             }
           ]
@@ -356,7 +284,7 @@
   },
   {
     "name": "list_backend_tools",
-    "description": "列出指定 MCP 工具的后端提供的所有子工具（含完整参数 schema）",
+    "description": "列出指定 MCP 工具的后端提供的所有子工具（含完整参数 schema）。必填：tool_id（可写 id）",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -371,14 +299,6 @@
         "id": {
           "type": "string",
           "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
-        },
-        "toolId": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
-        },
-        "name": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
         }
       },
       "anyOf": [
@@ -390,16 +310,6 @@
         {
           "required": [
             "id"
-          ]
-        },
-        {
-          "required": [
-            "toolId"
-          ]
-        },
-        {
-          "required": [
-            "name"
           ]
         }
       ]
@@ -423,7 +333,7 @@
   },
   {
     "name": "start_backend",
-    "description": "启动指定的后端 MCP Server 并建立连接",
+    "description": "启动指定的后端 MCP Server 并建立连接。必填：tool_id（可写 id）",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -432,14 +342,6 @@
           "description": "MCP 工具 ID"
         },
         "id": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
-        },
-        "toolId": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
-        },
-        "name": {
           "type": "string",
           "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
         }
@@ -453,16 +355,6 @@
         {
           "required": [
             "id"
-          ]
-        },
-        {
-          "required": [
-            "toolId"
-          ]
-        },
-        {
-          "required": [
-            "name"
           ]
         }
       ]
@@ -485,7 +377,7 @@
   },
   {
     "name": "stop_backend",
-    "description": "停止指定的后端 MCP Server",
+    "description": "停止指定的后端 MCP Server。必填：tool_id（可写 id）",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -494,14 +386,6 @@
           "description": "MCP 工具 ID"
         },
         "id": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
-        },
-        "toolId": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
-        },
-        "name": {
           "type": "string",
           "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
         }
@@ -515,16 +399,6 @@
         {
           "required": [
             "id"
-          ]
-        },
-        {
-          "required": [
-            "toolId"
-          ]
-        },
-        {
-          "required": [
-            "name"
           ]
         }
       ]
@@ -558,14 +432,6 @@
         "id": {
           "type": "string",
           "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID，不填则返回所有后端状态"
-        },
-        "toolId": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID，不填则返回所有后端状态"
-        },
-        "name": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID，不填则返回所有后端状态"
         }
       }
     },
@@ -588,7 +454,7 @@
   },
   {
     "name": "get_backend_logs",
-    "description": "获取后端 MCP Server 的运行日志",
+    "description": "获取后端 MCP Server 的运行日志。必填：tool_id（可写 id）",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -607,18 +473,6 @@
         "id": {
           "type": "string",
           "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
-        },
-        "toolId": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
-        },
-        "name": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
-        },
-        "log_level": {
-          "type": "string",
-          "description": "`level` 的别名（与 level 二选一，两者都给以 level 为准）：日志级别过滤（debug/info/warning/error）"
         }
       },
       "anyOf": [
@@ -630,16 +484,6 @@
         {
           "required": [
             "id"
-          ]
-        },
-        {
-          "required": [
-            "toolId"
-          ]
-        },
-        {
-          "required": [
-            "name"
           ]
         }
       ]
@@ -663,7 +507,7 @@
   },
   {
     "name": "set_backend_log_level",
-    "description": "设置后端 MCP Server 的日志级别",
+    "description": "设置后端 MCP Server 的日志级别。必填：tool_id（可写 id）、level",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -678,57 +522,20 @@
         "id": {
           "type": "string",
           "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
-        },
-        "toolId": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
-        },
-        "name": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
-        },
-        "log_level": {
-          "type": "string",
-          "description": "`level` 的别名（与 level 二选一，两者都给以 level 为准）：日志级别（debug/info/warning/error）"
         }
       },
-      "allOf": [
+      "required": [
+        "level"
+      ],
+      "anyOf": [
         {
-          "anyOf": [
-            {
-              "required": [
-                "tool_id"
-              ]
-            },
-            {
-              "required": [
-                "id"
-              ]
-            },
-            {
-              "required": [
-                "toolId"
-              ]
-            },
-            {
-              "required": [
-                "name"
-              ]
-            }
+          "required": [
+            "tool_id"
           ]
         },
         {
-          "anyOf": [
-            {
-              "required": [
-                "level"
-              ]
-            },
-            {
-              "required": [
-                "log_level"
-              ]
-            }
+          "required": [
+            "id"
           ]
         }
       ]
@@ -749,7 +556,7 @@
   },
   {
     "name": "sync_backend_tools",
-    "description": "手动同步后端 MCP 的工具目录（自动获取所有工具的参数 schema 并保存）",
+    "description": "手动同步后端 MCP 的工具目录（自动获取所有工具的参数 schema 并保存）。必填：tool_id（可写 id）",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -758,14 +565,6 @@
           "description": "MCP 工具 ID"
         },
         "id": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
-        },
-        "toolId": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
-        },
-        "name": {
           "type": "string",
           "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
         }
@@ -779,16 +578,6 @@
         {
           "required": [
             "id"
-          ]
-        },
-        {
-          "required": [
-            "toolId"
-          ]
-        },
-        {
-          "required": [
-            "name"
           ]
         }
       ]
@@ -811,7 +600,7 @@
   },
   {
     "name": "sync_launcher_actions",
-    "description": "手动同步启动器的动作清单（从启动器本地数据扫描，Quicker 的动作名依赖其缓存，可能只拿到 ID）",
+    "description": "手动同步启动器的动作清单（从启动器本地数据扫描，Quicker 的动作名依赖其缓存，可能只拿到 ID）。必填：tool_id（可写 id）",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -820,14 +609,6 @@
           "description": "启动器工具 ID"
         },
         "id": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：启动器工具 ID"
-        },
-        "toolId": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：启动器工具 ID"
-        },
-        "name": {
           "type": "string",
           "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：启动器工具 ID"
         }
@@ -841,16 +622,6 @@
         {
           "required": [
             "id"
-          ]
-        },
-        {
-          "required": [
-            "toolId"
-          ]
-        },
-        {
-          "required": [
-            "name"
           ]
         }
       ]
@@ -873,7 +644,7 @@
   },
   {
     "name": "list_launcher_actions",
-    "description": "列出/搜索启动器（如 Quicker）的动作：按名称、描述、所属程序或 ID 关键词过滤",
+    "description": "列出/搜索启动器（如 Quicker）的动作：按名称、描述、所属程序或 ID 关键词过滤。必填：tool_id（可写 id）",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -897,23 +668,7 @@
           "type": "string",
           "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：启动器工具 ID"
         },
-        "toolId": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：启动器工具 ID"
-        },
-        "name": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：启动器工具 ID"
-        },
         "query": {
-          "type": "string",
-          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：可选，按名称/描述/所属程序/ID 过滤"
-        },
-        "q": {
-          "type": "string",
-          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：可选，按名称/描述/所属程序/ID 过滤"
-        },
-        "text": {
           "type": "string",
           "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：可选，按名称/描述/所属程序/ID 过滤"
         }
@@ -927,16 +682,6 @@
         {
           "required": [
             "id"
-          ]
-        },
-        {
-          "required": [
-            "toolId"
-          ]
-        },
-        {
-          "required": [
-            "name"
           ]
         }
       ]
@@ -960,7 +705,7 @@
   },
   {
     "name": "run_launcher_action",
-    "description": "调用启动器的动作（如执行一个 Quicker 动作），可传参并等待返回结果",
+    "description": "调用启动器的动作（如执行一个 Quicker 动作），可传参并等待返回结果。必填：tool_id",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -988,38 +733,17 @@
           "type": "boolean",
           "description": "启动器被标记为 destructive 时，需显式传 true 才会执行"
         },
-        "toolId": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：启动器工具 ID"
-        },
         "id": {
-          "type": "string",
-          "description": "`action_id` 的别名（与 action_id 二选一，两者都给以 action_id 为准）：动作 ID（推荐：稳定不变；二选一，与 action_name 至少给一个）"
-        },
-        "actionId": {
           "type": "string",
           "description": "`action_id` 的别名（与 action_id 二选一，两者都给以 action_id 为准）：动作 ID（推荐：稳定不变；二选一，与 action_name 至少给一个）"
         },
         "name": {
           "type": "string",
           "description": "`action_name` 的别名（与 action_name 二选一，两者都给以 action_name 为准）：动作名称（Quicker 要求名称不重复且不含空格）"
-        },
-        "actionName": {
-          "type": "string",
-          "description": "`action_name` 的别名（与 action_name 二选一，两者都给以 action_name 为准）：动作名称（Quicker 要求名称不重复且不含空格）"
         }
       },
-      "anyOf": [
-        {
-          "required": [
-            "tool_id"
-          ]
-        },
-        {
-          "required": [
-            "toolId"
-          ]
-        }
+      "required": [
+        "tool_id"
       ]
     },
     "annotations": {
@@ -1040,7 +764,7 @@
   },
   {
     "name": "get_tool_help",
-    "description": "取工具的帮助信息（文档链接 / 后端能力清单 / 启动器动作清单）；kind=app 传 run=true 可执行帮助命令并捕获输出",
+    "description": "取工具的帮助信息（文档链接 / 后端能力清单 / 启动器动作清单）；kind=app 传 run=true 可执行帮助命令并捕获输出。必填：tool_id（可写 id）",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1063,14 +787,6 @@
         "id": {
           "type": "string",
           "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID"
-        },
-        "toolId": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID"
-        },
-        "name": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID"
         }
       },
       "anyOf": [
@@ -1082,16 +798,6 @@
         {
           "required": [
             "id"
-          ]
-        },
-        {
-          "required": [
-            "toolId"
-          ]
-        },
-        {
-          "required": [
-            "name"
           ]
         }
       ]
@@ -1129,14 +835,6 @@
           "description": "可选，只看某个登记工具的调用（与调用记录里的 target 精确匹配）"
         },
         "id": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：可选，只看某个登记工具的调用（与调用记录里的 target 精确匹配）"
-        },
-        "toolId": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：可选，只看某个登记工具的调用（与调用记录里的 target 精确匹配）"
-        },
-        "name": {
           "type": "string",
           "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：可选，只看某个登记工具的调用（与调用记录里的 target 精确匹配）"
         }
@@ -1240,7 +938,7 @@
   },
   {
     "name": "search_packages",
-    "description": "在包管理器已添加的仓库清单里搜可安装的包（只读，按包名匹配；命中为空只说明已添加的清单里没有，不代表装不了）",
+    "description": "在包管理器已添加的仓库清单里搜可安装的包（只读，按包名匹配；命中为空只说明已添加的清单里没有，不代表装不了）。必填：keyword（可写 query）",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1264,14 +962,6 @@
         "query": {
           "type": "string",
           "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：包名关键词（匹配 bucket 清单里的包名）"
-        },
-        "q": {
-          "type": "string",
-          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：包名关键词（匹配 bucket 清单里的包名）"
-        },
-        "text": {
-          "type": "string",
-          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：包名关键词（匹配 bucket 清单里的包名）"
         }
       },
       "anyOf": [
@@ -1283,16 +973,6 @@
         {
           "required": [
             "query"
-          ]
-        },
-        {
-          "required": [
-            "q"
-          ]
-        },
-        {
-          "required": [
-            "text"
           ]
         }
       ]
@@ -1316,7 +996,7 @@
   },
   {
     "name": "launch_package",
-    "description": "启动包管理器已安装的某个包：默认只解析可执行入口并预览（不 spawn），传 execute=true 才真的启动（入口按 快捷方式 → bin → shim 取，可用 entry 指定）",
+    "description": "启动包管理器已安装的某个包：默认只解析可执行入口并预览（不 spawn），传 execute=true 才真的启动（入口按 快捷方式 → bin → shim 取，可用 entry 指定）。必填：package（可写 name）",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1346,14 +1026,6 @@
         "name": {
           "type": "string",
           "description": "`package` 的别名（与 package 二选一，两者都给以 package 为准）：包名（须已安装，如 7zip）"
-        },
-        "id": {
-          "type": "string",
-          "description": "`package` 的别名（与 package 二选一，两者都给以 package 为准）：包名（须已安装，如 7zip）"
-        },
-        "pkg": {
-          "type": "string",
-          "description": "`package` 的别名（与 package 二选一，两者都给以 package 为准）：包名（须已安装，如 7zip）"
         }
       },
       "anyOf": [
@@ -1365,16 +1037,6 @@
         {
           "required": [
             "name"
-          ]
-        },
-        {
-          "required": [
-            "id"
-          ]
-        },
-        {
-          "required": [
-            "pkg"
           ]
         }
       ]
@@ -1398,7 +1060,7 @@
   },
   {
     "name": "install_package",
-    "description": "用包管理器安装一个包：默认只回将要执行的命令预览，不改动本机；真要装必须同时传 execute=true 与 allowDestructive=true（安装会下载并运行仓库里的安装脚本，属破坏性操作）",
+    "description": "用包管理器安装一个包：默认只回将要执行的命令预览，不改动本机；真要装必须同时传 execute=true 与 allowDestructive=true（安装会下载并运行仓库里的安装脚本，属破坏性操作）。必填：package（可写 name）",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1430,14 +1092,6 @@
         "name": {
           "type": "string",
           "description": "`package` 的别名（与 package 二选一，两者都给以 package 为准）：包名（只允许字母/数字/点/下划线/短横/加号，不接受路径分隔符）"
-        },
-        "id": {
-          "type": "string",
-          "description": "`package` 的别名（与 package 二选一，两者都给以 package 为准）：包名（只允许字母/数字/点/下划线/短横/加号，不接受路径分隔符）"
-        },
-        "pkg": {
-          "type": "string",
-          "description": "`package` 的别名（与 package 二选一，两者都给以 package 为准）：包名（只允许字母/数字/点/下划线/短横/加号，不接受路径分隔符）"
         }
       },
       "anyOf": [
@@ -1449,16 +1103,6 @@
         {
           "required": [
             "name"
-          ]
-        },
-        {
-          "required": [
-            "id"
-          ]
-        },
-        {
-          "required": [
-            "pkg"
           ]
         }
       ]
