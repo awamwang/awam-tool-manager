@@ -951,10 +951,32 @@
       `{"query":"文件"}` 均 isError=false（结果与规范名一致）；`{"id":""}` → `invalid_params` +
       `acceptedParams=[tool_id,id,toolId,name]` + `example={"tool_id":"everything"}`；
       `{"tool_id":"everything"}` 零回归；`{}` 由 SDK 先拦。探针走 heredoc 内联，未在仓库留文件
-- [ ] **未闭环一项（明确留白）** - Qoder **宿主**（ajv）是否接受 `anyOf`/`allOf` 还没验到：
-      本会话的 MCP 快照把 `inputSchema` 一起冻住了，`manage_mcp retry` 只重启进程、
-      刷新不了快照（retry 后 `{"query":...}` 仍被宿主按旧 schema 拒，规范名仍通——服务端本身
-      已由上面的子进程会话证明）。要新开会话复核，见项目记忆「MCP 注册与会话快照」
+- [x] **宿主通道复核（同日补齐，方案 ① 的最后一块）** - 上一条留白等的是「新快照」，实际不用新会话：
+      server 重注册 + 宿主重新同步 MCP 之后，**同一会话**里 `mcp_get` 就下发了新 schema。
+      逐项原文记录：
+      ①`mcp_get search_tools` → `properties` 含 `query/q/text`、`anyOf` 四条候选；
+      `mcp_get call_backend_tool` / `set_backend_log_level` → `allOf` 包两组 `anyOf`，
+      说明 ajv 这套宿主认得我们导出的形状；
+      ②别名调用全通：`search_tools {"query":"everything"}` → `count: 2`；
+      `get_tool_info` 的 `{"id"|"toolId"|"name": "everything"}` 三次返回体逐字相同；
+      `list_launcher_actions` 混用两组别名（`{"tool_id":..,"q":"剪贴"}` 与
+      `{"toolId":..,"keyword":"剪贴"}`）结果同样一致；
+      ③边界照实：`{}` 与退役名 `{"mcp_tool_id": "everything"}` 都由**宿主**先拦，但文案已
+      顺带自描述——`params must have required property 'tool_id', ... 'id', ... 'toolId',
+      ... 'name', params must match a schema in anyOf`，把可接受的名字直接列给 Agent；
+      ④穿透到我们载荷的两类：`{"id":""}` → `invalid_params` + `acceptedParams` +
+      `example={"tool_id":"everything"}`；`{"tool_id":"everything","id":"quicker"}` →
+      「取值不同…只保留一个即可」；
+      ⑤`allOf` 真调用：`call_backend_tool {"toolId":"__no_such_backend__","name":"search_files"}`
+      过得了宿主校验、进到 handler 回 `config_error`（**未路由、未 spawn、未改任何后端状态**）；
+      ⑥统计口径在宿主通道同样成立：`get_usage_stats {"days":1,"id":"everything"}` →
+      `targets: [{"toolId":"everything","count":5,"failed":1}]`、
+      `errorTypes: [{"errorType":"invalid_params","count":1}]`——别名调用按规范名入账，
+      冲突那次失败也进了台账
+- [x] **顺带纠正一条口径（写进项目记忆）** - 「会话快照连 `inputSchema` 一起冻」不是永久状态：
+      它会在宿主重新同步 MCP（server 重注册 / 工具集变动）时刷新。所以判定顺序是
+      **先 `mcp_get` 核对 schema 是不是新版**，是就直接走宿主通道，仍旧再退到 stdio 子进程会话，
+      不要一上来就绕道
 
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
