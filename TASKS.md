@@ -1117,7 +1117,16 @@
       dispatch 五个出口各记一行 JSONL 到 `<runtime>/usage.log`（不含参数），
       第 17 个对外工具 `get_usage_stats` 按窗口聚合；刻意不做跨进程计数精度保证、
       不做日志轮转，也无法统计「用户直接启动工具」那条不经过本 server 的路径
-- [ ] 权限控制（哪些工具 AI 可以直接执行）
+- [ ] 权限控制（哪些工具 AI 可以直接执行）— **剩余仅方案 B**（2026-10-19 澄清口径）：
+      落地设计见 `docs/architecture_permission_model_design_2026-10-17.md`（ARC-P1-05，
+      推荐方案 D = A + C，B 为远期结构载体）。A 与 C **已落地**：Phase 1 把破坏性判定
+      下沉到子操作级并收敛为统一入口 `policy.decide_destructive`（见「合规与安全」小节），
+      Phase 2 用 `data/policy.json` 把「谁能被调用 / 破坏性走什么模式」变成客户端不可覆盖的
+      部署策略（`destructive.mode=deny` 时传 `allowDestructive` 也不放行，见 SKILL.md「安全约定」）。
+      未做的只有 **B**（设计文档 §2.2 与 §3.3：spec 级 `policy` 注解 + dispatch 统一拦截、
+      按会话临时授权），文档只列了进入条件、刻意不排期：①出现第二个并发客户端/网关实例需要
+      按实例区分权限；②需要按会话临时授权；③执行类工具从 2 个涨到 5+ 个、散落判定再次失控。
+      条件满足时 A 的判定内核直接迁进 spec 字段，dispatch 拦截点不动
 
 ---
 
