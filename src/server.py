@@ -56,6 +56,7 @@ from tool_specs import (
     ToolContext,
     build_mcp_tools,
     get_spec,
+    normalize_arguments,
 )
 # ARC-P1-05 Phase 2：部署策略（data/policy.json）的 dispatch 前置检查。
 # policy 在 import 期加载并校验策略（坏策略快速失败，不在这里处理）。
@@ -192,6 +193,11 @@ async def dispatch_tool(name: str, arguments: dict) -> str:
         _record(False, ErrorType.PERMISSION_DENIED)
         fail(denial["reason"], error_type=ErrorType.PERMISSION_DENIED, toolName=name)
     try:
+        # 入参别名归一（`{"id": "everything"}` → `{"tool_id": "everything"}`）+
+        # 必填缺失的自描述错误。放在 handler 之前、`_record` 之后：统计记的是
+        # **归一后**的参数（`get_usage_stats` 的 tool_id 维度才不因别名漏计），
+        # 归一失败的 errorType 也照样进台账。
+        arguments = normalize_arguments(spec, arguments)
         payload = await spec.handler(arguments, _TOOL_CONTEXT)
     except ToolError as e:
         # errorType 从异常正文里取——那份 JSON 就是客户端看到的载荷，同源不另编

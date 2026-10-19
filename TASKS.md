@@ -42,6 +42,8 @@
 
 ### 协议合规
 - [x] 后端工具参数名统一为 `tool_id`（移除历史遗留的 mcp_tool_id / launcher_id）
+- [x] 入参别名兼容 + 必填缺失自描述错误（2026-10-19，见「入参别名与必填自描述错误」）：
+      对外 schema 认 `id`/`toolId`/`query` 这类直觉名，dispatch 入口折回规范名，退役名不得复活
 - [x] `read_resource` 参数归一化：SDK 传的是 `AnyUrl`，直接与字符串比较会全部落到未知资源
 - [x] `get_prompt` 按协议返回 `GetPromptResult`（老版本 SDK 退回裸列表）
 - [x] 失败返回 MCP 协议层 `isError`（此前 success:false 被协议层当成成功）
@@ -253,14 +255,15 @@
     存在理由——前三条在单测层用桩就能验。
   - 红绿：摘掉 `stdin=subprocess.DEVNULL` → 场景⑨ 9.33s 内红（客户端先断），
     单测 `test_run_commands_executes_and_parses_version` 同时红；还原后全绿
-- **口径**：`pytest tests/ -q` = 557 passed / **9 deselected**；
-  `pytest -m e2e -q` = 9 passed / 557 deselected。说「557」时要带上
+- **口径**：`pytest tests/ -q` = 579 passed / **9 deselected**；
+  `pytest -m e2e -q` = 9 passed / 579 deselected。说「579」时要带上
   「另有 9 个 e2e 默认不收集」，否则会被误读成总数。
   （本行随每次落地更新：NE-8 时为 314，NE-9「工具使用统计」落地后为 343，
   NE-10「工具自动发现」落地后为 411，真机端到端 + 发现层三处修复后为 425，
   Steam 假阴性纠正（`registry_value` 探针）后为 441，
   P2-07「包管理适配」落地（适配层 + handler + 门禁）后为 517，
-  P0「Steam 接入」（库解析 + 启动器适配器）落地后为 557）
+  P0「Steam 接入」（库解析 + 启动器适配器）落地后为 557，
+  「入参别名与必填自描述错误」落地（含别名属性顺序守卫）后为 579）
 - **手工脚本**（不在上面 9 个里）：
   `"<pyenv 3.12 python>" tests/e2e/manual_install_gate.py`——验「已授权时
   install.command 真的被提交给 shell」，依赖本机 npm，故保留手工。
@@ -872,6 +875,87 @@
       （`.scratch/` 走本地 exclude，收尾时已整体清理）：合成树能钉的行为已全在 `test_steam_*`，
       真机数字（3 库 / 27 声明 / 16 份 acf）不可复现，不升格成用例
 
+### 入参别名与必填自描述错误（P1，2026-10-19）
+- [x] **起因是真实会话里的两次空转**（用户截图）：同一个意图先
+      `search_tools {"query":"everything"}` → `params must have required property 'keyword'`，
+      再 `get_tool_info {"id":"everything"}` → `params must have required property 'tool_id'`，
+      两次都到不了 handler；Agent 于是放弃 MCP 通道，自己起 shell 跑 `which es.exe` 探路径。
+      宿主那句文案是通用模板，既没列可接受的名字、也没说这工具干什么，调用方只能再猜一轮
+- [x] **根因定在「两道入站校验都在我们代码之前」**：① 宿主按下发的 `inputSchema` 预校验，
+      ② mcp SDK 在 `call_tool` 路由里按同一份 schema 再校验一次（「筛选维度增强」一节已实测
+      SDK 会拦 `required` 与 `enum`）。所以 handler 里 `.get()` 兜底救不了这种请求，
+      唯一能动的层是**导出的 schema** + **dispatch 入口的归一化**——方案 ① 就落在这两层
+- [x] **① 别名兼容：声明表不动，导出时展开** - `ServerToolSpec` 新增 `arg_aliases`（按 spec
+      覆盖默认表，空元组=退出），默认表按规范名共享：`tool_id ← id/toolId/name`、
+      `keyword ← query/q/text`、`package ← name/id/pkg`、`level ← log_level`。
+      `build_mcp_tools()` 改用它算出的 `export_input_schema()`：补别名属性 + 把必填规范名展开成
+      **任选组**（单组 `anyOf`、多组 `allOf`）；声明表里的 `required` 仍只写规范名，
+      SSOT 不变（`test_export_does_not_mutate_declaration_table` 钉住）。
+      口径（实测自 `aliases_for` / `export_input_schema`）：22 个工具里 **19 个带别名**，
+      没有的 3 个是 `list_tools` / `discover_tools` / `list_packages`（本来就没有必填参数）；
+      **17 份导出 schema 带 `anyOf`/`allOf`**——`call_backend_tool`、`set_backend_log_level`
+      有两个必填，用 `allOf` 包两组；`get_backend_status`、`get_usage_stats` 的 `tool_id`
+      是选填，别名只在归一化里生效、不成任选组
+- [x] **`name` / `id` 的歧义按工具裁决，不搞一刀切** - `call_backend_tool` 的 `name` 指
+      **后端子工具**、`run_launcher_action` 的 `id` 指**动作**，与默认的「name=工具 ID」不是
+      一个语义，所以这两条用 spec 级 `arg_aliases` 覆盖（`call_backend_tool` 只给
+      `tool_id ← toolId`、`tool_name ← name/backend_tool_name/sub_tool_name`；
+      `run_launcher_action` 给 `action_id ← id/actionId`、`action_name ← name/actionName`）
+- [x] **JSON Schema 的 `required` 是 AND，不是 OR**（实现时踩到，值得留痕）：把四个候选名塞进
+      同一个 `required` 等于要求全传。首版这样导出后 `test_protocol_roundtrip` 3 条当场红
+      （`Input validation error: {'keyword': '文件'} is not valid under any of the given schemas`），
+      改成「一个候选名一条 `{"required": [名]}`、组间用 `allOf` 相乘」才通。
+      这次红同时第二次证明了 SDK 侧确实按 schema 拦入站请求
+- [x] **归一化排在 handler 之前，三条规则** - `server.dispatch_tool` 进 handler 前调
+      `normalize_arguments()`，**handler 一律只认规范名、不感知别名**：
+      ①只给别名 → 搬到规范名并移除别名键；②规范名与别名同时给且**取值相同** → 按规范名走不报错，
+      **取值不同** → `invalid_params`（两个目标 ID 不猜意图）；③空白算没给
+      （`{"id": ""}` / 纯空格不是有效目标，Agent 传空串比不传更常见）。
+      埋点顺序也是有意的：`_record` 闭包读的是重绑后的 `arguments`，所以 `usage.log` 的
+      `target`（`usage.py:43` 取 `args.get("tool_id")`）按规范名计，别名调用不会漏进
+      `get_usage_stats` 的 `targets` 维度
+- [x] **② 必填缺失自描述** - 折完别名仍缺必填时，`invalid_params` 的文案一次给全：
+      「缺少必填参数 tool_id。可接受参数名：`tool_id` / `id` / `toolId` / `name`（任选其一，
+      规范名是 tool_id）。示例：`{"tool_id": "everything"}`。本工具用途：…」，
+      并把同样内容结构化进 `param` / `acceptedParams` / `example` 三个字段（示例取值来自
+      `_EXAMPLE_VALUES`，Agent 照抄即可，不用再猜第二轮）
+- [x] **退役名不得借别名复活** - `RETIRED_PARAM_NAMES = {mcp_tool_id, launcher_id}`：
+      `validate_specs` 在 import 期拒绝「别名=退役名」「别名撞已声明参数」「同一别名归属两个
+      规范名」「`arg_aliases` 键拼错（覆盖永不生效）」四类坏 spec，测试再从导出 schema 全文
+      反向扫一遍——两条路此前已在「协议合规」里统一掉，这里防止被当成兼容性别名加回来
+- [x] **`{}` 的边界：谁拦的要说清** - 一个键都不给时先被**入站校验**拦下
+      （真机 stdio 会话实测：SDK 文案 `Input validation error: {} is not valid under any of the
+      given schemas`），拿不到我们的自描述文案。保留 `required` 语义是刻意取舍：不写别名的
+      客户端仍应知道这个参数必填；真实失败形态是**猜错参数名**（已接管），不是什么都没传。
+      用例 `test_empty_arguments_is_caught_upstream_of_our_handler` 只钉「谁在拦」这个边界不漂移
+- [x] **顺带抓出并修掉一个自己造的稳定性缺陷** - `_declared_params` 原本返回 `set`，
+      而 `aliases_for` 按它逐个追写别名属性：**字符串 set 的迭代序随进程哈希随机**，
+      同一份代码两次运行导出的 `properties` 顺序不同，golden 逐字节比对就成了掷骰子
+      （变异实测：`PYTHONHASHSEED=0/1/42` 下守卫红、`7` 下绿）。改成按声明顺序返回 `list` +
+      `test_exported_alias_properties_follow_declaration_order` 钉住顺序
+- [x] **golden 重采工具化** - 新增 `scripts/regenerate_tools_golden.py`（不带参数重写、
+      带 `--check` 只比对）：序列化直接 `import` 测试里的 `_fields()`，基线与守卫同源，
+      不另抄一份规则；落盘用 `write_bytes` 而不是 `write_text`（Windows 上后者把 `\n`
+      翻成 `\r\n`，基线整篇重排）。基线重采后仍是 22 个工具，差异全部是别名属性与任选组
+- [x] **测试 557 → 579** - 新增 `tests/test_arg_aliases.py` 22 条，分五面：别名经**真实内存协议
+      会话**（5 条参数化）与规范名结果逐字等价 / 冲突与空白的自描述载荷 / 使用统计按规范名计 /
+      退役名不复活 / 别名表与声明表自洽（含导出为纯函数、schema 承认的别名归一化都认、
+      `validate_specs` 两类坏 spec 快速失败、22 个工具数量与顺序不变）。
+      红绿：把 `dispatch_tool` 里归一结果丢弃 → 6 条红（5 条别名等价 + 1 条统计）；
+      `_declared_params` 退回 `set` → 顺序守卫在 4 个 seed 里 3 个红。口径
+      `579 passed / 9 deselected`，`-m e2e` = `9 passed / 579 deselected`
+- [x] **真机（子进程会话，非本会话快照）** - 用 `tests/e2e/helpers.stdio_session` 起真实
+      `src/server.py` 会话跑一遍：22 个工具；`get_tool_info` 导出
+      `anyOf: [{"required":["tool_id"]},{"required":["id"]},{"required":["toolId"]},{"required":["name"]}]`；
+      `search_tools` 属性列 `keyword/kind/status/publisher/query/q/text`；`{"id":"everything"}` 与
+      `{"query":"文件"}` 均 isError=false（结果与规范名一致）；`{"id":""}` → `invalid_params` +
+      `acceptedParams=[tool_id,id,toolId,name]` + `example={"tool_id":"everything"}`；
+      `{"tool_id":"everything"}` 零回归；`{}` 由 SDK 先拦。探针走 heredoc 内联，未在仓库留文件
+- [ ] **未闭环一项（明确留白）** - Qoder **宿主**（ajv）是否接受 `anyOf`/`allOf` 还没验到：
+      本会话的 MCP 快照把 `inputSchema` 一起冻住了，`manage_mcp retry` 只重启进程、
+      刷新不了快照（retry 后 `{"query":...}` 仍被宿主按旧 schema 拒，规范名仍通——服务端本身
+      已由上面的子进程会话证明）。要新开会话复核，见项目记忆「MCP 注册与会话快照」
+
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
 - [x] Everything Search MCP（`kind=mcp`，已实测连接、调用、启停跑通）
@@ -1255,8 +1339,9 @@ awam-tool-manager/
 │   ├── runtime_paths.py        # 运行时目录解析 + 旧路径迁移（A14）
 │   └── schema.py               # 两层数据的 JSON Schema 校验 + **文档生成源**
 ├── scripts/
-│   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                      # 22 个 test_*.py（557 passed）+ 9 个 e2e 场景（默认不收集）
+│   ├── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
+│   └── regenerate_tools_golden.py  # 重采对外 tools/list 基线（`--check` 只比对，不落盘）
+└── tests/                      # 23 个 test_*.py（579 passed）+ 9 个 e2e 场景（默认不收集）
     ├── test_store.py
     ├── test_registry.py
     ├── test_registry_policy.py
@@ -1273,6 +1358,9 @@ awam-tool-manager/
     ├── test_discovery.py             # 发现清单校验 + 三态折叠 + 默认零 spawn
     ├── test_pkgman.py                # 包管理适配层：合成 scoop 树 + 三态 + 入口挑选 + 只构造命令
     ├── test_pkgman_handlers.py       # 包管理四个工具：默认零 spawn + 门禁位置 + 错误分类
+    ├── test_steam_library.py         # vdf/acf 只读解析：嵌套块/转义/快速失败/逐库存在性
+    ├── test_steam_launcher.py        # steam 适配器：动作形状 + 注册表定位 + argv + 未授权拦截
+    ├── test_arg_aliases.py           # 入参别名与规范名等价 + 必填自描述 + schema 与归一化自洽
     ├── test_usage.py                 # 使用统计：日志形状 + 日历日窗口 + dispatch 出口埋点
     ├── test_runtime_paths.py     # 运行时目录解析与迁移（A14）
     ├── test_protocol_roundtrip.py   # 真实 MCP 会话，不 mock SDK
@@ -1284,6 +1372,7 @@ awam-tool-manager/
         │   test_e2e_policy_deny.py / test_e2e_install_gate.py（场景①–⑥）
         ├── test_e2e_launch_execute.py   # 场景⑦：execute=true 真启动 + 门禁双向
         ├── test_e2e_tool_help.py        # 场景⑧：get_tool_help 默认零副作用 / run 才 spawn
+        ├── test_e2e_discovery_command.py  # 场景⑨：discover_tools 取版本号不吃网关 stdio 输入
         └── manual_install_gate.py       # 手工脚本（依赖本机 npm，不进 pytest）
 ```
 

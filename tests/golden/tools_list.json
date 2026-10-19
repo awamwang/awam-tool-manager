@@ -25,10 +25,41 @@
         "publisher": {
           "type": "string",
           "description": "可选，按发布者筛选（子串匹配、大小写不敏感；条目没写 publisher 一律不命中）"
+        },
+        "query": {
+          "type": "string",
+          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：搜索关键词"
+        },
+        "q": {
+          "type": "string",
+          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：搜索关键词"
+        },
+        "text": {
+          "type": "string",
+          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：搜索关键词"
         }
       },
-      "required": [
-        "keyword"
+      "anyOf": [
+        {
+          "required": [
+            "keyword"
+          ]
+        },
+        {
+          "required": [
+            "query"
+          ]
+        },
+        {
+          "required": [
+            "q"
+          ]
+        },
+        {
+          "required": [
+            "text"
+          ]
+        }
       ]
     },
     "annotations": {
@@ -99,10 +130,41 @@
         "tool_id": {
           "type": "string",
           "description": "工具 ID，如 everything、everything-search-mcp"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID，如 everything、everything-search-mcp"
+        },
+        "toolId": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID，如 everything、everything-search-mcp"
+        },
+        "name": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID，如 everything、everything-search-mcp"
         }
       },
-      "required": [
-        "tool_id"
+      "anyOf": [
+        {
+          "required": [
+            "tool_id"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        },
+        {
+          "required": [
+            "toolId"
+          ]
+        },
+        {
+          "required": [
+            "name"
+          ]
+        }
       ]
     },
     "annotations": {
@@ -143,10 +205,41 @@
         "allowDestructive": {
           "type": "boolean",
           "description": "工具被标记为 destructive 时，执行启动需显式传 true"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID"
+        },
+        "toolId": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID"
+        },
+        "name": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID"
         }
       },
-      "required": [
-        "tool_id"
+      "anyOf": [
+        {
+          "required": [
+            "tool_id"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        },
+        {
+          "required": [
+            "toolId"
+          ]
+        },
+        {
+          "required": [
+            "name"
+          ]
+        }
       ]
     },
     "annotations": {
@@ -186,11 +279,63 @@
         "allowDestructive": {
           "type": "boolean",
           "description": "目标工具被标记为 destructive 时，需显式传 true 才会转发"
+        },
+        "toolId": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID（如 everything-search-mcp）"
+        },
+        "name": {
+          "type": "string",
+          "description": "`tool_name` 的别名（与 tool_name 二选一，两者都给以 tool_name 为准）：要调用的后端工具名"
+        },
+        "backend_tool_name": {
+          "type": "string",
+          "description": "`tool_name` 的别名（与 tool_name 二选一，两者都给以 tool_name 为准）：要调用的后端工具名"
+        },
+        "sub_tool_name": {
+          "type": "string",
+          "description": "`tool_name` 的别名（与 tool_name 二选一，两者都给以 tool_name 为准）：要调用的后端工具名"
         }
       },
-      "required": [
-        "tool_id",
-        "tool_name"
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "required": [
+                "tool_id"
+              ]
+            },
+            {
+              "required": [
+                "toolId"
+              ]
+            }
+          ]
+        },
+        {
+          "anyOf": [
+            {
+              "required": [
+                "tool_name"
+              ]
+            },
+            {
+              "required": [
+                "name"
+              ]
+            },
+            {
+              "required": [
+                "backend_tool_name"
+              ]
+            },
+            {
+              "required": [
+                "sub_tool_name"
+              ]
+            }
+          ]
+        }
       ]
     },
     "annotations": {
@@ -222,10 +367,41 @@
         "force_refresh": {
           "type": "boolean",
           "description": "是否强制刷新缓存"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
+        },
+        "toolId": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
+        },
+        "name": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
         }
       },
-      "required": [
-        "tool_id"
+      "anyOf": [
+        {
+          "required": [
+            "tool_id"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        },
+        {
+          "required": [
+            "toolId"
+          ]
+        },
+        {
+          "required": [
+            "name"
+          ]
+        }
       ]
     },
     "annotations": {
@@ -254,10 +430,41 @@
         "tool_id": {
           "type": "string",
           "description": "MCP 工具 ID"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
+        },
+        "toolId": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
+        },
+        "name": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
         }
       },
-      "required": [
-        "tool_id"
+      "anyOf": [
+        {
+          "required": [
+            "tool_id"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        },
+        {
+          "required": [
+            "toolId"
+          ]
+        },
+        {
+          "required": [
+            "name"
+          ]
+        }
       ]
     },
     "annotations": {
@@ -285,10 +492,41 @@
         "tool_id": {
           "type": "string",
           "description": "MCP 工具 ID"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
+        },
+        "toolId": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
+        },
+        "name": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
         }
       },
-      "required": [
-        "tool_id"
+      "anyOf": [
+        {
+          "required": [
+            "tool_id"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        },
+        {
+          "required": [
+            "toolId"
+          ]
+        },
+        {
+          "required": [
+            "name"
+          ]
+        }
       ]
     },
     "annotations": {
@@ -316,6 +554,18 @@
         "tool_id": {
           "type": "string",
           "description": "MCP 工具 ID，不填则返回所有后端状态"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID，不填则返回所有后端状态"
+        },
+        "toolId": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID，不填则返回所有后端状态"
+        },
+        "name": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID，不填则返回所有后端状态"
         }
       }
     },
@@ -353,10 +603,45 @@
         "limit": {
           "type": "number",
           "description": "返回条数上限，默认 50"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
+        },
+        "toolId": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
+        },
+        "name": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
+        },
+        "log_level": {
+          "type": "string",
+          "description": "`level` 的别名（与 level 二选一，两者都给以 level 为准）：日志级别过滤（debug/info/warning/error）"
         }
       },
-      "required": [
-        "tool_id"
+      "anyOf": [
+        {
+          "required": [
+            "tool_id"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        },
+        {
+          "required": [
+            "toolId"
+          ]
+        },
+        {
+          "required": [
+            "name"
+          ]
+        }
       ]
     },
     "annotations": {
@@ -389,11 +674,63 @@
         "level": {
           "type": "string",
           "description": "日志级别（debug/info/warning/error）"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
+        },
+        "toolId": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
+        },
+        "name": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
+        },
+        "log_level": {
+          "type": "string",
+          "description": "`level` 的别名（与 level 二选一，两者都给以 level 为准）：日志级别（debug/info/warning/error）"
         }
       },
-      "required": [
-        "tool_id",
-        "level"
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "required": [
+                "tool_id"
+              ]
+            },
+            {
+              "required": [
+                "id"
+              ]
+            },
+            {
+              "required": [
+                "toolId"
+              ]
+            },
+            {
+              "required": [
+                "name"
+              ]
+            }
+          ]
+        },
+        {
+          "anyOf": [
+            {
+              "required": [
+                "level"
+              ]
+            },
+            {
+              "required": [
+                "log_level"
+              ]
+            }
+          ]
+        }
       ]
     },
     "annotations": null,
@@ -419,10 +756,41 @@
         "tool_id": {
           "type": "string",
           "description": "MCP 工具 ID"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
+        },
+        "toolId": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
+        },
+        "name": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
         }
       },
-      "required": [
-        "tool_id"
+      "anyOf": [
+        {
+          "required": [
+            "tool_id"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        },
+        {
+          "required": [
+            "toolId"
+          ]
+        },
+        {
+          "required": [
+            "name"
+          ]
+        }
       ]
     },
     "annotations": {
@@ -450,10 +818,41 @@
         "tool_id": {
           "type": "string",
           "description": "启动器工具 ID"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：启动器工具 ID"
+        },
+        "toolId": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：启动器工具 ID"
+        },
+        "name": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：启动器工具 ID"
         }
       },
-      "required": [
-        "tool_id"
+      "anyOf": [
+        {
+          "required": [
+            "tool_id"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        },
+        {
+          "required": [
+            "toolId"
+          ]
+        },
+        {
+          "required": [
+            "name"
+          ]
+        }
       ]
     },
     "annotations": {
@@ -493,10 +892,53 @@
         "refresh": {
           "type": "boolean",
           "description": "可选，强制重新扫描启动器本地数据（默认读缓存，缓存超过 5 分钟会自动重扫）"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：启动器工具 ID"
+        },
+        "toolId": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：启动器工具 ID"
+        },
+        "name": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：启动器工具 ID"
+        },
+        "query": {
+          "type": "string",
+          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：可选，按名称/描述/所属程序/ID 过滤"
+        },
+        "q": {
+          "type": "string",
+          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：可选，按名称/描述/所属程序/ID 过滤"
+        },
+        "text": {
+          "type": "string",
+          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：可选，按名称/描述/所属程序/ID 过滤"
         }
       },
-      "required": [
-        "tool_id"
+      "anyOf": [
+        {
+          "required": [
+            "tool_id"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        },
+        {
+          "required": [
+            "toolId"
+          ]
+        },
+        {
+          "required": [
+            "name"
+          ]
+        }
       ]
     },
     "annotations": {
@@ -545,10 +987,39 @@
         "allowDestructive": {
           "type": "boolean",
           "description": "启动器被标记为 destructive 时，需显式传 true 才会执行"
+        },
+        "toolId": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：启动器工具 ID"
+        },
+        "id": {
+          "type": "string",
+          "description": "`action_id` 的别名（与 action_id 二选一，两者都给以 action_id 为准）：动作 ID（推荐：稳定不变；二选一，与 action_name 至少给一个）"
+        },
+        "actionId": {
+          "type": "string",
+          "description": "`action_id` 的别名（与 action_id 二选一，两者都给以 action_id 为准）：动作 ID（推荐：稳定不变；二选一，与 action_name 至少给一个）"
+        },
+        "name": {
+          "type": "string",
+          "description": "`action_name` 的别名（与 action_name 二选一，两者都给以 action_name 为准）：动作名称（Quicker 要求名称不重复且不含空格）"
+        },
+        "actionName": {
+          "type": "string",
+          "description": "`action_name` 的别名（与 action_name 二选一，两者都给以 action_name 为准）：动作名称（Quicker 要求名称不重复且不含空格）"
         }
       },
-      "required": [
-        "tool_id"
+      "anyOf": [
+        {
+          "required": [
+            "tool_id"
+          ]
+        },
+        {
+          "required": [
+            "toolId"
+          ]
+        }
       ]
     },
     "annotations": {
@@ -588,10 +1059,41 @@
         "allowDestructive": {
           "type": "boolean",
           "description": "工具被标记为 destructive 时，执行帮助命令需显式传 true"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID"
+        },
+        "toolId": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID"
+        },
+        "name": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID"
         }
       },
-      "required": [
-        "tool_id"
+      "anyOf": [
+        {
+          "required": [
+            "tool_id"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        },
+        {
+          "required": [
+            "toolId"
+          ]
+        },
+        {
+          "required": [
+            "name"
+          ]
+        }
       ]
     },
     "annotations": {
@@ -625,6 +1127,18 @@
         "tool_id": {
           "type": "string",
           "description": "可选，只看某个登记工具的调用（与调用记录里的 target 精确匹配）"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：可选，只看某个登记工具的调用（与调用记录里的 target 精确匹配）"
+        },
+        "toolId": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：可选，只看某个登记工具的调用（与调用记录里的 target 精确匹配）"
+        },
+        "name": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：可选，只看某个登记工具的调用（与调用记录里的 target 精确匹配）"
         }
       }
     },
@@ -746,10 +1260,41 @@
           "minimum": 1,
           "maximum": 100,
           "description": "可选，最多返回多少条，默认 20"
+        },
+        "query": {
+          "type": "string",
+          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：包名关键词（匹配 bucket 清单里的包名）"
+        },
+        "q": {
+          "type": "string",
+          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：包名关键词（匹配 bucket 清单里的包名）"
+        },
+        "text": {
+          "type": "string",
+          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：包名关键词（匹配 bucket 清单里的包名）"
         }
       },
-      "required": [
-        "keyword"
+      "anyOf": [
+        {
+          "required": [
+            "keyword"
+          ]
+        },
+        {
+          "required": [
+            "query"
+          ]
+        },
+        {
+          "required": [
+            "q"
+          ]
+        },
+        {
+          "required": [
+            "text"
+          ]
+        }
       ]
     },
     "annotations": {
@@ -797,10 +1342,41 @@
         "wait": {
           "type": "number",
           "description": "可选，execute=true 时观察多少秒判定早退（默认 5，上限 30；<=0 不等待）"
+        },
+        "name": {
+          "type": "string",
+          "description": "`package` 的别名（与 package 二选一，两者都给以 package 为准）：包名（须已安装，如 7zip）"
+        },
+        "id": {
+          "type": "string",
+          "description": "`package` 的别名（与 package 二选一，两者都给以 package 为准）：包名（须已安装，如 7zip）"
+        },
+        "pkg": {
+          "type": "string",
+          "description": "`package` 的别名（与 package 二选一，两者都给以 package 为准）：包名（须已安装，如 7zip）"
         }
       },
-      "required": [
-        "package"
+      "anyOf": [
+        {
+          "required": [
+            "package"
+          ]
+        },
+        {
+          "required": [
+            "name"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        },
+        {
+          "required": [
+            "pkg"
+          ]
+        }
       ]
     },
     "annotations": {
@@ -850,10 +1426,41 @@
           "minimum": 1,
           "maximum": 600,
           "description": "可选，安装命令最长等待秒数，默认 120、上限 600"
+        },
+        "name": {
+          "type": "string",
+          "description": "`package` 的别名（与 package 二选一，两者都给以 package 为准）：包名（只允许字母/数字/点/下划线/短横/加号，不接受路径分隔符）"
+        },
+        "id": {
+          "type": "string",
+          "description": "`package` 的别名（与 package 二选一，两者都给以 package 为准）：包名（只允许字母/数字/点/下划线/短横/加号，不接受路径分隔符）"
+        },
+        "pkg": {
+          "type": "string",
+          "description": "`package` 的别名（与 package 二选一，两者都给以 package 为准）：包名（只允许字母/数字/点/下划线/短横/加号，不接受路径分隔符）"
         }
       },
-      "required": [
-        "package"
+      "anyOf": [
+        {
+          "required": [
+            "package"
+          ]
+        },
+        {
+          "required": [
+            "name"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        },
+        {
+          "required": [
+            "pkg"
+          ]
+        }
       ]
     },
     "annotations": {

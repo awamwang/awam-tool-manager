@@ -15,6 +15,7 @@ async def _handle_xxx」，`build_mcp_tools()` / `dispatch_tool` /
 两者字段名有重叠但语义不同，互不 import、互不引用。
 """
 
+import json
 from dataclasses import dataclass
 from typing import Any, Callable, TYPE_CHECKING
 
@@ -93,6 +94,9 @@ class ServerToolSpec:
     annotations: dict | None = None
     output_schema: dict | None = None
     handler: Callable[..., Any] | None = None
+    # 本条工具专属的「规范名 → 别名」覆盖。未列出的规范名回落
+    # `DEFAULT_ARG_ALIASES`；列成空元组表示该规范名显式不接别名。
+    arg_aliases: dict[str, tuple[str, ...]] | None = None
 
 
 # 所有工具的成功输出都带顶层 `success`（bool），其余字段随工具而异（如 list 类
@@ -108,6 +112,175 @@ SHARED_OUTPUT_SCHEMA: dict = {
     "required": ["success"],
     "additionalProperties": True,
 }
+
+# ---- 入参别名（让真实 Agent 首轮就命中）----
+# 背景：宿主（Qoder 等 MCP 客户端）在**入站时**就按 inputSchema 的 `required`
+# 做 JSON Schema 校验，不合格的请求根本到不了 handler——我们连一句「参数名应该
+# 是 tool_id」都递不出去。实测一次「找 Everything 相关工具」的真实会话：Agent
+# 按直觉写 `{"query": "everything"}`、`{"id": "everything"}`，两次都被挡回
+# `params must have required property 'keyword' / 'tool_id'`，第三次它就放弃
+# MCP 通道、自己起 shell 去 `which es.exe` 了。
+#
+# 体例（两处各司其职，声明表仍是唯一真相源）：
+# - 声明表里的 `input_schema.required` **只写规范名**（可读性优先，与旧版一致）；
+# - `build_mcp_tools()` 导出时把带别名的规范名展开成 `anyOf`（单组）/
+#   `allOf`+`anyOf`（多组）的「每组任选其一」，并把别名也声明成 string 属性；
+# - `server.dispatch_tool` 在调 handler 前用 `normalize_arguments()` 把别名折回
+#   规范名——**handler 一律只认规范名**，不感知别名。
+# 退役名（历史上真实存在过、已被统一掉的参数名）不得借别名复活，
+# 由 validate_specs 与 tests/test_arg_aliases.py 双向钉住。
+
+RETIRED_PARAM_NAMES = frozenset({"mcp_tool_id", "launcher_id"})
+
+# 规范名 → 可接受别名。按规范名共享；`name` / `id` 在个别工具里语义不同
+# （call_backend_tool 的 name 指后端子工具、run_launcher_action 的 id 指动作），
+# 那两处用 `ServerToolSpec.arg_aliases` 覆盖，不在默认表里一刀切。
+DEFAULT_ARG_ALIASES: dict[str, tuple[str, ...]] = {
+    "tool_id": ("id", "toolId", "name"),
+    "keyword": ("query", "q", "text"),
+    "package": ("name", "id", "pkg"),
+    "level": ("log_level",),
+}
+
+# 必填缺失时消息里给的示例取值：让 Agent 一次就照抄对，不用再猜第二轮。
+_EXAMPLE_VALUES: dict[str, str] = {
+    "tool_id": "everything",
+    "tool_name": "search_files",
+    "keyword": "文件",
+    "package": "7zip",
+    "level": "warning",
+    "action_id": "<动作 ID>",
+    "action_name": "<动作名称>",
+}
+
+
+def _declared_params(spec: ServerToolSpec) -> list[str]:
+    """按**声明顺序**返回参数名。
+
+    不能图省事返回 `set`：`aliases_for` 按它逐个追写别名属性，而 set 的迭代序
+    随进程哈希随机（字符串 hash 默认每个进程不同），导出的 `properties` 顺序
+    就会在两次运行之间漂移——`tools/golden/tools_list.json` 是逐字节比对的，
+    漂移等于让基线检查变成掷骰子。
+    """
+    return list(spec.input_schema.get("properties", {}))
+
+
+def aliases_for(spec: ServerToolSpec) -> dict[str, tuple[str, ...]]:
+    """本条工具实际生效的「规范名 → 别名」表（默认表 + spec 覆盖，已去掉空组）。"""
+    declared = _declared_params(spec)
+    overrides = spec.arg_aliases or {}
+    out: dict[str, tuple[str, ...]] = {}
+    for canon in declared:
+        aliases = overrides[canon] if canon in overrides else DEFAULT_ARG_ALIASES.get(canon, ())
+        aliases = tuple(a for a in aliases if a)
+        if aliases:
+            out[canon] = aliases
+    return out
+
+
+def _blank(value: Any) -> bool:
+    """None / 空串 / 纯空白都算「没给」——Agent 传 `{"id": ""}` 不是有效目标。"""
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def export_input_schema(spec: ServerToolSpec) -> dict:
+    """把声明表的规范名 schema 展开为对外 schema（补别名属性 + 必填任选组）。
+
+    无别名的工具原样返回同一个 dict（零拷贝、零差异）；有别名时返回新 dict，
+    声明表本身不被改动。
+    """
+    schema = spec.input_schema
+    alias_map = aliases_for(spec)
+    if not alias_map:
+        return schema
+
+    properties = dict(schema.get("properties", {}))
+    for canon, aliases in alias_map.items():
+        canon_desc = properties.get(canon, {}).get("description", "")
+        for alias in aliases:
+            properties[alias] = {
+                "type": "string",
+                "description": (
+                    f"`{canon}` 的别名（与 {canon} 二选一，两者都给以 {canon} 为准）"
+                    + (f"：{canon_desc}" if canon_desc else "")
+                ),
+            }
+
+    required = [r for r in schema.get("required", [])]
+    exported = {**schema, "properties": properties}
+    # 一个必填规范名 = 一个「任选其一」组：组内每个候选名各自成一条
+    # `{"required": [名]}`（JSON Schema 的 `required` 是 AND，把四个名字塞进
+    # 同一个 required 等于要求全传——test_protocol_roundtrip 会当场红）。
+    # 组与组之间是 AND，多组时用 `allOf` 包起来。
+    groups = []
+    plain = []
+    for canon in required:
+        aliases = alias_map.get(canon)
+        if aliases:
+            groups.append([{"required": [name]} for name in (canon, *aliases)])
+        else:
+            plain.append(canon)
+    if plain:
+        exported["required"] = plain
+    else:
+        exported.pop("required", None)
+    if len(groups) == 1:
+        exported["anyOf"] = groups[0]
+    elif len(groups) > 1:
+        exported["allOf"] = [{"anyOf": g} for g in groups]
+    return exported
+
+
+def normalize_arguments(spec: ServerToolSpec, arguments: dict) -> dict:
+    """别名折回规范名 + 必填缺失的自描述错误（dispatch 入口调用）。
+
+    返回新 dict，不改调用方传入的对象。三条规则：
+    1. 只给别名 → 搬到规范名，别名键从结果里移除；
+    2. 规范名与别名同时给、取值相同 → 按规范名走，不报错；取值**不同** →
+       `invalid_params`（两个目标 ID 不猜意图，让调用方自己收敛）；
+    3. 必填规范名折完仍为空 → `invalid_params`，消息列出可接受参数名与示例。
+    """
+    alias_map = aliases_for(spec)
+    out = dict(arguments or {})
+    for canon, aliases in alias_map.items():
+        sources = []
+        canon_value = out.get(canon)
+        if not _blank(canon_value):
+            sources.append((canon, canon_value))
+        for alias in aliases:
+            if alias not in out:
+                continue
+            value = out.pop(alias)
+            if not _blank(value):
+                sources.append((alias, value))
+        if not sources:
+            continue
+        if len({value for _, value in sources}) > 1:
+            fail(
+                f"参数 {canon} 同时由 "
+                + "、".join(f"`{key}`" for key, _ in sources)
+                + " 给出且取值不同（"
+                + " vs ".join(repr(v) for _, v in sources)
+                + "）——只保留一个即可。",
+                param=canon,
+                acceptedParams=[canon, *aliases],
+            )
+        out[canon] = sources[0][1]
+    for canon in spec.input_schema.get("required", []):
+        if _blank(out.get(canon)):
+            accepted = [canon, *alias_map.get(canon, ())]
+            example = {canon: _EXAMPLE_VALUES.get(canon, "<值>")}
+            fail(
+                f"缺少必填参数 {canon}。可接受的参数名："
+                + " / ".join(f"`{a}`" for a in accepted)
+                + f"（任选其一，规范名是 {canon}）。示例：{json.dumps(example, ensure_ascii=False)}。"
+                + f"本工具用途：{spec.description}",
+                param=canon,
+                acceptedParams=accepted,
+                example=example,
+            )
+    return out
+
 
 # ---- handlers（M03 分批搬迁）----
 # 分支体从 server.dispatch_tool 逐字搬运，只做五类机械替换：
@@ -927,6 +1100,12 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
             },
             "required": ["tool_id", "tool_name"]
         },
+        # 这里的 `name` 指的是**后端子工具**名，不是本服务的工具 ID——
+        # 所以不能用默认表（那条会把 name 映射到 tool_id，语义正好反）。
+        arg_aliases={
+            "tool_id": ("toolId",),
+            "tool_name": ("name", "backend_tool_name", "sub_tool_name"),
+        },
         # 转发到后端 MCP，属于"与外部世界交互"但静态无法判定副作用
         annotations={"openWorldHint": True},
     ),
@@ -1135,6 +1314,13 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
                 }
             },
             "required": ["tool_id"]
+        },
+        # 本工具的 `id` / `name` 天然指**动作**（调用方通常已把 tool_id 写全），
+        # 不能让默认表把它们当成 tool_id 的别名——那会把动作名折成工具 ID。
+        arg_aliases={
+            "tool_id": ("toolId",),
+            "action_id": ("id", "actionId"),
+            "action_name": ("name", "actionName"),
         },
         # 执行动作会真的跑起来，只标 openWorld
         annotations={"openWorldHint": True},
@@ -1361,18 +1547,18 @@ _ANNOTATION_KEYS = frozenset(
 def build_mcp_tools() -> list[Tool]:
     """由声明表统一构造 `Tool` 列表（annotations / outputSchema 在此挂载）。
 
-    与搬迁前 `list_tools()` 的挂载逻辑逐行等价：
-    - `if ToolAnnotations is not None and spec.annotations:` —— 可选导入的
-      真值判断都原样保留（`{}` 取假，不挂注解）；
-    - `tool.outputSchema = spec.output_schema or SHARED_OUTPUT_SCHEMA` ——
-      本期 22 条全部回落共享 schema。
+    挂载逻辑与搬迁前 `list_tools()` 逐行等价（`if ToolAnnotations is not None
+    and spec.annotations:` 的真值判断、`output_schema or SHARED_OUTPUT_SCHEMA`
+    的回落都原样）；**唯一有意的差异**是 `inputSchema` 现在过
+    `export_input_schema()`：带别名的工具在对外 schema 里多出别名属性与
+    `anyOf`/`allOf` 任选组（声明表本身仍只写规范名）。无别名的工具零差异。
     """
     tools: list[Tool] = []
     for spec in SERVER_TOOL_SPECS:
         tool = Tool(
             name=spec.name,
             description=spec.description,
-            inputSchema=spec.input_schema,
+            inputSchema=export_input_schema(spec),
         )
         if ToolAnnotations is not None and spec.annotations:
             tool.annotations = ToolAnnotations(**spec.annotations)
@@ -1389,10 +1575,15 @@ def get_spec(name: str) -> ServerToolSpec | None:
 def validate_specs() -> None:
     """import 期自检：spec 表自身损坏时快速失败，而不是带病运行。
 
-    检查三类问题：
+    检查五类问题：
     - 重名：名字索引会静默丢掉一条，tools/list 少一个工具且无人察觉；
     - 空 handler：新增工具忘了写 handler，要到运行期才暴露；
-    - annotations 键非法：`ToolAnnotations(**{...})` 拼错键运行期才炸。
+    - annotations 键非法：`ToolAnnotations(**{...})` 拼错键运行期才炸；
+    - 别名规范名拼错：`arg_aliases` 的键必须是本工具已声明的参数，否则那条
+      覆盖永远不生效（别名白写、报错还归到「Agent 猜错」头上）；
+    - 别名撞车 / 复活退役名：别名不得与本工具任何已声明参数同名（两个规范名
+      抢一个别名时映射结果取决于 dict 顺序），也不得是 `mcp_tool_id` /
+      `launcher_id` 这类已统一掉的退役名。
 
     对合法输入零差异——这是本设计「把一致性从约定变成强制」的核心机制。
     """
@@ -1410,6 +1601,33 @@ def validate_specs() -> None:
                     f"tool_specs: {spec.name} 的 annotations 含非法键: "
                     f"{sorted(unknown)}"
                 )
+        declared = _declared_params(spec)
+        alias_map = aliases_for(spec)
+        for canon in spec.arg_aliases or {}:
+            if canon not in declared:
+                raise RuntimeError(
+                    f"tool_specs: {spec.name} 的 arg_aliases 键 {canon} "
+                    "不是已声明的参数（拼错了？）"
+                )
+        owners: dict[str, str] = {}
+        for canon, aliases in alias_map.items():
+            for alias in aliases:
+                if alias in RETIRED_PARAM_NAMES:
+                    raise RuntimeError(
+                        f"tool_specs: {spec.name} 的别名 {alias} 是已退役参数名，"
+                        "不得复活"
+                    )
+                if alias in declared:
+                    raise RuntimeError(
+                        f"tool_specs: {spec.name} 的别名 {alias}（{canon} 的别名）"
+                        "与本工具已声明参数同名"
+                    )
+                if alias in owners:
+                    raise RuntimeError(
+                        f"tool_specs: {spec.name} 的别名 {alias} 同时是 "
+                        f"{owners[alias]} 与 {canon} 的别名"
+                    )
+                owners[alias] = canon
 
 
 # 名字 → spec 索引（validate_specs 保证无重名，建索引才有意义）

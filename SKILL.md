@@ -101,6 +101,29 @@ awam-tool-manager/
 
 后端相关工具统一使用 **`tool_id`** 指定目标工具（不存在 `mcp_tool_id` / `launcher_id`）。
 
+### 入参别名
+
+规范名只有一个（上表的参数名），但**调用方写别名也能通**：`inputSchema` 导出时把
+必填规范名展开成 `anyOf`（多必填时 `allOf` 包多个 `anyOf`）的「任选其一」组，
+`dispatch_tool` 在进 handler 前折回规范名——**handler 只认规范名**，统计也按归一后的
+参数记账。动机：宿主与 mcp SDK 都做**入站** schema 校验，参数名猜错的请求根本到不了
+我们的代码，Agent 只能收到 `params must have required property 'tool_id'` 这种无法自救
+的错误（实测因此退化成自己起 shell 探路径）。
+
+| 规范名 | 可接受别名 | 例外 |
+|---|---|---|
+| **`tool_id`** | **`id`** / **`toolId`** / **`name`** | `call_backend_tool`、`run_launcher_action` 只接 `toolId`（那里的 `id`/`name` 指子工具 / 动作） |
+| **`keyword`** | **`query`** / **`q`** / **`text`** | — |
+| **`package`** | **`name`** / **`id`** / **`pkg`** | — |
+| **`level`** | **`log_level`** | — |
+| **`tool_name`**（后端子工具名） | **`name`** / **`backend_tool_name`** / **`sub_tool_name`** | 仅 `call_backend_tool` |
+| **`action_id`** / **`action_name`** | **`id`** / **`actionId`**；**`name`** / **`actionName`** | 仅 `run_launcher_action` |
+
+19/22 个工具带别名（`list_tools`、`discover_tools`、`list_packages` 无必填参数，不带别名）。
+两条边界：规范名与别名同时给且**取值不同** → `invalid_params`（两个目标 ID 不猜意图）；
+一个参数都不给（`{}`）会被入站校验先拦下，我们的自描述文案覆盖的是「传了键但值为空」
+与不校验的客户端。退役名 `mcp_tool_id` / `launcher_id` **不得**作为别名出现。
+
 | 工具名 | 参数 | 说明 |
 |---|---|---|
 | `search_tools` | `keyword`(必填)、`kind`、`status`、`publisher` | 按关键词搜索工具，可按类型/安装状态/发布者收窄 |
@@ -169,8 +192,10 @@ awam-tool-manager/
 / `internal_error` / `launcher_error` / `install_required` / `install_not_allowed`
 / `unknown_error`。
 
-- **`invalid_params`**：参数缺失 / 类型错 / 取值非法。当前发射点：`set_backend_log_level`
-  的 `level` 非法值（参数校验议题上线后将扩大启用面）。
+- **`invalid_params`**：参数缺失 / 类型错 / 取值非法。发射点：`set_backend_log_level`
+  的 `level` 非法值；`dispatch_tool` 的入参归一化——必填参数折完别名仍为空（载荷额外带
+  `param` / `acceptedParams` / `example`，把可接受的参数名和示例直接给调用方）、
+  规范名与别名取值冲突；包管理面的空关键词 / 非法包名 / 未接线 manager。
 - **`backend_busy`**：同一后端正在处理另一个调用（单后端串行，并发调用会被直接拒绝，不排队）。
   调用方应稍后重试，不要无限重试打满。
 - **`backend_installing`**：后端依赖正在自动安装中——分钟级忙态，不是错误（与 `backend_busy`
