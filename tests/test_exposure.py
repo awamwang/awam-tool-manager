@@ -35,6 +35,12 @@ def payload_of(exc_info) -> dict:
 # ---- 1. 模式解析 ----
 
 
+def test_env_var_names_have_no_awam_prefix():
+    """对外配置名就是 EXPOSURE_MODE / EXPOSURE_FILE，不带项目私有前缀"""
+    assert exposure.MODE_ENV_VAR == "EXPOSURE_MODE"
+    assert exposure.EXPOSURE_FILE_ENV_VAR == "EXPOSURE_FILE"
+
+
 def test_missing_file_defaults_to_lazy(tmp_path):
     assert exposure.load_exposure_config(tmp_path / "absent.json")["mode"] == "lazy"
 

@@ -9,7 +9,7 @@
 - `full`：再补 4 个低频/执行面工具（文件元信息、Everything 状态、winget 搜索与安装）。
 
 模式在进程启动时解析一次（MCP 客户端需重连才会拿到新的 tools/list）。
-优先级：`AWAM_EXPOSURE_MODE` 环境变量 > `data/exposure.json` 的 `mode` > `lazy`。
+优先级：`EXPOSURE_MODE` 环境变量 > `data/exposure.json` 的 `mode` > `lazy`。
 """
 
 from __future__ import annotations
@@ -20,8 +20,8 @@ from pathlib import Path
 
 MODES = ("lazy", "default", "full")
 DEFAULT_MODE = "lazy"
-MODE_ENV_VAR = "AWAM_EXPOSURE_MODE"
-EXPOSURE_FILE_ENV_VAR = "AWAM_EXPOSURE_FILE"
+MODE_ENV_VAR = "EXPOSURE_MODE"
+EXPOSURE_FILE_ENV_VAR = "EXPOSURE_FILE"
 DEFAULT_EXPOSURE_PATH = Path(__file__).parent.parent / "data" / "exposure.json"
 
 

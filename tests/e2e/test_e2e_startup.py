@@ -71,9 +71,9 @@ def test_e2e_list_tools_matches_golden(e2e_repo, e2e_runtime):
 
 @pytest.mark.e2e
 def test_e2e_default_mode_exposes_front_door(e2e_repo, e2e_runtime):
-    """`AWAM_EXPOSURE_MODE=default`：真实进程下发 29 个工具（含 7 个意图前门）"""
+    """`EXPOSURE_MODE=default`：真实进程下发 29 个工具（含 7 个意图前门）"""
     names, fields, log, elapsed = asyncio.run(
-        _collect(e2e_repo, e2e_runtime, {"AWAM_EXPOSURE_MODE": "default"})
+        _collect(e2e_repo, e2e_runtime, {"EXPOSURE_MODE": "default"})
     )
     print(f"\n[场景①-default] 起服 + list_tools 耗时 {elapsed:.2f}s")
     assert "暴露模式: default" in log.text(), log.tail()
@@ -97,9 +97,9 @@ def test_e2e_default_mode_exposes_front_door(e2e_repo, e2e_runtime):
 
 @pytest.mark.e2e
 def test_e2e_full_mode_exposes_everything(e2e_repo, e2e_runtime):
-    """`AWAM_EXPOSURE_MODE=full`：真实进程下发全部 33 个工具"""
+    """`EXPOSURE_MODE=full`：真实进程下发全部 33 个工具"""
     names, fields, log, elapsed = asyncio.run(
-        _collect(e2e_repo, e2e_runtime, {"AWAM_EXPOSURE_MODE": "full"})
+        _collect(e2e_repo, e2e_runtime, {"EXPOSURE_MODE": "full"})
     )
     print(f"\n[场景①-full] 起服 + list_tools 耗时 {elapsed:.2f}s")
     assert "暴露模式: full" in log.text(), log.tail()

@@ -250,18 +250,18 @@ def build_env(runtime_dir: Path, extra: dict[str, str] | None = None) -> dict[st
 
     - `AWAM_RUNTIME_DIR`：不设会落到用户真实的 %LOCALAPPDATA%（见
       `runtime_paths.py:24`），既污染用户机器又因为不在仓库里而看不出来。
-    - `AWAM_AUTO_INSTALL` / `AWAM_POLICY_FILE` / `AWAM_EXPOSURE_MODE` /
-      `AWAM_EXPOSURE_FILE`：清掉宿主环境残留，保证用例的判定只取决于自己
+    - `AWAM_AUTO_INSTALL` / `AWAM_POLICY_FILE` / `EXPOSURE_MODE` /
+      `EXPOSURE_FILE`：清掉宿主环境残留，保证用例的判定只取决于自己
       在 `extra` 里设了什么（暴露模式默认 lazy，需要别的模式由用例显式传入）。
     """
     env = dict(os.environ)
     env["AWAM_RUNTIME_DIR"] = str(runtime_dir)
     env.pop("AWAM_AUTO_INSTALL", None)
     env.pop("AWAM_POLICY_FILE", None)
-    env.pop("AWAM_EXPOSURE_MODE", None)
+    env.pop("EXPOSURE_MODE", None)
     # 仓库副本里将来出现 data/exposure.json 时也不能改变 e2e 的基线：
     # 把配置文件指向一个不存在的路径，需要特定模式由 extra 显式覆盖。
-    env["AWAM_EXPOSURE_FILE"] = str(runtime_dir / "no-exposure.json")
+    env["EXPOSURE_FILE"] = str(runtime_dir / "no-exposure.json")
     if extra:
         env.update(extra)
     return env

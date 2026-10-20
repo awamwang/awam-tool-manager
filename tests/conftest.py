@@ -25,8 +25,8 @@ os.environ.setdefault("AWAM_RUNTIME_DIR", _RUNTIME_ISOLATION_DIR)
 # 暴露模式必须 hermetic：宿主环境变量或仓库 data/exposure.json 会改变
 # tools/list 的切片。单元测试以 lazy 为基线（协议出口的历史默认），需要
 # 其他模式的用例自己 monkeypatch `server.EXPOSURE_MODE` 或直接传参。
-os.environ.pop("AWAM_EXPOSURE_MODE", None)
-os.environ["AWAM_EXPOSURE_FILE"] = str(
+os.environ.pop("EXPOSURE_MODE", None)
+os.environ["EXPOSURE_FILE"] = str(
     Path(_RUNTIME_ISOLATION_DIR) / "no-exposure.json"
 )
 

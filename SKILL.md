@@ -17,10 +17,10 @@ description: 统一工具管理器，维护本机工具名单，提供统一的�
   精确匹配，条目未写时按 `installed` 计）与 `publisher`（发布者，子串、大小写不敏感）
   收窄，多个维度取交集
 - **MCP 服务**：作为 MCP Server 暴露给 AI 客户端（stdio 模式）
-- **暴露模式**：`AWAM_EXPOSURE_MODE` 控制 `tools/list` 的切片与
+- **暴露模式**：`EXPOSURE_MODE` 控制 `tools/list` 的切片与
   `initialize.instructions` 的能力清单——`lazy`（默认，22 个管理工具，长尾走路由组合）、
   `default`（29 个，补 7 个高频意图工具）、`full`（33 个，再补文件元信息、Everything
-  状态与 winget 搜索/安装）。也可用 `AWAM_EXPOSURE_FILE` 指向 JSON 配置文件
+  状态与 winget 搜索/安装）。也可用 `EXPOSURE_FILE` 指向 JSON 配置文件
   （`{"mode": "default"}`），环境变量优先；模式在进程启动时解析一次，改完需重连客户端
 - **路由调用**：把调用转发给 `kind=mcp` 工具对应的后端 MCP Server
 - **进程管理**：管理后端 MCP 子进程的启停、状态、日志
@@ -120,7 +120,7 @@ policy / usage / 生命周期仍走同一个 `dispatch_tool` 出口。模式只�
 | **`default`** | 29 | lazy + 7 个高频意图工具（文件搜索、打开路径/应用、Steam 游戏、启动器动作） |
 | **`full`** | 33 | default + 4 个低频/执行面工具（文件元信息、Everything 状态、winget 搜索/安装） |
 
-配置：`AWAM_EXPOSURE_MODE` 环境变量 > `AWAM_EXPOSURE_FILE` 指向的 JSON
+配置：`EXPOSURE_MODE` 环境变量 > `EXPOSURE_FILE` 指向的 JSON
 （`{"mode": "default"}`，默认路径 `data/exposure.json`）> `lazy`。取值非法或文件损坏
 会在启动时快速失败。模式在进程启动时解析一次，**改完需重连 MCP 客户端**才会拿到新的
 `tools/list` 与 instructions。

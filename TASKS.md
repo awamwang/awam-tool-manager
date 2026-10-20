@@ -1041,7 +1041,7 @@
 - [x] **三种模式是同一张声明表的不同切片** - `ServerToolSpec` 新增 `exposure` 元组：
       `lazy` 22（旧契约原样）、`default` 29（+7 意图前门）、`full` 33（再 +4 补充工具）。
       `build_mcp_tools(mode)` 与 `dispatch_tool` 同源过滤，schema / 注解 / handler 不复制第二份
-- [x] **模式解析与 instructions** - `AWAM_EXPOSURE_MODE` > `data/exposure.json` 的 `mode` >
+- [x] **模式解析与 instructions** - `EXPOSURE_MODE` > `data/exposure.json` 的 `mode` >
       `lazy`；进程启动解析一次（客户端重连才看到新 `tools/list`），非法取值快速失败。
       `initialize.instructions` 由 `exposure._FAMILIES` 同一张表按模式生成；lazy 的规则文本
       不点名任何不可见工具（有守卫测试逐名检查）
