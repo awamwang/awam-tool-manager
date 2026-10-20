@@ -25,8 +25,10 @@ execute 路径 / `install_package` / `launch_package`）只调它，不再各自
 - app：条目未标 `destructive` → 放行；标了 → 执行启动需
   `allowDestructive=true`（启动即子操作，无更细粒度可言）。
 - package（P2-07 包管理面）：**没有条目可标**，破坏性由操作本身定且 fail-closed——
-  不在 `PACKAGE_CONFIRMED_OPS`（目前只有 `launch_package`）里的包操作都要
-  `allowDestructive=true`；`launch_package` 放行但仍留审计行。
+  不在 `PACKAGE_CONFIRMED_OPS`（启动类：`launch_package` / `open_app`）里的包
+  操作都要 `allowDestructive=true`；白名单内放行但仍留审计行。
+- path（open_path 路径面）：只有打开可执行文件/脚本才算破坏性；`reveal=true`
+  只定位不执行，永远放行。后缀判定不读文件系统，handler 已先确认路径存在。
 
 审计（Q4 裁决：Phase 1 只 stderr）：每次判定（放行/拒绝/确认放行）产出
 一行结构化 JSON 到 stderr，字段 `ts / tool / kind / sub_op / decision /
@@ -122,15 +124,43 @@ RULE_DESTRUCTIVE_TOOLS_MISS = "destructive_tools_miss"
 RULE_DESTRUCTIVE_ACTIONS_MATCH = "destructive_actions_match"
 RULE_DESTRUCTIVE_ACTIONS_MISS = "destructive_actions_miss"
 RULE_PACKAGE_DESTRUCTIVE = "package_destructive"
+RULE_PATH_EXECUTABLE = "path_executable"
 RULE_UNKNOWN_KIND = "unknown_kind"
 
 # 包管理里「不改动已装清单」的对外工具名白名单，其余一律按破坏性处理。
 # 方向是刻意反着写的：新增 `uninstall_package` / `update_package` 时**默认就要
 # 授权**（fail-closed），忘了登记只会多一次确认；反过来维护「破坏性名单」
 # 才是危险的那一侧——漏一个就静默免检。
-# `launch_package` 在放行名单内：它起的是用户早已装好的程序，与 `launch_tool`
-# 同一等级，门禁是「必须显式传 execute=true」，不是 allowDestructive。
-PACKAGE_CONFIRMED_OPS = frozenset({"launch_package"})
+# `launch_package` / `open_app` 在放行名单内：起的是用户早已装好的程序，与
+# `launch_tool` 同一等级，门禁是「必须显式传 execute=true」，不是 allowDestructive。
+PACKAGE_CONFIRMED_OPS = frozenset({"launch_package", "open_app"})
+
+# 会被系统当作可执行代码打开的后缀。open_path 的目标是这些时，一次「打开」
+# 等价于一次启动，必须走 allowDestructive 确认（.lnk 可指向任意目标，同样算）。
+_EXECUTABLE_SUFFIXES = frozenset(
+    {
+        ".exe",
+        ".com",
+        ".bat",
+        ".cmd",
+        ".ps1",
+        ".psm1",
+        ".vbs",
+        ".vbe",
+        ".js",
+        ".jse",
+        ".wsf",
+        ".wsh",
+        ".msi",
+        ".msix",
+        ".msixbundle",
+        ".appx",
+        ".appxbundle",
+        ".scr",
+        ".pif",
+        ".lnk",
+    }
+)
 
 
 def _utc_now_iso() -> str:
@@ -278,6 +308,41 @@ def _decide_package(
     )
 
 
+def _decide_path(
+    sub_op: dict
+) -> tuple[bool, str, str, str]:
+    """open_path 判定表。返回四元组同其他 `_decide_*`。
+
+    `reveal=true` 只让资源管理器选中路径、不执行目标，因此无论后缀都放行。
+    其余情况下，可执行文件/脚本的一次「打开」等价于一次启动，按 fail-closed
+    要求 `allowDestructive=true`；普通文档/文件夹/图片等照常放行。
+    后缀判定不碰文件系统：handler 在调用前已确认路径存在，且 `Path.suffix`
+    对缺失文件同样稳定（策略层保持纯函数，便于单测与审计复现）。
+    """
+    path = str(sub_op.get("path") or "")
+    if sub_op.get("reveal"):
+        return (
+            False,
+            RULE_NOT_DESTRUCTIVE,
+            f"路径 '{path}' 只做定位（reveal=true），不执行目标",
+            "",
+        )
+    suffix = Path(path).suffix.lower()
+    if suffix in _EXECUTABLE_SUFFIXES:
+        return (
+            True,
+            RULE_PATH_EXECUTABLE,
+            f"路径 '{path}' 是可执行文件/脚本（{suffix}）",
+            "，需显式传 allowDestructive=true 才会打开",
+        )
+    return (
+        False,
+        RULE_NOT_DESTRUCTIVE,
+        f"路径 '{path}' 不是可执行文件/脚本，放行",
+        "",
+    )
+
+
 def _decide_app(
     tool: dict | None, sub_op: dict
 ) -> tuple[bool, str, str, str]:
@@ -382,12 +447,13 @@ def decide_destructive(
     """破坏性门禁的唯一判定入口。
 
     Args:
-        kind: `"mcp"` / `"launcher"` / `"app"` / `"package"`（其他值放行——
-            新增 kind 必须显式接入判定表，默认不拦以免拖垮未知类型）。
+        kind: `"mcp"` / `"launcher"` / `"app"` / `"package"` / `"path"`（其他值
+            放行——新增 kind 必须显式接入判定表，默认不拦以免拖垮未知类型）。
         tool: 工具条目（`registry.get_tool()` 的返回）；None 表示工具不存在。
         sub_op: 子操作标识。mcp → `{"tool_name": str}`；launcher →
             `{"action_id", "action_name", "action_type"}`；app → `{}` 或
-            `{"action": str}`（执行入口名，只用于审计标注）。值可为 None/空串。
+            `{"action": str}`（执行入口名，只用于审计标注）；path →
+            `{"path": str, "reveal": bool}`。值可为 None/空串。
         args: 对外工具的调用参数——只读取 `allowDestructive` 用于审计
             `client_declared`，判定本身与客户端声明无关。
 
@@ -424,6 +490,10 @@ def decide_destructive(
         required, rule_hit, subject, tail = _decide_package(tool, sub_op)
         sub_op_label = str(sub_op.get("package") or "")
         audit_action = str(sub_op.get("action") or "")
+    elif kind == "path":
+        required, rule_hit, subject, tail = _decide_path(sub_op)
+        sub_op_label = str(sub_op.get("path") or "")
+        audit_action = "open_path"
     else:
         required, rule_hit, tail = False, RULE_UNKNOWN_KIND, ""
         subject = f"未知 kind '{kind}'，放行"

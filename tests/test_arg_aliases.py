@@ -316,8 +316,10 @@ async def _noop_handler(arguments: dict, ctx) -> dict:
 
 
 def test_build_mcp_tools_still_covers_all_specs():
-    """别名改造没碰工具集本身：22 个工具一个不少、顺序不变"""
-    assert [t.name for t in build_mcp_tools()] == [s.name for s in SERVER_TOOL_SPECS]
+    """别名改造没碰工具集本身：full 模式下 33 个工具一个不少、顺序不变"""
+    assert [t.name for t in build_mcp_tools("full")] == [
+        s.name for s in SERVER_TOOL_SPECS
+    ]
 
 
 # ---- 6. 必填名由 description 承载，别名按预算收敛 ----
@@ -359,7 +361,7 @@ def test_wire_tools_carry_both_description_hint_and_alias_props():
     机制仍在、外面收到的仍是旧契约，这条会红。
     """
     by_name = {s.name: s for s in SERVER_TOOL_SPECS}
-    for tool in build_mcp_tools():
+    for tool in build_mcp_tools("full"):
         spec = by_name[tool.name]
         for name in spec.input_schema.get("required", []):
             assert name in tool.description, f"{tool.name}: 上线描述没提必填 {name}"
@@ -378,11 +380,16 @@ def test_default_alias_table_is_the_agreed_minimum():
 
 
 def test_alias_property_budget():
-    """别名属性总数钉死。别名属性平均 111 字符/个，且全表 schema 要整体下发给调用方。"""
+    """别名属性总数钉死。别名属性平均 111 字符/个，且全表 schema 要整体下发给调用方。
+
+    26 = 原 22 + 4 个意图级搜索工具的 `keyword ← query`（search_files /
+    search_games / search_actions / search_winget_packages）。新增别名必须
+    连同上下文成本一起过（见源码注释）。
+    """
     total = 0
     for spec in SERVER_TOOL_SPECS:
         total += sum(len(aliases) for aliases in tool_specs.aliases_for(spec).values())
-    assert total == 22
+    assert total == 26
 
 
 @pytest.mark.parametrize(

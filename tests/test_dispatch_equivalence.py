@@ -92,8 +92,13 @@ def _probe_managers(monkeypatch):
     monkeypatch.setattr(server.launcher_manager, "run_action", _fail_async)
 
 
-def test_every_spec_name_is_dispatchable(_probe_managers):
-    """每个 spec 名字各调一次 dispatch_tool：允许业务失败，只禁止 unknown_tool"""
+def test_every_spec_name_is_dispatchable(_probe_managers, monkeypatch):
+    """每个 spec 名字各调一次 dispatch_tool：允许业务失败，只禁止 unknown_tool
+
+    声明表含 lazy/default/full 三层工具，这里切到 full 模式，确保 33 个
+    spec 的 handler 全部接上；暴露切片本身由 test_exposure.py 单独守卫。
+    """
+    monkeypatch.setattr(server, "EXPOSURE_MODE", "full")
     for spec in SERVER_TOOL_SPECS:
         try:
             run(server.dispatch_tool(spec.name, {"tool_id": "__probe_no_such__"}))

@@ -17,6 +17,11 @@ description: 统一工具管理器，维护本机工具名单，提供统一的�
   精确匹配，条目未写时按 `installed` 计）与 `publisher`（发布者，子串、大小写不敏感）
   收窄，多个维度取交集
 - **MCP 服务**：作为 MCP Server 暴露给 AI 客户端（stdio 模式）
+- **暴露模式**：`AWAM_EXPOSURE_MODE` 控制 `tools/list` 的切片与
+  `initialize.instructions` 的能力清单——`lazy`（默认，22 个管理工具，长尾走路由组合）、
+  `default`（29 个，补 7 个高频意图工具）、`full`（33 个，再补文件元信息、Everything
+  状态与 winget 搜索/安装）。也可用 `AWAM_EXPOSURE_FILE` 指向 JSON 配置文件
+  （`{"mode": "default"}`），环境变量优先；模式在进程启动时解析一次，改完需重连客户端
 - **路由调用**：把调用转发给 `kind=mcp` 工具对应的后端 MCP Server
 - **进程管理**：管理后端 MCP 子进程的启停、状态、日志
 - **目录同步**：拉取后端 MCP 的子工具清单并缓存到本地
@@ -42,12 +47,13 @@ description: 统一工具管理器，维护本机工具名单，提供统一的�
   回落版本目录并如实标 `current_broken`）、搜可装包读 `buckets/*/*.json` 的文件名、
   挑启动入口看 `shortcuts` / `bin` / `shims/<包名>`。启动与安装都要显式
   `execute=true`；安装额外要 `allowDestructive=true`（`kind=package` 门禁是
-  fail-closed 的，见「安全约定」）。`winget` / `npm` 没有可靠的纯读盘来源，属执行面，
-  尚未接线（`winget` 另立项再接；**`npm` 决定不接**，见 TASKS.md P0）
-- **Steam 游戏库**：`kind=launcher` + `launcher.type=steam`，用现成的三个启动器工具
-  （`sync_launcher_actions` / `list_launcher_actions` / `run_launcher_action`）覆盖，
-  **没有新增对外 MCP 工具**。清单自己读盘：`libraryfolders.vdf` 出库、`appmanifest_*.acf`
-  出游戏，动作 id 是 `app:<appid>`；根目录以注册表 `HKCU\Software\Valve\Steam\SteamPath`
+  fail-closed 的，见「安全约定」）。`winget` 没有可靠的纯读盘来源，属执行面，
+  full 模式以 `search_winget_packages` / `install_winget_package` 两个意图工具接入
+  （底层仍是 `winget-mcp` 后端）；**`npm` 决定不接**，见 TASKS.md P0
+- **Steam 游戏库**：`kind=launcher` + `launcher.type=steam`，lazy 模式下用现成的三个
+  启动器工具（`sync_launcher_actions` / `list_launcher_actions` / `run_launcher_action`）
+  覆盖；default/full 额外提供意图级 `search_games` / `open_game`。清单自己读盘：
+  `libraryfolders.vdf` 出库、`appmanifest_*.acf` 出游戏，动作 id 是 `app:<appid>`；根目录以注册表 `HKCU\Software\Valve\Steam\SteamPath`
   为权威（条目 `dataDir` 优先，两处都没有再穷举常见安装位置）。**以 acf 为准**——
   vdf 里声明的 appid 只是「曾经装过」，盘上没有 acf 就是没装着，这类库会进
   `missingLibraries` 且 `source=partial`，不会造出一批点不开的游戏。启动走
@@ -101,6 +107,24 @@ awam-tool-manager/
 
 后端相关工具统一使用 **`tool_id`** 指定目标工具（不存在 `mcp_tool_id` / `launcher_id`）。
 
+### 暴露模式（lazy / default / full）
+
+三种模式是**同一张声明表**（`src/tool_specs.py`）的不同切片，治理逻辑不分叉：
+policy / usage / 生命周期仍走同一个 `dispatch_tool` 出口。模式只决定
+`tools/list` 下发哪些工具名，以及 `initialize.instructions` 列出哪些能力；
+**未暴露的工具在 dispatch 侧同样按 `unknown_tool` 拒绝**（名字没下发不是安全边界）。
+
+| 模式 | 工具数 | 内容 |
+|---|---|---|
+| **`lazy`**（默认） | 22 | 保持改造前的管理工具；文件/游戏/动作走 `search_tools → start_backend → list_backend_tools → call_backend_tool` 或启动器三件套 |
+| **`default`** | 29 | lazy + 7 个高频意图工具（文件搜索、打开路径/应用、Steam 游戏、启动器动作） |
+| **`full`** | 33 | default + 4 个低频/执行面工具（文件元信息、Everything 状态、winget 搜索/安装） |
+
+配置：`AWAM_EXPOSURE_MODE` 环境变量 > `AWAM_EXPOSURE_FILE` 指向的 JSON
+（`{"mode": "default"}`，默认路径 `data/exposure.json`）> `lazy`。取值非法或文件损坏
+会在启动时快速失败。模式在进程启动时解析一次，**改完需重连 MCP 客户端**才会拿到新的
+`tools/list` 与 instructions。
+
 ### 入参别名与参数名披露
 
 规范名只有一个（上表的参数名），但**调用方写别名也能通**：`inputSchema` 导出时把
@@ -119,12 +143,13 @@ awam-tool-manager/
 | 规范名 | 可接受别名 | 生效范围 |
 |---|---|---|
 | **`tool_id`** | **`id`** | 14 个带 `tool_id` 的工具；`run_launcher_action` 例外（它的 `id` 归 `action_id`，`tool_id` 只认规范名） |
-| **`keyword`** | **`query`** | `search_tools`、`search_packages`、`list_launcher_actions` |
+| **`keyword`** | **`query`** | `search_tools`、`search_packages`、`list_launcher_actions`、`search_files`、`search_games`、`search_actions`、`search_winget_packages` |
 | **`package`** | **`name`** | `launch_package`、`install_package` |
 | **`tool_name`**（后端子工具名） | **`name`** | 仅 `call_backend_tool` |
 | **`action_id`** / **`action_name`** | **`id`** / **`name`** | 仅 `run_launcher_action` |
 
-19/22 个工具带别名（`list_tools`、`discover_tools`、`list_packages` 无必填参数，不带别名）。
+23/33 个工具带别名（`list_tools`、`discover_tools`、`list_packages` 等 10 个无必填参数或
+无可别名参数，不带别名）。
 不再接受的写法：camelCase `toolId` / `actionId` / `actionName`（与全表 snake_case 自相
 矛盾）、`q` / `text` / `pkg`（生态里没有这条惯例）、`log_level`（`level` 才是 syslog 的
 标准写法，方向本来就是反的）、`tool_id ← name`（MCP 协议自己的 `tools/call.name` 指
@@ -157,6 +182,33 @@ awam-tool-manager/
 | `search_packages` | `keyword`(必填)、`manager`、`limit` | 在已添加 bucket 的清单里搜可安装的包：按 manifest 文件名筛（本机 4 个 bucket / 4287 份清单），命中才读 JSON，**纯读盘、不 spawn**；排序为完全同名 → 前缀 → 包含，`limit` 默认 20、越界收敛到 1~100；无命中要说「已知 bucket 里没有」而不是「装不了」 |
 | `launch_package` | `manager`、`package`(必填)、`entry`、`execute`、`wait` | 启动已安装的包：入口按 **快捷方式 → bin → shim** 取，只挑「文件在盘上且扩展名可直接 spawn」的候选（真机实测 `.ps1` 抛 WinError 193，不可直接起）；**默认只预览**（回 `path` / `kind` / 全部候选及其 `exists`/`runnable`），显式 `execute=true` 才与 `launch_tool` 走同一条 spawn 路径；不改动已装清单，故不要求 `allowDestructive`（但留门禁审计行） |
 | `install_package` | `manager`、`package`(必填)、`execute`、`allowDestructive`、`timeout` | 安装一个包：默认只回将要执行的 `argv` 与 `alreadyInstalled`；真的装要**同时**传 `execute=true`（意图）+ `allowDestructive=true`（授权）——门禁 `kind=package` 是 fail-closed 的（不看条目标记，名单外操作一律要确认；策略 `destructive.mode=deny` 时客户端无法自解）；命令跑完再读回 `apps/<包>`，退出码 0 却读不到时明示「不要当成安装成功」 |
+
+#### default 追加的意图工具（7 个）
+
+这一层让模型**看到工具名就知道能力存在**，不必先走路由组合。所有打开/执行类工具
+默认只预览，`execute=true` 才产生副作用；破坏性目标另需 `allowDestructive=true`；
+匹配到多个候选时只返回列表，绝不自动选一个执行。
+
+| 工具名 | 参数 | 说明 |
+|---|---|---|
+| `search_files` | `keyword`(必填)、`limit`、`match_path`、`match_case`、`regex` | 用 Everything 索引全盘搜索文件/文件夹；后端未运行会**自动启动**；结果含 `path/fullPath/size/modified/extension/isFolder` |
+| `open_path` | `path`(必填)、`reveal`、`execute`、`allowDestructive` | 用系统默认程序打开文件/文件夹，或 `reveal=true` 在资源管理器定位；默认只预览 `exists/size/modified`；可执行文件/脚本（`.exe`/`.bat`/`.ps1`/`.msi`/`.lnk` 等）打开等价于启动，需 `allowDestructive=true`（`kind=path` 门禁） |
+| `open_app` | `name`(必填)、`execute`、`allowDestructive`、`wait` | 按名称启动已登记应用、Steam 客户端或 scoop 已装包；名称先精确匹配再子串匹配；多候选只返回列表 |
+| `search_games` | `keyword`、`limit` | 搜索 Steam 已安装游戏（名称或 appid；省略则列全部），返回 `appid/actionId/name/installedDir/library/sizeOnDisk/lastPlayed` |
+| `open_game` | `game`(必填)、`execute`、`allowDestructive`、`wait` | 按游戏名或纯数字 appid 启动 Steam 游戏；默认只回 `commandPreview`；多候选不自动选；Steam 条目标了 destructive，执行需 `allowDestructive=true` |
+| `search_actions` | `keyword`(必填)、`source`、`limit` | 跨 Quicker / uTools 搜索快捷动作（名称、描述、关键词、动作 ID），返回 `source/toolId/actionId/name`；`source` 可限定单个启动器 |
+| `run_action` | `action`(必填)、`source`、`param`、`execute`、`allowDestructive`、`wait` | 按动作 ID 或唯一名称执行 Quicker / uTools 动作；默认只预览解析结果；已知原始 ID 时可传 `source` 直调；三个启动器条目都标了 destructive |
+
+#### full 追加的补充工具（4 个）
+
+低频查询与执行面工具，默认模式下不占用工具名预算。
+
+| 工具名 | 参数 | 说明 |
+|---|---|---|
+| `get_file_info` | `path`(必填) | 查询单个文件/文件夹的元数据（大小、创建/修改时间、属性）；路径不存在返回 `exists=false`；后端未运行会自动启动 |
+| `get_everything_status` | 无 | 查看 Everything 后端与索引状态；**只读，不自动启动后端**（避免「查状态」改变状态） |
+| `search_winget_packages` | `keyword`、`upgradeable` | 用 winget 搜索可安装包；`keyword` 省略且 `upgradeable=true` 时列出可升级项；自动启动 `winget-mcp` 后端 |
+| `install_winget_package` | `identifier`(必填)、`upgrade_only`、`source`、`execute`、`allowDestructive` | 用 winget 安装/升级；默认只回参数预览；执行需 `execute=true` + `allowDestructive=true`（`kind=mcp` 门禁，底层调用 `install-winget-package`） |
 
 > `kind=launcher`（启动器，如 Quicker / uTools / Steam）不是 MCP：没有长连接，调用是一次性的。
 > - **Quicker**：`QuickerStarter.exe -c<秒> "runaction:<ID或名称>?参数"`，stdout 回传动作

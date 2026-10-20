@@ -414,6 +414,14 @@ def test_package_gate_is_fail_closed(monkeypatch):
     assert launch["required_confirm"] is False
     assert launch["audit"]["decision"] == "allow", "放行也要有审计行"
 
+    open_app = _decide(
+        "package",
+        {"id": "scoop:7zip"},
+        {"action": "open_app", "package": "7zip"},
+    )
+    assert open_app["blocked"] is False, "open_app 与 launch_package 同属启动面"
+    assert open_app["audit"]["action"] == "open_app"
+
     # 策略 deny：客户端传 allowDestructive 也解不开（与 app 种同款语义）
     monkeypatch.setattr(
         policy, "_POLICY", {**policy.get_policy(), "destructive": {"mode": "deny"}}
@@ -441,3 +449,37 @@ def test_package_gate_audit_labels_follow_operation(capsys):
     assert [l["sub_op"] for l in lines] == ["7zip", "yt-dlp"]
     assert [l["kind"] for l in lines] == ["package", "package"]
     assert [l["decision"] for l in lines] == ["allow", "block"]
+
+
+# ---- 7. path 种（open_path 路径面）----
+
+
+def test_path_gate_only_guards_executables():
+    """普通文档/文件夹直接放行；可执行文件/脚本要确认；reveal 只定位不执行"""
+    for suffix in (".exe", ".bat", ".ps1", ".msi", ".lnk"):
+        decision = _decide(
+            "path", None, {"path": rf"C:\tmp\setup{suffix}", "reveal": False}
+        )
+        assert decision["required_confirm"] is True, suffix
+        assert decision["blocked"] is True, suffix
+        assert decision["audit"]["rule_hit"] == "path_executable"
+        assert decision["audit"]["action"] == "open_path"
+
+        confirmed = _decide(
+            "path",
+            None,
+            {"path": rf"C:\tmp\setup{suffix}", "reveal": False},
+            {"allowDestructive": True},
+        )
+        assert confirmed["blocked"] is False, suffix
+        assert confirmed["audit"]["client_declared"] is True
+
+        reveal = _decide(
+            "path", None, {"path": rf"C:\tmp\setup{suffix}", "reveal": True}
+        )
+        assert reveal["blocked"] is False, f"{suffix} reveal 只定位，不应要求确认"
+
+    for path in (r"C:\tmp\notes.txt", r"C:\tmp\photos", r"C:\tmp\archive.7z"):
+        decision = _decide("path", None, {"path": path, "reveal": False})
+        assert decision["blocked"] is False, path
+        assert decision["audit"]["rule_hit"] == "not_destructive"

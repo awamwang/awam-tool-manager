@@ -30,8 +30,13 @@ def record_call(
     ok: bool,
     error_type: str | None = None,
     duration_ms: int = 0,
+    target: str | None = None,
 ) -> None:
     """记一行调用统计。
+
+    `target` 由 dispatch 显式传入时优先（意图工具的真实目标是解析出来的
+    tool_id / scoop 包 / 后端，而不是调用参数里的某个字段）；未传时保持
+    旧口径——取 `arguments["tool_id"]`。
 
     旁路设施：**任何**落盘失败只往 stderr 告警，绝不向上抛——
     「统计写不进去」不该变成「工具调用失败」。
@@ -40,7 +45,7 @@ def record_call(
     row = {
         "ts": datetime.now().astimezone().isoformat(timespec="seconds"),
         "tool": tool,
-        "target": str(args.get("tool_id") or ""),
+        "target": str(target if target is not None else (args.get("tool_id") or "")),
         "ok": bool(ok),
         "ms": max(0, int(duration_ms)),
     }

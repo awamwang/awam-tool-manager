@@ -56,11 +56,16 @@ from tool_specs import (
     ToolContext,
     build_mcp_tools,
     get_spec,
+    is_exposed,
     normalize_arguments,
 )
 # ARC-P1-05 Phase 2：部署策略（data/policy.json）的 dispatch 前置检查。
 # policy 在 import 期加载并校验策略（坏策略快速失败，不在这里处理）。
 from policy import check_call
+# 暴露模式（lazy / default / full）：进程启动时解析一次，决定 tools/list 的
+# 切片与 initialize.instructions 的内容。dispatch 侧用同一份模式做兜底门禁
+# ——「名字没下发」不能当成安全边界。
+import exposure
 # P3 使用统计：dispatch 出口记一行。**按模块引用**（不是 import 函数名），
 # 单测才能 monkeypatch `usage.USAGE_LOG` 把统计写进 tmp。
 import usage
@@ -77,8 +82,14 @@ registry = ToolRegistry(store)
 backend_manager = BackendManager(store)
 launcher_manager = LauncherManager(registry, store)
 
-# 创建 MCP Server
-app = Server("awam-tool-manager")
+# 暴露模式：环境变量 > data/exposure.json > lazy（非法配置在 import 期快速失败）
+EXPOSURE_MODE = exposure.resolve_exposure_mode()
+
+# 创建 MCP Server（instructions 按模式生成：能力清单是「主动告知」的唯一通道）
+app = Server(
+    "awam-tool-manager",
+    instructions=exposure.build_instructions(EXPOSURE_MODE),
+)
 
 
 def log(msg: str):
@@ -104,7 +115,7 @@ async def list_tools() -> list[Tool]:
     log("收到 list_tools 请求")
     # P1-04：定义由 tool_specs 声明表统一产出（annotations / outputSchema 在
     # build_mcp_tools() 内挂载），此处只保留两行日志。
-    tools = build_mcp_tools()
+    tools = build_mcp_tools(EXPOSURE_MODE)
 
     log(f"返回 {len(tools)} 个工具定义")
     return tools
@@ -173,17 +184,25 @@ async def dispatch_tool(name: str, arguments: dict) -> str:
     # 副作用面只有运行时目录里多一行 usage.log（TASKS 申报 NE-9）。
     started = time.perf_counter()
 
-    def _record(ok: bool, error_type: str | None = None) -> None:
+    def _record(
+        ok: bool, error_type: str | None = None, target: str | None = None
+    ) -> None:
         usage.record_call(
             name,
             arguments,
             ok=ok,
             error_type=error_type,
             duration_ms=int((time.perf_counter() - started) * 1000),
+            target=target,
         )
 
     spec = get_spec(name)
     if spec is None:
+        _record(False, ErrorType.UNKNOWN_TOOL)
+        fail(f"未知工具: {name}", error_type=ErrorType.UNKNOWN_TOOL, toolName=name)
+    # 暴露模式兜底：未下发的工具在协议面等同于不存在（不泄露「有这个工具但
+    # 没开」），与未知工具走同一条错误/埋点路径。
+    if not is_exposed(spec, EXPOSURE_MODE):
         _record(False, ErrorType.UNKNOWN_TOOL)
         fail(f"未知工具: {name}", error_type=ErrorType.UNKNOWN_TOOL, toolName=name)
     # ARC-P1-05 Phase 2：策略层先于 handler——deny 名单 / 白名单命中即拒绝
@@ -207,7 +226,12 @@ async def dispatch_tool(name: str, arguments: dict) -> str:
         # 原样再抛：交给 call_tool 转成 internal_error（与埋点前的控制流一致）
         _record(False, ErrorType.INTERNAL_ERROR)
         raise
-    _record(True)
+    # 意图工具用 `_usageTarget` 标注真实目标（后端 / scoop 包 / 启动器），
+    # 该字段只进统计，不进对外载荷。
+    usage_target = None
+    if isinstance(payload, dict):
+        usage_target = payload.pop("_usageTarget", None)
+    _record(True, target=usage_target)
     return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 
 
@@ -482,6 +506,11 @@ async def main():
     log("awam-tool-manager MCP Server 启动中...")
     log(f"数据目录: {DATA_DIR}")
     log(f"运行时目录: {RUNTIME_DIR}")
+    log(
+        f"暴露模式: {EXPOSURE_MODE}"
+        f"（本次下发 {len(exposure.exposed_tool_names(EXPOSURE_MODE))} 个工具；"
+        f"可选: {', '.join(exposure.MODES)}）"
+    )
 
     # 旧版本把运行时数据写在仓库里（data/backend-tools、data/launcher-actions、
     # 根目录的 backend_desired_state.json），这里搬到运行时目录。只搬目标不存在的，

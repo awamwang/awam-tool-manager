@@ -25,6 +25,13 @@ import tool_specs  # noqa: E402
 from tool_specs import SERVER_TOOL_SPECS, build_mcp_tools  # noqa: E402
 
 GOLDEN_PATH = ROOT / "tests" / "golden" / "tools_list.json"
+# lazy 的 golden 是改造前 HEAD 采集的独立基线；default/full 是新模式的
+# 切片基线（由同一张声明表生成，逐位锁定导出顺序与字段）。
+GOLDEN_PATHS = {
+    "lazy": GOLDEN_PATH,
+    "default": ROOT / "tests" / "golden" / "tools_list.default.json",
+    "full": ROOT / "tests" / "golden" / "tools_list.full.json",
+}
 
 # MCP 协议 hints 全集。这里**独立手写**而不从 tool_specs  import：两边各自
 # 持一份，任一边漂移都会让下面的断言变红。
@@ -54,31 +61,44 @@ def _fields(tool):
     }
 
 
-def test_build_mcp_tools_matches_golden():
-    """声明层无损：全部 Tool 的五字段与 HEAD 采集的 golden 逐位全等（含顺序）"""
-    golden = json.loads(GOLDEN_PATH.read_text(encoding="utf-8"))
-    actual = [_fields(t) for t in build_mcp_tools()]
-    assert actual == golden, "build_mcp_tools() 与 golden 不一致（字段或顺序漂移）"
+@pytest.mark.parametrize("mode", ["lazy", "default", "full"])
+def test_build_mcp_tools_matches_golden(mode):
+    """声明层无损：该模式下全部 Tool 的五字段与 golden 逐位全等（含顺序）"""
+    golden = json.loads(GOLDEN_PATHS[mode].read_text(encoding="utf-8"))
+    actual = [_fields(t) for t in build_mcp_tools(mode)]
+    assert actual == golden, (
+        f"build_mcp_tools({mode!r}) 与 golden 不一致（字段或顺序漂移）"
+    )
 
 
-def test_spec_names_three_way_consistency():
-    """三方一致：spec 表名集合 == conftest 手写清单 == list_tools() 名集合。
+def test_spec_names_three_way_consistency(monkeypatch):
+    """三方一致：spec 表 == 手写全量清单 == 各模式下 list_tools() 的切片。
 
-    conftest.EXPECTED_TOOL_NAMES 保持手写不动（不许改既有断言），由本测试
-    断言它与 spec 表、与协议出口三方一致——忘了改会红。
+    conftest 的清单按模式分层手写，断言它与 spec 表、与协议出口逐模式一致
+    ——忘了改会红。
     """
-    from conftest import EXPECTED_TOOL_NAMES
+    from conftest import (
+        EXPECTED_TOOL_NAMES_DEFAULT,
+        EXPECTED_TOOL_NAMES_FULL,
+        EXPECTED_TOOL_NAMES_LAZY,
+    )
 
     spec_names = {s.name for s in SERVER_TOOL_SPECS}
-    listed_names = {t.name for t in asyncio.run(server.list_tools())}
-    assert spec_names == EXPECTED_TOOL_NAMES, (
-        f"spec 表与手写清单不一致：多出 {spec_names - EXPECTED_TOOL_NAMES}，"
-        f"缺少 {EXPECTED_TOOL_NAMES - spec_names}"
+    assert spec_names == EXPECTED_TOOL_NAMES_FULL, (
+        f"spec 表与手写清单不一致：多出 {spec_names - EXPECTED_TOOL_NAMES_FULL}，"
+        f"缺少 {EXPECTED_TOOL_NAMES_FULL - spec_names}"
     )
-    assert listed_names == EXPECTED_TOOL_NAMES, (
-        f"list_tools() 与手写清单不一致：多出 {listed_names - EXPECTED_TOOL_NAMES}，"
-        f"缺少 {EXPECTED_TOOL_NAMES - listed_names}"
-    )
+    for mode, expected in (
+        ("lazy", EXPECTED_TOOL_NAMES_LAZY),
+        ("default", EXPECTED_TOOL_NAMES_DEFAULT),
+        ("full", EXPECTED_TOOL_NAMES_FULL),
+    ):
+        monkeypatch.setattr(server, "EXPOSURE_MODE", mode)
+        listed_names = {t.name for t in asyncio.run(server.list_tools())}
+        assert listed_names == expected, (
+            f"list_tools() 在 {mode} 模式下与手写清单不一致："
+            f"多出 {listed_names - expected}，缺少 {expected - listed_names}"
+        )
 
 
 def test_every_spec_is_complete():

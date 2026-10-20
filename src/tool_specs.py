@@ -16,6 +16,7 @@ async def _handle_xxx」，`build_mcp_tools()` / `dispatch_tool` /
 """
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, TYPE_CHECKING
 
@@ -28,6 +29,7 @@ except ImportError:  # pragma: no cover
 
 from errors import ErrorType, ToolError, fail, ensure_success  # noqa: F401（handler 侧经本模块转手）
 from app_launcher import launch_app
+import file_ops
 # 发现清单走「环境变量指路径」而不是模块全局常量，所以按值 import 就够：
 # 单测用 monkeypatch.setenv("AWAM_DISCOVERY_FILE", ...) 换清单，不需要打补丁。
 from discovery import DiscoveryError, discover, load_manifest, note_for, resolve_discovery_path
@@ -94,9 +96,17 @@ class ServerToolSpec:
     annotations: dict | None = None
     output_schema: dict | None = None
     handler: Callable[..., Any] | None = None
+    # 本条工具在哪些暴露模式下可见（见 exposure.py 的 lazy/default/full）。
+    # 基线管理工具三种模式全可见；意图级前门工具至少 default；低频/执行面工具 full。
+    exposure: tuple[str, ...] = ("lazy", "default", "full")
     # 本条工具专属的「规范名 → 别名」覆盖。未列出的规范名回落
     # `DEFAULT_ARG_ALIASES`；列成空元组表示该规范名显式不接别名。
     arg_aliases: dict[str, tuple[str, ...]] | None = None
+
+
+def is_exposed(spec: ServerToolSpec, mode: str) -> bool:
+    """该模式是否暴露这条工具（未知模式一律不暴露，由配置层提前拦）。"""
+    return mode in spec.exposure
 
 
 # 所有工具的成功输出都带顶层 `success`（bool），其余字段随工具而异（如 list 类
@@ -1008,6 +1018,813 @@ async def _handle_install_package(arguments: dict, ctx: ToolContext) -> dict:
     return payload
 
 
+# ---- 意图级前门工具（default）与低频补充工具（full）----
+# 这些工具仍是同一张声明表里的普通条目：policy / usage / 生命周期走同一条
+# dispatch 出口。它们只做「解析目标 → 门禁 → 调用既有能力」，不复制后端实现。
+
+EVERYTHING_TOOL_ID = "everything-search-mcp"
+WINGET_TOOL_ID = "winget-mcp"
+STEAM_TOOL_ID = "steam"
+
+_BACKEND_RUNNING = "running"
+
+
+def _clamp_int(value: Any, *, default: int, low: int, high: int) -> int:
+    if value is None:
+        return default
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        fail(f"limit 必须是整数（收到: {value!r}）", error_type=ErrorType.INVALID_PARAMS)
+    return max(low, min(number, high))
+
+
+async def _ensure_backend_running(ctx: ToolContext, tool_id: str) -> dict:
+    """意图工具的前置：后端未运行就拉起（start_backend 自身幂等）。"""
+    status_res = ctx.backend_manager.get_backend_status(tool_id)
+    if not status_res.get("success"):
+        fail(
+            status_res.get("error") or f"MCP 工具 '{tool_id}' 未配置",
+            error_type=status_res.get("errorType") or ErrorType.CONFIG_ERROR,
+            toolId=tool_id,
+        )
+    status = (status_res.get("status") or {}).get("status")
+    if status == _BACKEND_RUNNING:
+        return status_res.get("status") or {}
+    ctx.log(f"意图工具自动启动后端: {tool_id}（当前状态: {status}）")
+    started = await ctx.backend_manager.start_backend(tool_id)
+    if not started.get("success"):
+        fail(
+            started.get("error") or f"启动后端失败: {tool_id}",
+            error_type=started.get("errorType") or ErrorType.CONNECTION_ERROR,
+            toolId=tool_id,
+        )
+    return started
+
+
+async def _call_backend_json(
+    ctx: ToolContext, tool_id: str, tool_name: str, arguments: dict
+) -> dict:
+    """调用后端子工具，并把后端返回的 JSON 文本展开成载荷。
+
+    后端（Everything / winget）返回的都是 `{success, ...}` 的 JSON 文本；
+    解析失败时保留 `result` 原文，不假装结构化。
+    """
+    res = ensure_success(
+        await ctx.backend_manager.call_backend_tool(tool_id, tool_name, arguments)
+    )
+    text = res.get("result")
+    payload: dict[str, Any] = {
+        "success": True,
+        "backend": tool_id,
+        "backendTool": tool_name,
+        "_usageTarget": tool_id,
+    }
+    if isinstance(text, str):
+        try:
+            parsed = json.loads(text)
+        except (TypeError, ValueError):
+            payload["result"] = text
+        else:
+            if isinstance(parsed, dict):
+                payload.update(parsed)
+            else:
+                payload["result"] = parsed
+    else:
+        payload["result"] = text
+    return payload
+
+
+def _launch_preview(launch: dict | None) -> str:
+    launch = launch or {}
+    return " ".join(
+        [str(launch.get("command") or ""), *(str(a) for a in launch.get("args") or [])]
+    ).strip()
+
+
+def _scoop_root() -> str | None:
+    try:
+        root, _ = pkgman.resolve_root("scoop")
+    except pkgman.PackageError:
+        return None
+    return root
+
+
+def _app_candidates(ctx: ToolContext, name: str) -> list[dict]:
+    """按名称解析可启动目标：已登记应用（含 Steam 客户端）→ scoop 已装包。"""
+    needle = name.strip().lower()
+    scored: list[tuple[int, dict]] = []
+
+    for tool in ctx.registry.list_all_tools():
+        launch = tool.get("launch")
+        if not launch:
+            continue
+        labels = [
+            str(tool.get("id") or ""),
+            str(tool.get("name") or ""),
+            str(tool.get("displayName") or ""),
+            *[str(tag) for tag in tool.get("tags") or []],
+        ]
+        lowered = [label.lower() for label in labels]
+        if needle in lowered:
+            score = 0
+        elif any(needle in label for label in lowered):
+            score = 1
+        else:
+            continue
+        scored.append(
+            (
+                score,
+                {
+                    "source": "app",
+                    "toolId": tool["id"],
+                    "kind": tool.get("kind"),
+                    "name": tool.get("displayName") or tool.get("name") or tool["id"],
+                    "commandPreview": _launch_preview(launch),
+                },
+            )
+        )
+
+    root = _scoop_root()
+    if root:
+        for row in pkgman.list_installed(root):
+            package = str(row.get("name") or "")
+            lowered = package.lower()
+            if needle == lowered:
+                score = 0
+            elif needle in lowered:
+                score = 1
+            else:
+                continue
+            target = pkgman.launch_target(row)
+            scored.append(
+                (
+                    score,
+                    {
+                        "source": "scoop",
+                        "package": package,
+                        "root": root,
+                        "state": row.get("state"),
+                        "version": row.get("version"),
+                        "path": target.get("path"),
+                        "launchable": bool(target.get("ok")),
+                        "reason": target.get("reason"),
+                    },
+                )
+            )
+
+    scored.sort(key=lambda item: (item[0], str(item[1].get("toolId") or item[1].get("package"))))
+    return [candidate for _, candidate in scored]
+
+
+async def _handle_search_files(arguments: dict, ctx: ToolContext) -> dict:
+    keyword = str(arguments.get("keyword") or "").strip()
+    backend_args: dict[str, Any] = {"query": keyword}
+    if arguments.get("limit") is not None:
+        backend_args["maxResults"] = _clamp_int(
+            arguments.get("limit"), default=20, low=1, high=200
+        )
+    if arguments.get("match_path"):
+        backend_args["matchPath"] = True
+    if arguments.get("match_case"):
+        backend_args["matchCase"] = True
+    if arguments.get("regex"):
+        backend_args["regex"] = True
+
+    await _ensure_backend_running(ctx, EVERYTHING_TOOL_ID)
+    payload = await _call_backend_json(
+        ctx, EVERYTHING_TOOL_ID, "search_files", backend_args
+    )
+    payload["keyword"] = keyword
+    return payload
+
+
+async def _handle_get_file_info(arguments: dict, ctx: ToolContext) -> dict:
+    path = str(arguments.get("path") or "").strip()
+    await _ensure_backend_running(ctx, EVERYTHING_TOOL_ID)
+    payload = await _call_backend_json(
+        ctx, EVERYTHING_TOOL_ID, "get_file_info", {"path": path}
+    )
+    payload["path"] = path
+    return payload
+
+
+async def _handle_get_everything_status(arguments: dict, ctx: ToolContext) -> dict:
+    """只读状态：不自动拉起后端（否则「查状态」本身会改变状态）。"""
+    status_res = ctx.backend_manager.get_backend_status(EVERYTHING_TOOL_ID)
+    if not status_res.get("success"):
+        fail(
+            status_res.get("error") or "Everything 后端未配置",
+            error_type=status_res.get("errorType") or ErrorType.CONFIG_ERROR,
+            toolId=EVERYTHING_TOOL_ID,
+        )
+    status = status_res.get("status") or {}
+    payload: dict[str, Any] = {
+        "success": True,
+        "toolId": EVERYTHING_TOOL_ID,
+        "backendStatus": status,
+        "_usageTarget": EVERYTHING_TOOL_ID,
+    }
+    if status.get("status") != _BACKEND_RUNNING:
+        payload["note"] = (
+            "Everything 后端未运行；调用 search_files / get_file_info 会自动启动它"
+        )
+        return payload
+    payload.update(
+        await _call_backend_json(ctx, EVERYTHING_TOOL_ID, "check_status", {})
+    )
+    payload["backendStatus"] = status
+    return payload
+
+
+async def _handle_open_path(arguments: dict, ctx: ToolContext) -> dict:
+    try:
+        path = file_ops.resolve_path(arguments.get("path"))
+        info = file_ops.describe_path(path)
+    except file_ops.FileOpError as exc:
+        fail(str(exc), error_type=ErrorType.INVALID_PARAMS)
+
+    reveal = bool(arguments.get("reveal"))
+    execute = bool(arguments.get("execute"))
+    payload: dict[str, Any] = {
+        "success": True,
+        **info,
+        "reveal": reveal,
+        "executed": False,
+    }
+
+    if not info["exists"]:
+        if execute:
+            fail(
+                f"路径不存在: {path}",
+                error_type=ErrorType.NOT_FOUND,
+                path=str(path),
+            )
+        payload["note"] = "路径不存在：本调用只做了预览，未执行"
+        return payload
+
+    if not execute:
+        payload["note"] = (
+            "未执行：传 execute=true 才会打开"
+            + ("（reveal=true 只定位所在文件夹）" if reveal else "")
+        )
+        return payload
+
+    decision = decide_destructive(
+        "path", None, {"path": str(path), "reveal": reveal}, arguments
+    )
+    if decision["blocked"]:
+        fail(decision["reason"], error_type=decision["error_type"], path=str(path))
+    if decision["required_confirm"]:
+        ctx.log(f"⚠️ 已确认打开可执行目标: {path}")
+
+    try:
+        opened = await file_ops.open_target(path, reveal=reveal)
+    except file_ops.FileOpError as exc:
+        fail(str(exc), error_type=ErrorType.RUNTIME_ERROR, path=str(path))
+    payload.update(opened)
+    payload["executed"] = True
+    return payload
+
+
+async def _handle_open_app(arguments: dict, ctx: ToolContext) -> dict:
+    name = str(arguments.get("name") or "").strip()
+    execute = bool(arguments.get("execute"))
+    candidates = _app_candidates(ctx, name)
+
+    if not candidates:
+        fail(
+            f"没有匹配「{name}」的可启动目标。可用 search_tools / list_tools 查已登记应用，"
+            "或用 list_packages 查 scoop 已装包",
+            error_type=ErrorType.NOT_FOUND,
+            name=name,
+        )
+    if len(candidates) > 1:
+        if execute:
+            fail(
+                f"「{name}」匹配到 {len(candidates)} 个目标，未执行；"
+                "请用更精确的名称重试",
+                error_type=ErrorType.INVALID_PARAMS,
+                name=name,
+                candidates=candidates[:20],
+            )
+        return {
+            "success": True,
+            "resolved": False,
+            "name": name,
+            "count": len(candidates),
+            "candidates": candidates[:20],
+            "executed": False,
+            "note": "匹配到多个目标，未执行；请用更精确的名称重试",
+        }
+
+    candidate = candidates[0]
+    payload: dict[str, Any] = {
+        "success": True,
+        "resolved": True,
+        "target": candidate,
+        "executed": False,
+        "_usageTarget": candidate.get("toolId") or f"scoop:{candidate.get('package')}",
+    }
+    if not execute:
+        payload["note"] = "未执行：传 execute=true 才会启动"
+        return payload
+
+    if candidate["source"] == "app":
+        tool = ctx.registry.get_tool(candidate["toolId"])
+        decision = decide_destructive(
+            "app", tool, {"action": "open_app"}, arguments
+        )
+        if decision["blocked"]:
+            fail(
+                decision["reason"],
+                error_type=decision["error_type"],
+                toolId=candidate["toolId"],
+            )
+        if decision["required_confirm"]:
+            ctx.log(f"⚠️ 已确认打开应用: {candidate['toolId']}")
+        exec_res = await launch_app(
+            (tool or {}).get("launch"),
+            candidate["toolId"],
+            candidate.get("name") or "",
+            arguments.get("wait"),
+        )
+    else:
+        package = candidate["package"]
+        root = candidate.get("root") or _scoop_root()
+        try:
+            row = pkgman.find_installed(root, package) if root else None
+            if row is None:
+                fail(
+                    f"scoop 里没有安装 '{package}'",
+                    error_type=ErrorType.NOT_FOUND,
+                    package=package,
+                )
+            target = pkgman.launch_target(row)
+        except pkgman.PackageError as exc:
+            fail(str(exc), error_type=exc.error_type, package=package)
+        if not target["ok"]:
+            fail(
+                f"无法确定 '{package}' 的可启动入口：{target['reason']}",
+                error_type=ErrorType.RUNTIME_ERROR,
+                package=package,
+                candidates=target["candidates"],
+            )
+        decision = decide_destructive(
+            "package",
+            {"id": f"scoop:{package}"},
+            {"action": "open_app", "package": package},
+            arguments,
+        )
+        if decision["blocked"]:
+            fail(decision["reason"], error_type=decision["error_type"], package=package)
+        if decision["required_confirm"]:
+            ctx.log(f"⚠️ 已确认打开 scoop 包: {package}")
+        exec_res = await launch_app(
+            {"type": "executable", "command": target["path"]},
+            f"scoop/{package}",
+            package,
+            arguments.get("wait"),
+        )
+
+    payload.update(exec_res)
+    payload["executed"] = True
+    return ensure_success(payload)
+
+
+def _launcher_tools(
+    ctx: ToolContext, source: str | None = None, *, include_steam: bool = False
+) -> list[dict]:
+    tools = []
+    for tool in ctx.registry.list_all_tools(kind="launcher"):
+        adapter = str((tool.get("launcher") or {}).get("type") or "")
+        if not include_steam and adapter == "steam":
+            continue
+        if source and adapter != source:
+            continue
+        tools.append(tool)
+    return tools
+
+
+def _steam_tool(ctx: ToolContext) -> dict:
+    for tool in ctx.registry.list_all_tools(kind="launcher"):
+        if str((tool.get("launcher") or {}).get("type") or "") == "steam":
+            return tool
+    fail(
+        "未找到 Steam 启动器条目（data/tools/steam.json 未登记或 launcher.type 不是 steam）",
+        error_type=ErrorType.NOT_FOUND,
+        toolId=STEAM_TOOL_ID,
+    )
+
+
+def _steam_games(ctx: ToolContext, keyword: str | None, limit: int) -> list[dict]:
+    return ctx.launcher_manager.list_actions(
+        STEAM_TOOL_ID, keyword=keyword, limit=limit
+    )
+
+
+def _steam_game_row(action: dict) -> dict:
+    action_id = str(action.get("id") or "")
+    appid = str(action.get("appid") or "")
+    if not appid and action_id.startswith("app:"):
+        appid = action_id.split(":", 1)[1]
+    return {
+        "appid": appid,
+        "actionId": action_id,
+        "name": action.get("name") or f"Steam App {appid}",
+        "installedDir": action.get("installdir") or "",
+        "library": action.get("library") or "",
+        "sizeOnDisk": action.get("sizeOnDisk"),
+        "lastPlayed": action.get("lastPlayed"),
+    }
+
+
+async def _handle_search_games(arguments: dict, ctx: ToolContext) -> dict:
+    tool = _steam_tool(ctx)
+    keyword = str(arguments.get("keyword") or "").strip() or None
+    limit = _clamp_int(arguments.get("limit"), default=50, low=1, high=200)
+    try:
+        actions = _steam_games(ctx, keyword, limit)
+    except LauncherError as exc:
+        fail(str(exc), error_type=ErrorType.LAUNCHER_ERROR, toolId=tool["id"])
+
+    catalog = ctx.store.load_launcher_catalog(tool["id"]) or {}
+    payload = {
+        "success": True,
+        "toolId": tool["id"],
+        "keyword": keyword,
+        "count": len(actions),
+        "lastSynced": catalog.get("lastSynced"),
+        "source": catalog.get("source"),
+        "games": [_steam_game_row(action) for action in actions],
+        "_usageTarget": tool["id"],
+    }
+    if not actions:
+        payload["note"] = (
+            "Steam 游戏清单为空：可能未安装 Steam、游戏库不可读，或尚未同步。"
+            "可先 sync_launcher_actions(tool_id='steam') 再查"
+        )
+    return payload
+
+
+def _match_steam_games(actions: list[dict], game: str) -> list[dict]:
+    needle = game.strip()
+    lowered = needle.lower()
+    appid_match = re.match(r"^(?:app:)?(\d+)$", needle, re.IGNORECASE)
+    if appid_match:
+        appid = appid_match.group(1)
+        return [a for a in actions if str(a.get("appid") or "") == appid]
+
+    exact = [
+        a
+        for a in actions
+        if str(a.get("name") or "").strip().lower() == lowered
+        or str(a.get("id") or "").lower() == lowered
+    ]
+    if exact:
+        return exact
+    return [
+        a
+        for a in actions
+        if lowered in str(a.get("name") or "").lower()
+        or lowered in str(a.get("id") or "").lower()
+    ]
+
+
+async def _handle_open_game(arguments: dict, ctx: ToolContext) -> dict:
+    tool = _steam_tool(ctx)
+    game = str(arguments.get("game") or "").strip()
+    execute = bool(arguments.get("execute"))
+    try:
+        actions = _steam_games(ctx, None, 1000)
+    except LauncherError as exc:
+        fail(str(exc), error_type=ErrorType.LAUNCHER_ERROR, toolId=tool["id"])
+
+    matches = _match_steam_games(actions, game)
+    if not matches:
+        fail(
+            f"Steam 已装游戏里没有匹配「{game}」的条目。"
+            "先用 search_games 查可用游戏与 appid",
+            error_type=ErrorType.NOT_FOUND,
+            game=game,
+        )
+    if len(matches) > 1:
+        rows = [_steam_game_row(action) for action in matches[:20]]
+        if execute:
+            fail(
+                f"「{game}」匹配到 {len(matches)} 个游戏，未启动；请改用 appid 或更精确的名称",
+                error_type=ErrorType.INVALID_PARAMS,
+                game=game,
+                candidates=rows,
+            )
+        return {
+            "success": True,
+            "resolved": False,
+            "game": game,
+            "count": len(matches),
+            "candidates": rows,
+            "executed": False,
+            "note": "匹配到多个游戏，未启动；请改用 appid 或更精确的名称",
+        }
+
+    action = matches[0]
+    row = _steam_game_row(action)
+    command_preview = _launch_preview(tool.get("launch"))
+    if command_preview:
+        command_preview = f"{command_preview} -applaunch {row['appid']}"
+    payload: dict[str, Any] = {
+        "success": True,
+        "resolved": True,
+        "game": row,
+        "actionId": row["actionId"],
+        "commandPreview": command_preview,
+        "executed": False,
+        "_usageTarget": tool["id"],
+    }
+    if not execute:
+        payload["note"] = (
+            "未执行：传 execute=true 且 allowDestructive=true 才会启动 "
+            "（Steam 条目标了 destructive）"
+        )
+        return payload
+
+    decision = decide_destructive(
+        "launcher",
+        tool,
+        {
+            "action_id": row["actionId"],
+            "action_name": row["name"],
+            "action_type": "game",
+        },
+        arguments,
+    )
+    if decision["blocked"]:
+        fail(decision["reason"], error_type=decision["error_type"], toolId=tool["id"])
+    if decision["required_confirm"]:
+        ctx.log(f"⚠️ 已确认启动 Steam 游戏: {row['name']}（{row['appid']}）")
+
+    res = ensure_success(
+        await ctx.launcher_manager.run_action(
+            tool["id"],
+            action_id=row["actionId"],
+            wait=arguments.get("wait"),
+        )
+    )
+    payload.update(res)
+    payload["executed"] = True
+    return payload
+
+
+def _launcher_action_row(source: str, tool_id: str, action: dict) -> dict:
+    return {
+        "source": source,
+        "toolId": tool_id,
+        "actionId": action.get("id"),
+        "name": action.get("name") or "",
+        "description": action.get("description") or "",
+        "type": action.get("type") or "",
+        "keywords": action.get("keywords") or [],
+    }
+
+
+async def _handle_search_actions(arguments: dict, ctx: ToolContext) -> dict:
+    keyword = str(arguments.get("keyword") or "").strip()
+    source = str(arguments.get("source") or "").strip() or None
+    limit = _clamp_int(arguments.get("limit"), default=20, low=1, high=100)
+    tools = _launcher_tools(ctx, source)
+
+    rows: list[dict] = []
+    errors: list[dict] = []
+    searched: list[str] = []
+    for tool in tools:
+        adapter = str((tool.get("launcher") or {}).get("type") or "")
+        searched.append(adapter)
+        try:
+            actions = ctx.launcher_manager.list_actions(
+                tool["id"], keyword=keyword, limit=limit
+            )
+        except LauncherError as exc:
+            errors.append({"toolId": tool["id"], "error": str(exc)})
+            continue
+        rows.extend(
+            _launcher_action_row(adapter, tool["id"], action) for action in actions
+        )
+
+    rows = rows[:limit]
+    payload: dict[str, Any] = {
+        "success": True,
+        "keyword": keyword,
+        "count": len(rows),
+        "searched": searched,
+        "actions": rows,
+    }
+    if errors:
+        payload["errors"] = errors
+    if not rows:
+        payload["note"] = (
+            "没有匹配的动作。Quicker 的动作名来自其缓存，部分动作可能只有 ID；"
+            "uTools 的清单来自 plugins/*.asar"
+        )
+    return payload
+
+
+def _runner_tool_for_source(ctx: ToolContext, source: str | None) -> dict | None:
+    tools = _launcher_tools(ctx, source)
+    return tools[0] if len(tools) == 1 else None
+
+
+def _match_actions(rows: list[dict], action_ref: str) -> list[dict]:
+    needle = action_ref.strip().lower()
+    exact = [
+        row
+        for row in rows
+        if str(row.get("actionId") or "").lower() == needle
+        or str(row.get("name") or "").lower() == needle
+    ]
+    if exact:
+        return exact
+    return [
+        row
+        for row in rows
+        if needle in str(row.get("name") or "").lower()
+        or needle in str(row.get("actionId") or "").lower()
+        or needle in str(row.get("description") or "").lower()
+        or any(needle in str(k).lower() for k in row.get("keywords") or [])
+    ]
+
+
+async def _handle_run_action(arguments: dict, ctx: ToolContext) -> dict:
+    action_ref = str(arguments.get("action") or "").strip()
+    source = str(arguments.get("source") or "").strip() or None
+    execute = bool(arguments.get("execute"))
+    tools = _launcher_tools(ctx, source)
+
+    rows: list[dict] = []
+    for tool in tools:
+        adapter = str((tool.get("launcher") or {}).get("type") or "")
+        try:
+            actions = ctx.launcher_manager.list_actions(tool["id"])
+        except LauncherError:
+            continue
+        rows.extend(
+            _launcher_action_row(adapter, tool["id"], action) for action in actions
+        )
+
+    matches = _match_actions(rows, action_ref)
+    if not matches and source:
+        # 清单可能还没覆盖到刚创建的动作：来源明确时按原始 ID 直调
+        tool = _runner_tool_for_source(ctx, source)
+        if tool is None:
+            fail(
+                f"未找到启动器来源 '{source}' 的工具条目",
+                error_type=ErrorType.NOT_FOUND,
+                source=source,
+            )
+        adapter = str((tool.get("launcher") or {}).get("type") or "")
+        matches = [
+            {
+                "source": adapter,
+                "toolId": tool["id"],
+                "actionId": action_ref,
+                "name": "",
+                "description": "",
+                "type": "",
+                "keywords": [],
+                "direct": True,
+            }
+        ]
+    if not matches:
+        fail(
+            f"没有匹配「{action_ref}」的动作。先用 search_actions 查可用动作；"
+            "若已知动作 ID，可传 source 指定 quicker 或 utools",
+            error_type=ErrorType.NOT_FOUND,
+            action=action_ref,
+        )
+    if len(matches) > 1:
+        if execute:
+            fail(
+                f"「{action_ref}」匹配到 {len(matches)} 个动作，未执行；请改用 action ID 或更精确的名称",
+                error_type=ErrorType.INVALID_PARAMS,
+                action=action_ref,
+                candidates=matches[:20],
+            )
+        return {
+            "success": True,
+            "resolved": False,
+            "action": action_ref,
+            "count": len(matches),
+            "candidates": matches[:20],
+            "executed": False,
+            "note": "匹配到多个动作，未执行；请改用 action ID 或更精确的名称",
+        }
+
+    target = matches[0]
+    tool = ctx.registry.get_tool(target["toolId"])
+    payload: dict[str, Any] = {
+        "success": True,
+        "resolved": True,
+        "target": target,
+        "executed": False,
+        "_usageTarget": target["toolId"],
+    }
+    if not execute:
+        payload["note"] = (
+            "未执行：传 execute=true 且 allowDestructive=true 才会执行"
+            "（三个启动器条目都标了 destructive）"
+        )
+        return payload
+
+    decision = decide_destructive(
+        "launcher",
+        tool,
+        {
+            "action_id": target.get("actionId"),
+            "action_name": target.get("name") or None,
+            "action_type": target.get("type") or "",
+        },
+        arguments,
+    )
+    if decision["blocked"]:
+        fail(decision["reason"], error_type=decision["error_type"], toolId=target["toolId"])
+    if decision["required_confirm"]:
+        ctx.log(f"⚠️ 已确认执行启动器动作: {target['toolId']}/{target.get('actionId')}")
+
+    res = ensure_success(
+        await ctx.launcher_manager.run_action(
+            target["toolId"],
+            action_id=target.get("actionId"),
+            action_name=target.get("name") or None,
+            param=arguments.get("param"),
+            wait=arguments.get("wait"),
+        )
+    )
+    payload.update(res)
+    payload["executed"] = True
+    return payload
+
+
+async def _handle_search_winget_packages(arguments: dict, ctx: ToolContext) -> dict:
+    keyword = str(arguments.get("keyword") or "").strip()
+    backend_args: dict[str, Any] = {
+        "upgradeable": bool(arguments.get("upgradeable")),
+    }
+    if keyword:
+        backend_args["query"] = keyword
+    await _ensure_backend_running(ctx, WINGET_TOOL_ID)
+    payload = await _call_backend_json(
+        ctx, WINGET_TOOL_ID, "find-winget-packages", backend_args
+    )
+    payload["keyword"] = keyword
+    payload["upgradeable"] = backend_args["upgradeable"]
+    return payload
+
+
+async def _handle_install_winget_package(arguments: dict, ctx: ToolContext) -> dict:
+    identifier = str(arguments.get("identifier") or "").strip()
+    backend_args: dict[str, Any] = {
+        "identifier": identifier,
+        "upgradeOnly": bool(arguments.get("upgrade_only")),
+    }
+    if arguments.get("source"):
+        backend_args["source"] = str(arguments.get("source")).strip()
+
+    payload: dict[str, Any] = {
+        "success": True,
+        "backend": WINGET_TOOL_ID,
+        "backendTool": "install-winget-package",
+        "arguments": backend_args,
+        "executed": False,
+        "_usageTarget": WINGET_TOOL_ID,
+    }
+    if not arguments.get("execute"):
+        payload["note"] = (
+            "未执行：安装/升级会改动本机，需同时传 execute=true 与 allowDestructive=true"
+        )
+        return payload
+
+    tool = ctx.registry.get_tool(WINGET_TOOL_ID)
+    decision = decide_destructive(
+        "mcp", tool, {"tool_name": "install-winget-package"}, arguments
+    )
+    if decision["blocked"]:
+        fail(
+            decision["reason"],
+            error_type=decision["error_type"],
+            toolId=WINGET_TOOL_ID,
+            toolName="install-winget-package",
+        )
+    if decision["required_confirm"]:
+        ctx.log(f"⚠️ 已确认 winget 安装/升级: {identifier}")
+
+    await _ensure_backend_running(ctx, WINGET_TOOL_ID)
+    result = await _call_backend_json(
+        ctx, WINGET_TOOL_ID, "install-winget-package", backend_args
+    )
+    payload.update(result)
+    payload["executed"] = True
+    return payload
+
+
 # 顺序即 tools/list 对外可见顺序（golden 按列表逐位锁定，保序即保行为）。
 SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
     ServerToolSpec(
@@ -1574,6 +2391,330 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
         },
         annotations={"openWorldHint": True, "destructiveHint": True},
     ),
+    # ---- default：高频意图前门（默认只预览，execute=true 才产生副作用）----
+    ServerToolSpec(
+        name="search_files",
+        handler=_handle_search_files,
+        description=(
+            "用 Everything 索引全盘搜索文件与文件夹（按文件名或路径，支持通配符/正则）；"
+            "后端未运行会自动启动"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "keyword": {
+                    "type": "string",
+                    "description": "搜索关键词（Everything 语法，支持 * ? 通配符与 AND/OR/NOT）"
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200,
+                    "description": "可选，最多返回多少条，默认 20"
+                },
+                "match_path": {
+                    "type": "boolean",
+                    "description": "可选，按完整路径而不是文件名匹配"
+                },
+                "match_case": {
+                    "type": "boolean",
+                    "description": "可选，区分大小写"
+                },
+                "regex": {
+                    "type": "boolean",
+                    "description": "可选，按正则表达式匹配"
+                }
+            },
+            "required": ["keyword"]
+        },
+        # 只读索引但会访问全盘路径，且可能拉起后端进程
+        annotations={"openWorldHint": True, "destructiveHint": False},
+        exposure=("default", "full"),
+    ),
+    ServerToolSpec(
+        name="open_path",
+        handler=_handle_open_path,
+        description=(
+            "用系统默认程序打开一个文件/文件夹，或 reveal=true 在资源管理器中定位；"
+            "默认只预览（exists/size 等），execute=true 才执行；可执行文件/脚本另需 "
+            "allowDestructive=true"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "文件或文件夹路径（支持 %ENV% 与 ~ 展开；相对路径按当前目录）"
+                },
+                "reveal": {
+                    "type": "boolean",
+                    "description": "可选，默认 false。true 只在资源管理器里选中该路径，不打开它"
+                },
+                "execute": {
+                    "type": "boolean",
+                    "description": "可选，默认 false。true 才真的打开/定位"
+                },
+                "allowDestructive": {
+                    "type": "boolean",
+                    "description": "可选，execute=true 且目标是可执行文件/脚本时必须显式传 true"
+                }
+            },
+            "required": ["path"]
+        },
+        annotations={"openWorldHint": True, "destructiveHint": False},
+        exposure=("default", "full"),
+    ),
+    ServerToolSpec(
+        name="open_app",
+        handler=_handle_open_app,
+        description=(
+            "按名称打开已登记的应用、Steam 客户端或 scoop 已安装程序；"
+            "默认只解析候选并预览，execute=true 才启动；多个候选时只返回列表、不自动选择"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "应用名/工具 ID/显示名（大小写不敏感，支持子串匹配）"
+                },
+                "execute": {
+                    "type": "boolean",
+                    "description": "可选，默认 false。true 才真的启动"
+                },
+                "allowDestructive": {
+                    "type": "boolean",
+                    "description": "可选，目标的策略要求确认时必须显式传 true"
+                },
+                "wait": {
+                    "type": "number",
+                    "description": "可选，execute=true 时观察多少秒判定早退（默认 5，上限 30；<=0 不等待）"
+                }
+            },
+            "required": ["name"]
+        },
+        annotations={"openWorldHint": True, "destructiveHint": False},
+        exposure=("default", "full"),
+    ),
+    ServerToolSpec(
+        name="search_games",
+        handler=_handle_search_games,
+        description=(
+            "搜索 Steam 已安装游戏（keyword 可匹配名称或 appid，省略则列出全部），"
+            "返回 appid、安装目录、所属库、占用空间与最近游玩时间"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "keyword": {
+                    "type": "string",
+                    "description": "可选，游戏名关键词或 appid；省略则列出全部已安装游戏"
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200,
+                    "description": "可选，最多返回多少条，默认 50"
+                }
+            }
+        },
+        annotations={"readOnlyHint": True, "destructiveHint": False},
+        exposure=("default", "full"),
+    ),
+    ServerToolSpec(
+        name="open_game",
+        handler=_handle_open_game,
+        description=(
+            "按游戏名或 appid 启动 Steam 已安装游戏；默认只预览命令与目标，"
+            "execute=true 且 allowDestructive=true 才启动；多个候选时只返回列表、不自动选择"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "game": {
+                    "type": "string",
+                    "description": "游戏名（精确名优先，再做子串匹配）或纯数字 appid"
+                },
+                "execute": {
+                    "type": "boolean",
+                    "description": "可选，默认 false。true 才真的启动游戏"
+                },
+                "allowDestructive": {
+                    "type": "boolean",
+                    "description": "execute=true 时必须显式传 true（Steam 条目标了 destructive）"
+                },
+                "wait": {
+                    "type": "number",
+                    "description": "可选，启动后观察多少秒判定早退（默认 5，上限 30；<=0 不等待）"
+                }
+            },
+            "required": ["game"]
+        },
+        annotations={"openWorldHint": True, "destructiveHint": False},
+        exposure=("default", "full"),
+    ),
+    ServerToolSpec(
+        name="search_actions",
+        handler=_handle_search_actions,
+        description=(
+            "跨 Quicker / uTools 搜索快捷动作（匹配名称、描述、关键词与动作 ID），"
+            "返回 source、actionId、name；可用 source 限定单个启动器"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "keyword": {
+                    "type": "string",
+                    "description": "动作名、描述、关键词或动作 ID 的子串"
+                },
+                "source": {
+                    "type": "string",
+                    "enum": ["quicker", "utools"],
+                    "description": "可选，只搜某个启动器；省略则搜全部（不含 Steam）"
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "description": "可选，最多返回多少条，默认 20"
+                }
+            },
+            "required": ["keyword"]
+        },
+        annotations={"readOnlyHint": True, "destructiveHint": False},
+        exposure=("default", "full"),
+    ),
+    ServerToolSpec(
+        name="run_action",
+        handler=_handle_run_action,
+        description=(
+            "按动作 ID 或名称执行 Quicker / uTools 快捷动作；默认只预览解析结果，"
+            "execute=true 且 allowDestructive=true 才执行；多个候选时只返回列表、不自动选择"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "description": "动作 ID 或名称（精确匹配优先，再做子串匹配）"
+                },
+                "source": {
+                    "type": "string",
+                    "enum": ["quicker", "utools"],
+                    "description": "可选，限定启动器；已知原始动作 ID 时用它直调"
+                },
+                "param": {
+                    "type": "string",
+                    "description": "可选，传给动作的参数（Quicker 会拼成 ?param）"
+                },
+                "execute": {
+                    "type": "boolean",
+                    "description": "可选，默认 false。true 才真的执行"
+                },
+                "allowDestructive": {
+                    "type": "boolean",
+                    "description": "execute=true 时必须显式传 true（启动器动作标了 destructive）"
+                },
+                "wait": {
+                    "type": "number",
+                    "description": "可选，执行后观察多少秒（默认按启动器配置）"
+                }
+            },
+            "required": ["action"]
+        },
+        annotations={"openWorldHint": True, "destructiveHint": False},
+        exposure=("default", "full"),
+    ),
+    # ---- full：低频补充 / 执行面工具 ----
+    ServerToolSpec(
+        name="get_file_info",
+        handler=_handle_get_file_info,
+        description=(
+            "查询单个文件/文件夹的元数据（大小、创建/修改时间、属性）；"
+            "路径不存在时返回 exists=false 而不是报错"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "文件或文件夹路径（支持 %ENV% 与 ~ 展开）"
+                }
+            },
+            "required": ["path"]
+        },
+        annotations={"openWorldHint": True, "destructiveHint": False},
+        exposure=("full",),
+    ),
+    ServerToolSpec(
+        name="get_everything_status",
+        handler=_handle_get_everything_status,
+        description=(
+            "检查 Everything 搜索后端是否可用与索引状态（只读；不会自动启动后端）"
+        ),
+        input_schema={"type": "object", "properties": {}},
+        annotations={"readOnlyHint": True, "destructiveHint": False},
+        exposure=("full",),
+    ),
+    ServerToolSpec(
+        name="search_winget_packages",
+        handler=_handle_search_winget_packages,
+        description=(
+            "用 winget 搜索可安装或可升级的软件包（keyword 省略且 upgradeable=true "
+            "时列出可升级项）；后端未运行会自动启动"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "keyword": {
+                    "type": "string",
+                    "description": "可选，包名/ID 关键词；省略时配合 upgradeable 使用"
+                },
+                "upgradeable": {
+                    "type": "boolean",
+                    "description": "可选，只查有可升级版本的已安装包"
+                }
+            }
+        },
+        annotations={"openWorldHint": True, "destructiveHint": False},
+        exposure=("full",),
+    ),
+    ServerToolSpec(
+        name="install_winget_package",
+        handler=_handle_install_winget_package,
+        description=(
+            "用 winget 安装或升级一个软件包；默认只回将要执行的参数预览，"
+            "execute=true 且 allowDestructive=true 才执行（会下载并运行安装器）"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "identifier": {
+                    "type": "string",
+                    "description": "winget 包标识（如 7zip.7zip；可从 search_winget_packages 的返回里取）"
+                },
+                "upgrade_only": {
+                    "type": "boolean",
+                    "description": "可选，只升级已安装的包，不新装"
+                },
+                "source": {
+                    "type": "string",
+                    "description": "可选，限定 winget 源（如 winget、msstore）"
+                },
+                "execute": {
+                    "type": "boolean",
+                    "description": "可选，默认 false。true 才真的执行安装/升级"
+                },
+                "allowDestructive": {
+                    "type": "boolean",
+                    "description": "execute=true 时必须显式传 true"
+                }
+            },
+            "required": ["identifier"]
+        },
+        annotations={"openWorldHint": True, "destructiveHint": True},
+        exposure=("full",),
+    ),
 )
 
 # ToolAnnotations 的合法键（MCP 协议 hints 全集）。validate_specs 用它拦
@@ -1583,8 +2724,12 @@ _ANNOTATION_KEYS = frozenset(
 )
 
 
-def build_mcp_tools() -> list[Tool]:
-    """由声明表统一构造 `Tool` 列表（annotations / outputSchema 在此挂载）。
+def build_mcp_tools(mode: str = "lazy") -> list[Tool]:
+    """由声明表统一构造**指定暴露模式下**的 `Tool` 列表。
+
+    过滤只发生在导出层：`SERVER_TOOL_SPECS` 始终是完整声明表，policy /
+    usage / dispatch 的门禁与埋点不因模式而分叉；未暴露的工具在
+    `server.dispatch_tool` 侧同样会被拒（不能靠「名字没下发」当安全边界）。
 
     挂载逻辑与搬迁前 `list_tools()` 逐行等价（`if ToolAnnotations is not None
     and spec.annotations:` 的真值判断、`output_schema or SHARED_OUTPUT_SCHEMA`
@@ -1594,8 +2739,13 @@ def build_mcp_tools() -> list[Tool]:
     - `description` 过 `export_description()`：末尾补上必填参数名与别名。
     声明表本身仍只写规范名，两处导出都是纯函数。
     """
+    from exposure import normalize_mode
+
+    mode = normalize_mode(mode)
     tools: list[Tool] = []
     for spec in SERVER_TOOL_SPECS:
+        if not is_exposed(spec, mode):
+            continue
         tool = Tool(
             name=spec.name,
             description=export_description(spec),
@@ -1620,6 +2770,7 @@ def validate_specs() -> None:
     - 重名：名字索引会静默丢掉一条，tools/list 少一个工具且无人察觉；
     - 空 handler：新增工具忘了写 handler，要到运行期才暴露；
     - annotations 键非法：`ToolAnnotations(**{...})` 拼错键运行期才炸；
+    - exposure 取值非法或为空：该工具会在任何模式下都不可见（或不存在的模式）；
     - 别名规范名拼错：`arg_aliases` 的键必须是本工具已声明的参数，否则那条
       覆盖永远不生效（别名白写、报错还归到「Agent 猜错」头上）；
     - 别名撞车 / 复活退役名：别名不得与本工具任何已声明参数同名（两个规范名
@@ -1628,6 +2779,8 @@ def validate_specs() -> None:
 
     对合法输入零差异——这是本设计「把一致性从约定变成强制」的核心机制。
     """
+    from exposure import MODES
+
     seen: set[str] = set()
     for spec in SERVER_TOOL_SPECS:
         if spec.name in seen:
@@ -1635,6 +2788,14 @@ def validate_specs() -> None:
         seen.add(spec.name)
         if spec.handler is None:
             raise RuntimeError(f"tool_specs: {spec.name} 缺少 handler")
+        if not spec.exposure:
+            raise RuntimeError(f"tool_specs: {spec.name} 的 exposure 不能为空")
+        unknown_modes = set(spec.exposure) - set(MODES)
+        if unknown_modes:
+            raise RuntimeError(
+                f"tool_specs: {spec.name} 的 exposure 含未知模式: "
+                f"{sorted(unknown_modes)}（可选: {', '.join(MODES)}）"
+            )
         if spec.annotations:
             unknown = set(spec.annotations) - _ANNOTATION_KEYS
             if unknown:

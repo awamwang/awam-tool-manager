@@ -22,14 +22,22 @@ import pytest
 _RUNTIME_ISOLATION_DIR = tempfile.mkdtemp(prefix="awam-runtime-")
 os.environ.setdefault("AWAM_RUNTIME_DIR", _RUNTIME_ISOLATION_DIR)
 
+# 暴露模式必须 hermetic：宿主环境变量或仓库 data/exposure.json 会改变
+# tools/list 的切片。单元测试以 lazy 为基线（协议出口的历史默认），需要
+# 其他模式的用例自己 monkeypatch `server.EXPOSURE_MODE` 或直接传参。
+os.environ.pop("AWAM_EXPOSURE_MODE", None)
+os.environ["AWAM_EXPOSURE_FILE"] = str(
+    Path(_RUNTIME_ISOLATION_DIR) / "no-exposure.json"
+)
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import backend_client  # noqa: E402
 
-# 对外工具名清单。新增/移除工具时必须同步更新这里——用名字集合而不是
-# `len(tools) == N`：裸数字变红时看不出是多了还是少了哪个工具
-# （2026-10-16 接入 launcher 三个工具时，两处写死 12 的断言同时变红）。
-EXPECTED_TOOL_NAMES = {
+# 对外工具名清单（按暴露模式分层）。新增/移除工具时必须同步更新这里——用
+# 名字集合而不是 `len(tools) == N`：裸数字变红时看不出是多了还是少了哪个
+# 工具（2026-10-16 接入 launcher 三个工具时，两处写死 12 的断言同时变红）。
+EXPECTED_TOOL_NAMES_LAZY = {
     "search_tools",
     "list_tools",
     "get_tool_info",
@@ -53,6 +61,26 @@ EXPECTED_TOOL_NAMES = {
     "launch_package",
     "install_package",
 }
+
+EXPECTED_TOOL_NAMES_DEFAULT = EXPECTED_TOOL_NAMES_LAZY | {
+    "search_files",
+    "open_path",
+    "open_app",
+    "search_games",
+    "open_game",
+    "search_actions",
+    "run_action",
+}
+
+EXPECTED_TOOL_NAMES_FULL = EXPECTED_TOOL_NAMES_DEFAULT | {
+    "get_file_info",
+    "get_everything_status",
+    "search_winget_packages",
+    "install_winget_package",
+}
+
+# 既有引用的口径：协议出口的默认模式是 lazy。新用例请直接用带模式后缀的常量。
+EXPECTED_TOOL_NAMES = EXPECTED_TOOL_NAMES_LAZY
 
 
 @pytest.fixture(autouse=True)

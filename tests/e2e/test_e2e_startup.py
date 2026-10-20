@@ -27,9 +27,9 @@ from .helpers import (  # noqa: E402
 )
 
 
-async def _collect(repo, runtime):
+async def _collect(repo, runtime, env_extra=None):
     started = time.monotonic()
-    async with stdio_session(repo, runtime) as (session, log):
+    async with stdio_session(repo, runtime, env_extra=env_extra) as (session, log):
         tools = (await session.list_tools()).tools
         names = [t.name for t in tools]
         fields = [tool_fields(t) for t in tools]
@@ -67,3 +67,46 @@ def test_e2e_list_tools_matches_golden(e2e_repo, e2e_runtime):
         f"  实得工具数 {len(fields)}，golden {len(golden)}\n"
         "  stderr 尾部：\n" + log.tail(15)
     )
+
+
+@pytest.mark.e2e
+def test_e2e_default_mode_exposes_front_door(e2e_repo, e2e_runtime):
+    """`AWAM_EXPOSURE_MODE=default`：真实进程下发 29 个工具（含 7 个意图前门）"""
+    names, fields, log, elapsed = asyncio.run(
+        _collect(e2e_repo, e2e_runtime, {"AWAM_EXPOSURE_MODE": "default"})
+    )
+    print(f"\n[场景①-default] 起服 + list_tools 耗时 {elapsed:.2f}s")
+    assert "暴露模式: default" in log.text(), log.tail()
+
+    expected = load_expected_tool_names("default")
+    assert set(names) == expected, (
+        f"default 模式工具名不符：多出 {sorted(set(names) - expected)}，"
+        f"缺少 {sorted(expected - set(names))}"
+    )
+    assert names[-7:] == [
+        "search_files",
+        "open_path",
+        "open_app",
+        "search_games",
+        "open_game",
+        "search_actions",
+        "run_action",
+    ]
+    assert fields == load_golden("default")
+
+
+@pytest.mark.e2e
+def test_e2e_full_mode_exposes_everything(e2e_repo, e2e_runtime):
+    """`AWAM_EXPOSURE_MODE=full`：真实进程下发全部 33 个工具"""
+    names, fields, log, elapsed = asyncio.run(
+        _collect(e2e_repo, e2e_runtime, {"AWAM_EXPOSURE_MODE": "full"})
+    )
+    print(f"\n[场景①-full] 起服 + list_tools 耗时 {elapsed:.2f}s")
+    assert "暴露模式: full" in log.text(), log.tail()
+
+    expected = load_expected_tool_names("full")
+    assert set(names) == expected, (
+        f"full 模式工具名不符：多出 {sorted(set(names) - expected)}，"
+        f"缺少 {sorted(expected - set(names))}"
+    )
+    assert fields == load_golden("full")

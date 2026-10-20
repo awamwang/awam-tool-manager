@@ -1,0 +1,1617 @@
+[
+  {
+    "name": "search_tools",
+    "description": "搜索已注册的工具，按关键词匹配名称、描述、标签，可按类型、安装状态、发布者筛选。必填：keyword（可写 query）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "keyword": {
+          "type": "string",
+          "description": "搜索关键词"
+        },
+        "kind": {
+          "type": "string",
+          "description": "可选，按工具类型筛选（如 app、mcp、launcher）"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "installed",
+            "not_installed",
+            "unknown"
+          ],
+          "description": "可选，按安装状态精确筛选（条目未写 status 时按 installed 计）"
+        },
+        "publisher": {
+          "type": "string",
+          "description": "可选，按发布者筛选（子串匹配、大小写不敏感；条目没写 publisher 一律不命中）"
+        },
+        "query": {
+          "type": "string",
+          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：搜索关键词"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "keyword"
+          ]
+        },
+        {
+          "required": [
+            "query"
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "list_tools",
+    "description": "列出所有已注册的工具，可按类型、安装状态、发布者筛选",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "可选，按工具类型筛选（如 app、mcp、launcher）"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "installed",
+            "not_installed",
+            "unknown"
+          ],
+          "description": "可选，按安装状态精确筛选（条目未写 status 时按 installed 计）"
+        },
+        "publisher": {
+          "type": "string",
+          "description": "可选，按发布者筛选（子串匹配、大小写不敏感；条目没写 publisher 一律不命中）"
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "get_tool_info",
+    "description": "查看工具的详细信息。必填：tool_id（可写 id）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "tool_id": {
+          "type": "string",
+          "description": "工具 ID，如 everything、everything-search-mcp"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID，如 everything、everything-search-mcp"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "tool_id"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "launch_tool",
+    "description": "取指定工具的启动命令；传 execute=true 可真正执行启动（默认只返回命令，不执行）。必填：tool_id（可写 id）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "tool_id": {
+          "type": "string",
+          "description": "工具 ID"
+        },
+        "execute": {
+          "type": "boolean",
+          "description": "是否真正执行启动（默认 false：只返回命令、不 spawn 进程）"
+        },
+        "wait": {
+          "type": "number",
+          "description": "可选，执行后等待早退的观察窗口秒数（默认 5，封顶 30）；窗口内退出即报退出码，超时仍运行则报 running=true"
+        },
+        "allowDestructive": {
+          "type": "boolean",
+          "description": "工具被标记为 destructive 时，执行启动需显式传 true"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "tool_id"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "openWorldHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "call_backend_tool",
+    "description": "路由调用：转发请求到指定 MCP 工具的后端 Server 执行具体操作。必填：tool_id（可写 id）、tool_name（可写 name）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "tool_id": {
+          "type": "string",
+          "description": "MCP 工具 ID（如 everything-search-mcp）"
+        },
+        "tool_name": {
+          "type": "string",
+          "description": "要调用的后端工具名"
+        },
+        "arguments": {
+          "type": "object",
+          "description": "调用参数"
+        },
+        "allowDestructive": {
+          "type": "boolean",
+          "description": "目标工具被标记为 destructive 时，需显式传 true 才会转发"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID（如 everything-search-mcp）"
+        },
+        "name": {
+          "type": "string",
+          "description": "`tool_name` 的别名（与 tool_name 二选一，两者都给以 tool_name 为准）：要调用的后端工具名"
+        }
+      },
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "required": [
+                "tool_id"
+              ]
+            },
+            {
+              "required": [
+                "id"
+              ]
+            }
+          ]
+        },
+        {
+          "anyOf": [
+            {
+              "required": [
+                "tool_name"
+              ]
+            },
+            {
+              "required": [
+                "name"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "openWorldHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "list_backend_tools",
+    "description": "列出指定 MCP 工具的后端提供的所有子工具（含完整参数 schema）。必填：tool_id（可写 id）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "tool_id": {
+          "type": "string",
+          "description": "MCP 工具 ID"
+        },
+        "force_refresh": {
+          "type": "boolean",
+          "description": "是否强制刷新缓存"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "tool_id"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "start_backend",
+    "description": "启动指定的后端 MCP Server 并建立连接。必填：tool_id（可写 id）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "tool_id": {
+          "type": "string",
+          "description": "MCP 工具 ID"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "tool_id"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "idempotentHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "stop_backend",
+    "description": "停止指定的后端 MCP Server。必填：tool_id（可写 id）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "tool_id": {
+          "type": "string",
+          "description": "MCP 工具 ID"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "tool_id"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "idempotentHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "get_backend_status",
+    "description": "获取后端 MCP Server 的运行状态",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "tool_id": {
+          "type": "string",
+          "description": "MCP 工具 ID，不填则返回所有后端状态"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID，不填则返回所有后端状态"
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "get_backend_logs",
+    "description": "获取后端 MCP Server 的运行日志。必填：tool_id（可写 id）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "tool_id": {
+          "type": "string",
+          "description": "MCP 工具 ID"
+        },
+        "level": {
+          "type": "string",
+          "description": "日志级别过滤（debug/info/warning/error）"
+        },
+        "limit": {
+          "type": "number",
+          "description": "返回条数上限，默认 50"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "tool_id"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "set_backend_log_level",
+    "description": "设置后端 MCP Server 的日志级别。必填：tool_id（可写 id）、level",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "tool_id": {
+          "type": "string",
+          "description": "MCP 工具 ID"
+        },
+        "level": {
+          "type": "string",
+          "description": "日志级别（debug/info/warning/error）"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
+        }
+      },
+      "required": [
+        "level"
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "tool_id"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        }
+      ]
+    },
+    "annotations": null,
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "sync_backend_tools",
+    "description": "手动同步后端 MCP 的工具目录（自动获取所有工具的参数 schema 并保存）。必填：tool_id（可写 id）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "tool_id": {
+          "type": "string",
+          "description": "MCP 工具 ID"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "tool_id"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "idempotentHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "sync_launcher_actions",
+    "description": "手动同步启动器的动作清单（从启动器本地数据扫描，Quicker 的动作名依赖其缓存，可能只拿到 ID）。必填：tool_id（可写 id）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "tool_id": {
+          "type": "string",
+          "description": "启动器工具 ID"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：启动器工具 ID"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "tool_id"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "idempotentHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "list_launcher_actions",
+    "description": "列出/搜索启动器（如 Quicker）的动作：按名称、描述、所属程序或 ID 关键词过滤。必填：tool_id（可写 id）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "tool_id": {
+          "type": "string",
+          "description": "启动器工具 ID"
+        },
+        "keyword": {
+          "type": "string",
+          "description": "可选，按名称/描述/所属程序/ID 过滤"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "可选，最多返回多少条"
+        },
+        "refresh": {
+          "type": "boolean",
+          "description": "可选，强制重新扫描启动器本地数据（默认读缓存，缓存超过 5 分钟会自动重扫）"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：启动器工具 ID"
+        },
+        "query": {
+          "type": "string",
+          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：可选，按名称/描述/所属程序/ID 过滤"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "tool_id"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "run_launcher_action",
+    "description": "调用启动器的动作（如执行一个 Quicker 动作），可传参并等待返回结果。必填：tool_id",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "tool_id": {
+          "type": "string",
+          "description": "启动器工具 ID"
+        },
+        "action_id": {
+          "type": "string",
+          "description": "动作 ID（推荐：稳定不变；二选一，与 action_name 至少给一个）"
+        },
+        "action_name": {
+          "type": "string",
+          "description": "动作名称（Quicker 要求名称不重复且不含空格）"
+        },
+        "param": {
+          "type": "string",
+          "description": "可选，传给动作的参数（Quicker 用 ? 分隔符，不支持换行）"
+        },
+        "wait": {
+          "type": "number",
+          "description": "可选，最长等待秒数（默认取 launcher.timeout，缺省 20）"
+        },
+        "allowDestructive": {
+          "type": "boolean",
+          "description": "启动器被标记为 destructive 时，需显式传 true 才会执行"
+        },
+        "id": {
+          "type": "string",
+          "description": "`action_id` 的别名（与 action_id 二选一，两者都给以 action_id 为准）：动作 ID（推荐：稳定不变；二选一，与 action_name 至少给一个）"
+        },
+        "name": {
+          "type": "string",
+          "description": "`action_name` 的别名（与 action_name 二选一，两者都给以 action_name 为准）：动作名称（Quicker 要求名称不重复且不含空格）"
+        }
+      },
+      "required": [
+        "tool_id"
+      ]
+    },
+    "annotations": {
+      "openWorldHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "get_tool_help",
+    "description": "取工具的帮助信息（文档链接 / 后端能力清单 / 启动器动作清单）；kind=app 传 run=true 可执行帮助命令并捕获输出。必填：tool_id（可写 id）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "tool_id": {
+          "type": "string",
+          "description": "工具 ID"
+        },
+        "run": {
+          "type": "boolean",
+          "description": "是否真的执行帮助命令（默认 false：只返回文档链接、能力清单与命令预览，不 spawn）"
+        },
+        "timeout": {
+          "type": "number",
+          "description": "可选，执行帮助命令的超时秒数（覆盖条目 help.timeout；默认 5，封顶 30）"
+        },
+        "allowDestructive": {
+          "type": "boolean",
+          "description": "工具被标记为 destructive 时，执行帮助命令需显式传 true"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "tool_id"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "openWorldHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "get_usage_stats",
+    "description": "查询工具调用使用统计：按天、按对外工具、按目标 tool_id 聚合调用量、成功率与耗时（默认最近 7 天）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "days": {
+          "type": "integer",
+          "description": "可选，统计窗口天数（按日历日、含今天；默认 7，越界收敛到 1~365）",
+          "minimum": 1,
+          "maximum": 365
+        },
+        "tool_id": {
+          "type": "string",
+          "description": "可选，只看某个登记工具的调用（与调用记录里的 target 精确匹配）"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：可选，只看某个登记工具的调用（与调用记录里的 target 精确匹配）"
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "discover_tools",
+    "description": "发现本机工具：按声明式候选清单做只读探测（路径存在 / 目录条目数 / 注册表登记值 / 命令是否在 PATH），对照已登记工具给出 installed / not_installed / unknown 结论（默认不执行任何命令）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_commands": {
+          "type": "boolean",
+          "description": "可选，默认 false。true 才真正执行清单里的版本命令取版本号（会 spawn 子进程）；false 只报告命令是否在 PATH 上"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "installed",
+            "not_installed",
+            "unknown"
+          ],
+          "description": "可选，只返回该结论的候选（summary 仍是整份清单的计数）"
+        }
+      }
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "list_packages",
+    "description": "列出本机包管理器（当前支持 scoop）已安装的包：只读盘上的 apps 清单，不执行安装器命令；每个包给出 state（ok / current_broken / no_manifest）与是否可启动",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "manager": {
+          "type": "string",
+          "enum": [
+            "scoop"
+          ],
+          "description": "可选，默认 scoop"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "current_broken",
+            "no_manifest"
+          ],
+          "description": "可选，只返回该状态的包（count/states 仍是整份清单的口径）"
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "search_packages",
+    "description": "在包管理器已添加的仓库清单里搜可安装的包（只读，按包名匹配；命中为空只说明已添加的清单里没有，不代表装不了）。必填：keyword（可写 query）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "manager": {
+          "type": "string",
+          "enum": [
+            "scoop"
+          ],
+          "description": "可选，默认 scoop"
+        },
+        "keyword": {
+          "type": "string",
+          "description": "包名关键词（匹配 bucket 清单里的包名）"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "可选，最多返回多少条，默认 20"
+        },
+        "query": {
+          "type": "string",
+          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：包名关键词（匹配 bucket 清单里的包名）"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "keyword"
+          ]
+        },
+        {
+          "required": [
+            "query"
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "launch_package",
+    "description": "启动包管理器已安装的某个包：默认只解析可执行入口并预览（不 spawn），传 execute=true 才真的启动（入口按 快捷方式 → bin → shim 取，可用 entry 指定）。必填：package（可写 name）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "manager": {
+          "type": "string",
+          "enum": [
+            "scoop"
+          ],
+          "description": "可选，默认 scoop"
+        },
+        "package": {
+          "type": "string",
+          "description": "包名（须已安装，如 7zip）"
+        },
+        "entry": {
+          "type": "string",
+          "description": "可选，指定入口的名字或文件名（如 7zFM.exe）；缺省按优先级自动挑"
+        },
+        "execute": {
+          "type": "boolean",
+          "description": "可选，默认 false。true 才真的启动进程；false 只回预览"
+        },
+        "wait": {
+          "type": "number",
+          "description": "可选，execute=true 时观察多少秒判定早退（默认 5，上限 30；<=0 不等待）"
+        },
+        "name": {
+          "type": "string",
+          "description": "`package` 的别名（与 package 二选一，两者都给以 package 为准）：包名（须已安装，如 7zip）"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "package"
+          ]
+        },
+        {
+          "required": [
+            "name"
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "install_package",
+    "description": "用包管理器安装一个包：默认只回将要执行的命令预览，不改动本机；真要装必须同时传 execute=true 与 allowDestructive=true（安装会下载并运行仓库里的安装脚本，属破坏性操作）。必填：package（可写 name）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "manager": {
+          "type": "string",
+          "enum": [
+            "scoop"
+          ],
+          "description": "可选，默认 scoop"
+        },
+        "package": {
+          "type": "string",
+          "description": "包名（只允许字母/数字/点/下划线/短横/加号，不接受路径分隔符）"
+        },
+        "execute": {
+          "type": "boolean",
+          "description": "可选，默认 false。true 才真的执行安装命令"
+        },
+        "allowDestructive": {
+          "type": "boolean",
+          "description": "execute=true 时必须显式传 true，否则按破坏性门禁拒绝"
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600,
+          "description": "可选，安装命令最长等待秒数，默认 120、上限 600"
+        },
+        "name": {
+          "type": "string",
+          "description": "`package` 的别名（与 package 二选一，两者都给以 package 为准）：包名（只允许字母/数字/点/下划线/短横/加号，不接受路径分隔符）"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "package"
+          ]
+        },
+        {
+          "required": [
+            "name"
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "search_files",
+    "description": "用 Everything 索引全盘搜索文件与文件夹（按文件名或路径，支持通配符/正则）；后端未运行会自动启动。必填：keyword（可写 query）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "keyword": {
+          "type": "string",
+          "description": "搜索关键词（Everything 语法，支持 * ? 通配符与 AND/OR/NOT）"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "可选，最多返回多少条，默认 20"
+        },
+        "match_path": {
+          "type": "boolean",
+          "description": "可选，按完整路径而不是文件名匹配"
+        },
+        "match_case": {
+          "type": "boolean",
+          "description": "可选，区分大小写"
+        },
+        "regex": {
+          "type": "boolean",
+          "description": "可选，按正则表达式匹配"
+        },
+        "query": {
+          "type": "string",
+          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：搜索关键词（Everything 语法，支持 * ? 通配符与 AND/OR/NOT）"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "keyword"
+          ]
+        },
+        {
+          "required": [
+            "query"
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "open_path",
+    "description": "用系统默认程序打开一个文件/文件夹，或 reveal=true 在资源管理器中定位；默认只预览（exists/size 等），execute=true 才执行；可执行文件/脚本另需 allowDestructive=true。必填：path",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "文件或文件夹路径（支持 %ENV% 与 ~ 展开；相对路径按当前目录）"
+        },
+        "reveal": {
+          "type": "boolean",
+          "description": "可选，默认 false。true 只在资源管理器里选中该路径，不打开它"
+        },
+        "execute": {
+          "type": "boolean",
+          "description": "可选，默认 false。true 才真的打开/定位"
+        },
+        "allowDestructive": {
+          "type": "boolean",
+          "description": "可选，execute=true 且目标是可执行文件/脚本时必须显式传 true"
+        }
+      },
+      "required": [
+        "path"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "open_app",
+    "description": "按名称打开已登记的应用、Steam 客户端或 scoop 已安装程序；默认只解析候选并预览，execute=true 才启动；多个候选时只返回列表、不自动选择。必填：name",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "应用名/工具 ID/显示名（大小写不敏感，支持子串匹配）"
+        },
+        "execute": {
+          "type": "boolean",
+          "description": "可选，默认 false。true 才真的启动"
+        },
+        "allowDestructive": {
+          "type": "boolean",
+          "description": "可选，目标的策略要求确认时必须显式传 true"
+        },
+        "wait": {
+          "type": "number",
+          "description": "可选，execute=true 时观察多少秒判定早退（默认 5，上限 30；<=0 不等待）"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "search_games",
+    "description": "搜索 Steam 已安装游戏（keyword 可匹配名称或 appid，省略则列出全部），返回 appid、安装目录、所属库、占用空间与最近游玩时间",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "keyword": {
+          "type": "string",
+          "description": "可选，游戏名关键词或 appid；省略则列出全部已安装游戏"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "可选，最多返回多少条，默认 50"
+        },
+        "query": {
+          "type": "string",
+          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：可选，游戏名关键词或 appid；省略则列出全部已安装游戏"
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "open_game",
+    "description": "按游戏名或 appid 启动 Steam 已安装游戏；默认只预览命令与目标，execute=true 且 allowDestructive=true 才启动；多个候选时只返回列表、不自动选择。必填：game",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "game": {
+          "type": "string",
+          "description": "游戏名（精确名优先，再做子串匹配）或纯数字 appid"
+        },
+        "execute": {
+          "type": "boolean",
+          "description": "可选，默认 false。true 才真的启动游戏"
+        },
+        "allowDestructive": {
+          "type": "boolean",
+          "description": "execute=true 时必须显式传 true（Steam 条目标了 destructive）"
+        },
+        "wait": {
+          "type": "number",
+          "description": "可选，启动后观察多少秒判定早退（默认 5，上限 30；<=0 不等待）"
+        }
+      },
+      "required": [
+        "game"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "search_actions",
+    "description": "跨 Quicker / uTools 搜索快捷动作（匹配名称、描述、关键词与动作 ID），返回 source、actionId、name；可用 source 限定单个启动器。必填：keyword（可写 query）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "keyword": {
+          "type": "string",
+          "description": "动作名、描述、关键词或动作 ID 的子串"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "quicker",
+            "utools"
+          ],
+          "description": "可选，只搜某个启动器；省略则搜全部（不含 Steam）"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "可选，最多返回多少条，默认 20"
+        },
+        "query": {
+          "type": "string",
+          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：动作名、描述、关键词或动作 ID 的子串"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "keyword"
+          ]
+        },
+        {
+          "required": [
+            "query"
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "run_action",
+    "description": "按动作 ID 或名称执行 Quicker / uTools 快捷动作；默认只预览解析结果，execute=true 且 allowDestructive=true 才执行；多个候选时只返回列表、不自动选择。必填：action",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": "动作 ID 或名称（精确匹配优先，再做子串匹配）"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "quicker",
+            "utools"
+          ],
+          "description": "可选，限定启动器；已知原始动作 ID 时用它直调"
+        },
+        "param": {
+          "type": "string",
+          "description": "可选，传给动作的参数（Quicker 会拼成 ?param）"
+        },
+        "execute": {
+          "type": "boolean",
+          "description": "可选，默认 false。true 才真的执行"
+        },
+        "allowDestructive": {
+          "type": "boolean",
+          "description": "execute=true 时必须显式传 true（启动器动作标了 destructive）"
+        },
+        "wait": {
+          "type": "number",
+          "description": "可选，执行后观察多少秒（默认按启动器配置）"
+        }
+      },
+      "required": [
+        "action"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "get_file_info",
+    "description": "查询单个文件/文件夹的元数据（大小、创建/修改时间、属性）；路径不存在时返回 exists=false 而不是报错。必填：path",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "文件或文件夹路径（支持 %ENV% 与 ~ 展开）"
+        }
+      },
+      "required": [
+        "path"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "get_everything_status",
+    "description": "检查 Everything 搜索后端是否可用与索引状态（只读；不会自动启动后端）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "search_winget_packages",
+    "description": "用 winget 搜索可安装或可升级的软件包（keyword 省略且 upgradeable=true 时列出可升级项）；后端未运行会自动启动",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "keyword": {
+          "type": "string",
+          "description": "可选，包名/ID 关键词；省略时配合 upgradeable 使用"
+        },
+        "upgradeable": {
+          "type": "boolean",
+          "description": "可选，只查有可升级版本的已安装包"
+        },
+        "query": {
+          "type": "string",
+          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：可选，包名/ID 关键词；省略时配合 upgradeable 使用"
+        }
+      }
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "install_winget_package",
+    "description": "用 winget 安装或升级一个软件包；默认只回将要执行的参数预览，execute=true 且 allowDestructive=true 才执行（会下载并运行安装器）。必填：identifier",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "identifier": {
+          "type": "string",
+          "description": "winget 包标识（如 7zip.7zip；可从 search_winget_packages 的返回里取）"
+        },
+        "upgrade_only": {
+          "type": "boolean",
+          "description": "可选，只升级已安装的包，不新装"
+        },
+        "source": {
+          "type": "string",
+          "description": "可选，限定 winget 源（如 winget、msstore）"
+        },
+        "execute": {
+          "type": "boolean",
+          "description": "可选，默认 false。true 才真的执行安装/升级"
+        },
+        "allowDestructive": {
+          "type": "boolean",
+          "description": "execute=true 时必须显式传 true"
+        }
+      },
+      "required": [
+        "identifier"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  }
+]

@@ -25,7 +25,7 @@
 - [x] MCP Server 入口（server.py）：stdio 模式
 - [x] 日志系统（输出到 stderr，不污染协议通道）
 
-### 对外 MCP 工具（22 个）
+### 对外 MCP 工具（lazy 22 个；default 29 / full 33）
 - [x] `search_tools` - 搜索工具（关键词 + `kind` / `status` / `publisher` 筛选）
 - [x] `list_tools` - 列出所有工具（同上三个筛选维度，见「筛选维度增强」）
 - [x] `get_tool_info` - 查看工具详情
@@ -39,6 +39,8 @@
 - [x] `start_backend` / `stop_backend` / `get_backend_status` - 后端进程管理
 - [x] `get_backend_logs` / `set_backend_log_level` - 后端日志
 - [x] `sync_backend_tools` - 同步后端子工具目录到本地
+- [x] 7 个意图前门 + 4 个 full 补充工具 - 2026-10-20 新增（P1），三档暴露模式见
+      「暴露模式与意图级工具门面」；lazy 保持原 22 个契约不变
 
 ### 协议合规
 - [x] 后端工具参数名统一为 `tool_id`（移除历史遗留的 mcp_tool_id / launcher_id）
@@ -728,7 +730,9 @@
 能力问题先回答：「接了 Scoop 能不能装软件 / 查已装 / 打开已装」——**三个都能**，
 但按副作用分级：查询纯读盘、启动与安装都要显式表态，安装额外过破坏性门禁。
 形态按用户选定：**新增通用包管理工具面**（不是把 scoop 包登记成一个个 `kind=app` 条目），
-当前后端只有 `scoop`（`pkgman.BACKENDS = ("scoop",)`），`winget` / `npm` 未接线。
+当前后端只有 `scoop`（`pkgman.BACKENDS = ("scoop",)`），`winget` / `npm` 未接线
+（这里的轻量包管理面仍只有 scoop；winget 在 full 模式的意图工具面单独接线，见
+「暴露模式与意图级工具门面」，`npm` 决定不接）。
 
 - [x] **适配层 `src/pkgman.py`（644 行）** - 一律**直读安装器落盘清单**，不跑
       `scoop list`（那条命令要拉 PowerShell，冷启 3~6s，且它读的东西盘上本来就写着）。
@@ -1032,6 +1036,40 @@
       `PYTHONHASHSEED=0/1/7/42/123` 下五次一致通过，落盘 0 个 `\r\n`；新基线里
       16 份 schema 带任选组（`run_launcher_action` 的 `tool_id` 别名置空后退回普通
       `required`），`mcp_tool_id`/`launcher_id` 仍全文不出现
+
+### 暴露模式与意图级工具门面（P1，2026-10-20）
+- [x] **三种模式是同一张声明表的不同切片** - `ServerToolSpec` 新增 `exposure` 元组：
+      `lazy` 22（旧契约原样）、`default` 29（+7 意图前门）、`full` 33（再 +4 补充工具）。
+      `build_mcp_tools(mode)` 与 `dispatch_tool` 同源过滤，schema / 注解 / handler 不复制第二份
+- [x] **模式解析与 instructions** - `AWAM_EXPOSURE_MODE` > `data/exposure.json` 的 `mode` >
+      `lazy`；进程启动解析一次（客户端重连才看到新 `tools/list`），非法取值快速失败。
+      `initialize.instructions` 由 `exposure._FAMILIES` 同一张表按模式生成；lazy 的规则文本
+      不点名任何不可见工具（有守卫测试逐名检查）
+- [x] **7 个 default 意图工具** - `search_files` / `open_path` / `open_app` / `search_games` /
+      `open_game` / `search_actions` / `run_action`。只做「解析 → 门禁 → 调用既有能力」：
+      Everything / Steam / Quicker / uTools 都复用原 manager，必要时自动拉起所需后端
+- [x] **4 个 full 补充工具** - `get_file_info` / `get_everything_status` /
+      `search_winget_packages` / `install_winget_package`；winget 走 full 的意图面，
+      `pkgman` 轻量包管理面仍只有 scoop
+- [x] **副作用纪律** - `open_*` / `run_action` / `install_winget_package` 默认只回预览，
+      `execute=true` 才执行；破坏性另需 `allowDestructive=true`；多候选一律返回列表或要求
+      精确名称，不自动选
+- [x] **文件路径执行面 `src/file_ops.py`** - 预览只读 `Path`/`stat`；执行走 `os.startfile`
+      （ShellExecute）或 `explorer.exe /select,<path>` 的 argv 形式，不拼 shell 字符串；
+      spawn 的 stdio 全 DEVNULL。`policy` 新增 `path` 种：按后缀判可执行
+      （`.exe/.bat/.ps1/.lnk/...`），`reveal=true` 视为非破坏
+- [x] **未暴露工具在协议面等同 `unknown_tool`** - 与未知工具同文案、同 usage 记账，
+      不泄露存在性；意图工具解析出的真实目标经 `_usageTarget` 记进 usage.log 后再剥离，
+      不进对外载荷
+- [x] **测试 589 → 635，e2e 9 → 11** - 新增 `test_exposure.py`（模式优先级 / 切片 /
+      instructions 可见性 / dispatch 兜底 / 自动拉起）与 `test_facade_tools.py`
+      （解析 / 门禁 / 路由；外部进程全部 mock）；golden 三份基线由
+      `regenerate_tools_golden.py` 一次全量 `--check` 通过（22 / 29 / 33）
+- [x] **真机 full 只读复核（临时 stdio 会话 + 临时 runtime）** - instructions 出现
+      `当前暴露模式：full。`、33 工具；`search_files` 返回 3 条；`get_everything_status`
+      可用（`es.exe` 1.1.0.36）；`search_games` 返回 3 个 Steam 游戏；`open_path` /
+      `open_app` / `open_game`（3DMark）均 `executed:false`，预览命令
+      `steam.exe -applaunch 223850`；未起 GUI / 游戏
 
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）

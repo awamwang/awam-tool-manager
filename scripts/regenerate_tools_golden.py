@@ -1,9 +1,11 @@
-"""重新采集 `tests/golden/tools_list.json`（对外 tools/list 基线）。
+"""重新采集 `tests/golden/tools_list*.json`（三种暴露模式的 tools/list 基线）。
 
 golden 是 `test_build_mcp_tools_matches_golden` 的比对基准：五字段
 （name / description / inputSchema / annotations / outputSchema）按列表顺序
 逐位全等。**只有对外契约发生有意变化时才该重采**——重采等于承认这次漂移是
 设计意图，改错了就会把回归洗成基线。
+
+三种模式各自一份基线（`lazy` 用旧文件名 `tools_list.json`），一次全量重采/检查。
 
 序列化规则与测试里的 `_fields()` 同源（本脚本 import 测试模块取同一个函数，
 不另抄一份），避免「脚本产出的格式测试永远比不过」。
@@ -28,29 +30,38 @@ _spec.loader.exec_module(test_tool_specs)
 
 from tool_specs import build_mcp_tools  # noqa: E402
 
-GOLDEN_PATH = ROOT / "tests" / "golden" / "tools_list.json"
+GOLDEN_PATHS = {
+    "lazy": ROOT / "tests" / "golden" / "tools_list.json",
+    "default": ROOT / "tests" / "golden" / "tools_list.default.json",
+    "full": ROOT / "tests" / "golden" / "tools_list.full.json",
+}
 
 
-def current() -> list:
-    return [test_tool_specs._fields(tool) for tool in build_mcp_tools()]
+def current(mode: str) -> list:
+    return [test_tool_specs._fields(tool) for tool in build_mcp_tools(mode)]
 
 
 def main() -> int:
     check = "--check" in sys.argv[1:]
-    text = json.dumps(current(), ensure_ascii=False, indent=2)
-    existing = GOLDEN_PATH.read_text(encoding="utf-8") if GOLDEN_PATH.exists() else None
+    stale = []
+    for mode, path in GOLDEN_PATHS.items():
+        text = json.dumps(current(mode), ensure_ascii=False, indent=2)
+        existing = path.read_text(encoding="utf-8") if path.exists() else None
+        if existing == text:
+            print(f"{mode}: 基线已是最新（{len(json.loads(text))} 个工具）")
+            continue
+        if check:
+            print(f"{mode}: 基线与当前 tools/list 不一致")
+            stale.append(mode)
+            continue
+        # 按字节写：Windows 上 write_text 会把 \n 翻成 \r\n，而基线（与仓库其余
+        # JSON 一样）是 LF——换行符漂移会让下次 diff 整篇重排。
+        path.write_bytes(text.encode("utf-8"))
+        print(f"{mode}: 已重写 {path.relative_to(ROOT)}（{len(json.loads(text))} 个工具）")
 
-    if existing == text:
-        print(f"基线已是最新（{len(json.loads(text))} 个工具），无需重写")
-        return 0
-    if check:
-        print("--check：基线与当前 tools/list 不一致，请运行本脚本（不带 --check）重采")
+    if stale:
+        print(f"--check：{', '.join(stale)} 与当前 tools/list 不一致，请运行本脚本（不带 --check）重采")
         return 1
-
-    # 按字节写：Windows 上 write_text 会把 \n 翻成 \r\n，而基线（与仓库其余
-    # JSON 一样）是 LF——换行符漂移会让下次 diff 整篇重排。
-    GOLDEN_PATH.write_bytes(text.encode("utf-8"))
-    print(f"已重写 {GOLDEN_PATH.relative_to(ROOT)}（{len(json.loads(text))} 个工具）")
     return 0
 
 

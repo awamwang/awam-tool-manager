@@ -250,13 +250,18 @@ def build_env(runtime_dir: Path, extra: dict[str, str] | None = None) -> dict[st
 
     - `AWAM_RUNTIME_DIR`：不设会落到用户真实的 %LOCALAPPDATA%（见
       `runtime_paths.py:24`），既污染用户机器又因为不在仓库里而看不出来。
-    - `AWAM_AUTO_INSTALL` / `AWAM_POLICY_FILE`：清掉宿主环境残留，保证用例
-      的判定只取决于自己在 `extra` 里设了什么。
+    - `AWAM_AUTO_INSTALL` / `AWAM_POLICY_FILE` / `AWAM_EXPOSURE_MODE` /
+      `AWAM_EXPOSURE_FILE`：清掉宿主环境残留，保证用例的判定只取决于自己
+      在 `extra` 里设了什么（暴露模式默认 lazy，需要别的模式由用例显式传入）。
     """
     env = dict(os.environ)
     env["AWAM_RUNTIME_DIR"] = str(runtime_dir)
     env.pop("AWAM_AUTO_INSTALL", None)
     env.pop("AWAM_POLICY_FILE", None)
+    env.pop("AWAM_EXPOSURE_MODE", None)
+    # 仓库副本里将来出现 data/exposure.json 时也不能改变 e2e 的基线：
+    # 把配置文件指向一个不存在的路径，需要特定模式由 extra 显式覆盖。
+    env["AWAM_EXPOSURE_FILE"] = str(runtime_dir / "no-exposure.json")
     if extra:
         env.update(extra)
     return env
@@ -379,7 +384,7 @@ def has_real_traceback(text: str) -> bool:
     return False
 
 
-def load_expected_tool_names() -> set[str]:
+def load_expected_tool_names(mode: str = "lazy") -> set[str]:
     """按**文件路径**加载 `tests/conftest.py` 里手写的工具名清单。
 
     不能用 `from conftest import EXPECTED_TOOL_NAMES`：tests/ 与 tests/e2e/
@@ -391,11 +396,10 @@ def load_expected_tool_names() -> set[str]:
     spec = importlib.util.spec_from_file_location("_tests_root_conftest", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.EXPECTED_TOOL_NAMES
+    return getattr(module, f"EXPECTED_TOOL_NAMES_{mode.upper()}")
 
 
-def load_golden() -> list[dict[str, Any]]:
-    """`tests/golden/tools_list.json`（import 级采集的历史基线）。"""
-    return json.loads(
-        (ROOT / "tests" / "golden" / "tools_list.json").read_text(encoding="utf-8")
-    )
+def load_golden(mode: str = "lazy") -> list[dict[str, Any]]:
+    """`tests/golden/tools_list[.<mode>].json`（import 级采集的基线）。"""
+    name = "tools_list.json" if mode == "lazy" else f"tools_list.{mode}.json"
+    return json.loads((ROOT / "tests" / "golden" / name).read_text(encoding="utf-8"))
