@@ -19,8 +19,8 @@ description: 统一工具管理器，维护本机工具名单，提供统一的�
 - **MCP 服务**：作为 MCP Server 暴露给 AI 客户端（stdio 模式）
 - **暴露模式**：`EXPOSURE_MODE` 控制 `tools/list` 的切片与
   `initialize.instructions` 的能力清单——`lazy`（默认，22 个管理工具，长尾走路由组合）、
-  `default`（29 个，补 7 个高频意图工具）、`full`（33 个，再补文件元信息、Everything
-  状态与 winget 搜索/安装）。也可用 `EXPOSURE_FILE` 指向 JSON 配置文件
+  `default`（29 个，补 7 个高频意图工具）、`full`（34 个，再补文件元信息、Everything
+  状态、winget 搜索/安装与包升级查询）。也可用 `EXPOSURE_FILE` 指向 JSON 配置文件
   （`{"mode": "default"}`），环境变量优先；模式在进程启动时解析一次，改完需重连客户端
 - **路由调用**：把调用转发给 `kind=mcp` 工具对应的后端 MCP Server
 - **进程管理**：管理后端 MCP 子进程的启停、状态、日志
@@ -50,6 +50,20 @@ description: 统一工具管理器，维护本机工具名单，提供统一的�
   fail-closed 的，见「安全约定」）。`winget` 没有可靠的纯读盘来源，属执行面，
   full 模式以 `search_winget_packages` / `install_winget_package` 两个意图工具接入
   （底层仍是 `winget-mcp` 后端）；**`npm` 决定不接**，见 TASKS.md P0
+- **包升级查询**：`check_package_updates`（full）默认同样**零 spawn**——拿 scoop 的已装
+  版本与 `buckets/<bucket>/bucket/<包名>.json` 里的版本相比，回答的是「本地索引认为谁有
+  新版本」，索引新旧取决于上次 `scoop update`，不等于上游最新发布。比不了的包进
+  `unknown` 并给成因（没有 install.json / 直链安装只记 url / 索引里没这个包），
+  不猜成「已最新」。要联网比版本才传 `execute=true`，走 UniGetUI 的
+  `uniget package updates`（只读，可带 `manager` 查 winget/pip 等）；UniGetUI 在本项目里
+  **不是包管理后端**：它是瘦客户端，必须先有一个活的 UniGetUI 会话，所以我们只发
+  `status` 探一次，探不到就退回读盘口径而不是冷启动它的窗口。入口按
+  `AWAM_UNIGET_CLI`（部署者覆盖）> `%LOCALAPPDATA%\Programs\UniGetUI` > `Program Files\UniGetUI`
+  定位，**刻意不回退 PATH**——与 `install_argv` 同一条纪律：要跑外部入口，就得说清跑的是哪一个
+- **两口径的实测对照**：本机 scoop 上两者给出**同样的 4 条**（age / clink / innounp /
+  scrcpy，版本一致）；全量 `uniget package updates` 是多安装器汇总，本机整份 57652 字符 /
+  238 条，远超 `run_argv` 为日志设计的 4000 字符留尾上限，所以这条命令单独抬到
+  `UNIGET_OUTPUT_MAX_CHARS`，返回仍按 `MAX_UPDATE_ROWS=100` 截断并置 `truncated`
 - **Steam 游戏库**：`kind=launcher` + `launcher.type=steam`，lazy 模式下用现成的三个
   启动器工具（`sync_launcher_actions` / `list_launcher_actions` / `run_launcher_action`）
   覆盖；default/full 额外提供意图级 `search_games` / `open_game`。清单自己读盘：
@@ -80,13 +94,13 @@ awam-tool-manager/
 │   ├── backend_client.py     # 后端 MCP 客户端与连接池
 │   ├── launcher_client.py    # 启动器适配器（非 MCP：Quicker / uTools / Steam）
 │   ├── discovery.py          # 本机工具发现（声明清单 + 只读探测，默认零 spawn）
-│   ├── pkgman.py             # 包管理器适配层（scoop：读盘列包 / 搜 bucket / 解析入口 / 构造安装命令）
+│   ├── pkgman.py             # 包管理器适配层（scoop：读盘列包 / 搜 bucket / 解析入口 / 构造安装命令 / 读盘查升级；UniGetUI CLI 只是可选的只读外部口径，不是后端）
 │   ├── steam_library.py      # Steam 库只读解析（libraryfolders.vdf + appmanifest_*.acf，以 acf 为准）
 │   ├── runtime_paths.py      # 运行时目录解析 + 旧路径迁移
 │   └── schema.py             # 两层数据的 JSON Schema 校验 + 文档生成源
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 557 个用例（另有 9 个真实 e2e 用例默认不收集，
+└── tests/                    # 713 个用例（另有 11 个真实 e2e 用例默认不收集，
                               # `pytest -m e2e` 显式跑；含真实 MCP 会话与文档漂移检测）
 ```
 
@@ -118,7 +132,7 @@ policy / usage / 生命周期仍走同一个 `dispatch_tool` 出口。模式只�
 |---|---|---|
 | **`lazy`**（默认） | 22 | 保持改造前的管理工具；文件/游戏/动作走 `search_tools → start_backend → list_backend_tools → call_backend_tool` 或启动器三件套 |
 | **`default`** | 29 | lazy + 7 个高频意图工具（文件搜索、打开路径/应用、Steam 游戏、启动器动作） |
-| **`full`** | 33 | default + 4 个低频/执行面工具（文件元信息、Everything 状态、winget 搜索/安装） |
+| **`full`** | 34 | default + 5 个低频/执行面工具（文件元信息、Everything 状态、winget 搜索/安装、包升级查询） |
 
 配置：`EXPOSURE_MODE` 环境变量 > `EXPOSURE_FILE` 指向的 JSON
 （`{"mode": "default"}`，默认路径 `data/exposure.json`）> `lazy`。取值非法或文件损坏
@@ -148,7 +162,7 @@ policy / usage / 生命周期仍走同一个 `dispatch_tool` 出口。模式只�
 | **`tool_name`**（后端子工具名） | **`name`** | 仅 `call_backend_tool` |
 | **`action_id`** / **`action_name`** | **`id`** / **`name`** | 仅 `run_launcher_action` |
 
-23/33 个工具带别名（`list_tools`、`discover_tools`、`list_packages` 等 10 个无必填参数或
+23/34 个工具带别名（`list_tools`、`discover_tools`、`list_packages` 等 11 个无必填参数或
 无可别名参数，不带别名）。
 不再接受的写法：camelCase `toolId` / `actionId` / `actionName`（与全表 snake_case 自相
 矛盾）、`q` / `text` / `pkg`（生态里没有这条惯例）、`log_level`（`level` 才是 syslog 的
@@ -199,7 +213,7 @@ policy / usage / 生命周期仍走同一个 `dispatch_tool` 出口。模式只�
 | `search_actions` | `keyword`(必填)、`source`、`limit` | 跨 Quicker / uTools 搜索快捷动作（名称、描述、关键词、动作 ID），返回 `source/toolId/actionId/name`；`source` 可限定单个启动器 |
 | `run_action` | `action`(必填)、`source`、`param`、`execute`、`allowDestructive`、`wait` | 按动作 ID 或唯一名称执行 Quicker / uTools 动作；默认只预览解析结果；已知原始 ID 时可传 `source` 直调；三个启动器条目都标了 destructive |
 
-#### full 追加的补充工具（4 个）
+#### full 追加的补充工具（5 个）
 
 低频查询与执行面工具，默认模式下不占用工具名预算。
 
@@ -209,6 +223,7 @@ policy / usage / 生命周期仍走同一个 `dispatch_tool` 出口。模式只�
 | `get_everything_status` | 无 | 查看 Everything 后端与索引状态；**只读，不自动启动后端**（避免「查状态」改变状态） |
 | `search_winget_packages` | `keyword`、`upgradeable` | 用 winget 搜索可安装包；`keyword` 省略且 `upgradeable=true` 时列出可升级项；自动启动 `winget-mcp` 后端 |
 | `install_winget_package` | `identifier`(必填)、`upgrade_only`、`source`、`execute`、`allowDestructive` | 用 winget 安装/升级；默认只回参数预览；执行需 `execute=true` + `allowDestructive=true`（`kind=mcp` 门禁，底层调用 `install-winget-package`） |
+| `check_package_updates` | `manager`、`execute`、`timeout` | 查哪些包有可用更新：**默认零 spawn**（scoop 已装版本 vs 本地 bucket 索引版本取差集；缺比较基准的包进 `unknown` 并给原因，不代表「已最新」；索引新旧取决于上次 `scoop update`）；`execute=true` 才先 `uniget status` 探一次、再 `uniget package updates` 拿外部口径（可带 `manager` 查 winget / pip 等），探不到会话就**如实退回读盘**（`engine` + `uniget.reason` 说明为什么退），不冷启动 UniGetUI 的窗口；`manager` 只认白名单，非 scoop 且 UniGetUI 不可用时报 `install_required`，不给空清单 |
 
 > `kind=launcher`（启动器，如 Quicker / uTools / Steam）不是 MCP：没有长连接，调用是一次性的。
 > - **Quicker**：`QuickerStarter.exe -c<秒> "runaction:<ID或名称>?参数"`，stdout 回传动作

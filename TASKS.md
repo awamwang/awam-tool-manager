@@ -25,7 +25,7 @@
 - [x] MCP Server 入口（server.py）：stdio 模式
 - [x] 日志系统（输出到 stderr，不污染协议通道）
 
-### 对外 MCP 工具（lazy 22 个；default 29 / full 33）
+### 对外 MCP 工具（lazy 22 个；default 29 / full 34）
 - [x] `search_tools` - 搜索工具（关键词 + `kind` / `status` / `publisher` 筛选）
 - [x] `list_tools` - 列出所有工具（同上三个筛选维度，见「筛选维度增强」）
 - [x] `get_tool_info` - 查看工具详情
@@ -41,6 +41,9 @@
 - [x] `sync_backend_tools` - 同步后端子工具目录到本地
 - [x] 7 个意图前门 + 4 个 full 补充工具 - 2026-10-20 新增（P1），三档暴露模式见
       「暴露模式与意图级工具门面」；lazy 保持原 22 个契约不变
+- [x] `check_package_updates` - 第 5 个 full 补充工具（2026-10-24），查「哪些包有可用更新」：
+      默认零 spawn（scoop 已装版本 vs 本地 bucket 索引版本），`execute=true` 才问 UniGetUI，
+      见「包升级查询与 UniGetUI 外部口径」小节
 
 ### 协议合规
 - [x] 后端工具参数名统一为 `tool_id`（移除历史遗留的 mcp_tool_id / launcher_id）
@@ -1071,6 +1074,51 @@
       `open_app` / `open_game`（3DMark）均 `executed:false`，预览命令
       `steam.exe -applaunch 223850`；未起 GUI / 游戏
 
+### 包升级查询与 UniGetUI 外部口径（P1，2026-10-24）
+- [x] **定位先划清**：UniGetUI 在本项目里**不是包管理后端**（它是瘦客户端，数据要连一个
+      活的 UniGetUI 会话），只作为「谁有可用更新」的**可选外部口径**。scoop 仍是唯一
+      读盘后端，`npm` 不接（2026-10-19 决定）、`winget` 属执行面（走 `winget-mcp`）不变
+- [x] **读盘层 `pkgman.read_disk_updates`** - 已装版本 vs `buckets/<bucket>/bucket/<包名>.json`
+      的版本差集，零 spawn、零联网；比不了的包进 `unknown` 并给成因（读不到 install.json /
+      直链安装只记 url / 索引里没这个包 / 已装版本缺失），不猜成「已最新」。
+      版本比较键 `version_key` 从 `_version_dirs` 内部提到模块级，顺手修了空段 bug
+      （`version_key(None)` 原返回 `[(1, '')]`，现在正确是 `[]`）
+- [x] **UniGetUI 适配层** - `locate_uniget_cli()`（`AWAM_UNIGET_CLI` > `%LOCALAPPDATA%\Programs\UniGetUI`
+      > `Program Files\UniGetUI`，**不走 PATH**，取不到就枚举试过的路径）、
+      `uniget_status_argv` / `uniget_updates_argv`；`manager` 只认 17 个稳定 id 的白名单，
+      `--elevated` 这类选项串按 `invalid_params` 拒（参数位一开就是走私面）
+- [x] **`run_argv` 契约扩展：`max_output` + `stdoutTruncated`** - 原 4000 字符**留尾**对装包
+      日志是对的，对 JSON 是拦腰砍。这条是**真机第一跑打出来的**：本机整份
+      `uniget package updates` 57652 字符 / 238 条，按默认口径切完解析必失败，
+      于是 JSON 类调用方自己抬到 `UNIGET_OUTPUT_MAX_CHARS=200000`，
+      仍被截时如实报「输出被截断，用 manager 分开查」而不是给 0 条
+- [x] **数组键按命令不同，读错就是假阴性** - `package updates` 给 `updates`、
+      `package installed` 才给 `packages`（本机各取一份真实应答核对）。
+      解析器原先读 `packages`，改成 `updates` 并**要求它是数组**：`status=success`
+      但缺数组时抛错，不许退化成空清单（空清单会被下游读成「都没有更新」）
+- [x] **两条口径、只有一条是默认值** - `check_package_updates`（第 5 个 full 工具）默认读盘；
+      `execute=true` 才 spawn，且**先发 `status` 探一次**（唯一不需要 token 的命令），
+      `running=false` 就绝不发第二条——第二条会把参数转给 `UniGetUI.exe` 冷启动 GUI。
+      外部口径可用时连 `resolve_root` 都不碰；不可用则退回读盘并把原因带在 `uniget.reason`；
+      `manager` 是非 scoop 而外部口径又不在 → `install_required`，不给空清单
+- [x] **测试 708 → 713** - 新增 5 条：`run_argv` 上限与截断标志、`updates` 数组键三条
+      （空数组=都最新 / 缺数组=报错 / 夹具改真实形状）、探测按命令抬不同上限、
+      截断载荷降级为读盘且理由带自救步骤
+- [x] **真机复核（临时 stdio 会话 + `EXPOSURE_MODE=full` + 临时 runtime，本机 UniGetUI 2026.3.2 在跑）**
+      - `tools/list` 34 个工具，`check_package_updates` 的 schema 三个可选参数、
+        `readOnlyHint=true` / `destructiveHint=false`
+      - 默认口径：`engine=read_disk`、root `S:\Libs\Scoop`（进程环境 SCOOP）、
+        `scanned=15` `count=4` `unknown=5` `truncated=false`、`cli=null`（没探过入口，确实零 spawn）
+      - `execute=true`：`engine=uniget` `count=100` `truncated=true`（238 条按上限截），
+        `manager=winget` → 62 条不截断
+      - **两口径在 scoop 上给出同样的 4 条**（age 1.3.1→1.3.2 / clink 1.6.3→1.9.5 /
+        innounp 0.50→2.66.1 / scrcpy 2.3.1→3.3.3），名字与两侧版本逐字段一致
+      - 拒绝面：`manager=--elevated` → `invalid_params`；`manager=winget` 不带 `execute` →
+        `install_required`；会话结束后 stderr 无真异常（spawn 没吃协议通道）
+- [x] **刻意没测的一格**：「UniGetUI 会话未运行」这条降级只在单测里覆盖——
+      本机 UniGetUI 常驻，为了测试去关掉用户的 GUI 不在授权范围内。
+      真机第一跑意外验证过**另一条**降级（解析失败 → `engine=read_disk` + 理由原样带回）
+
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
 - [x] Everything Search MCP（`kind=mcp`，已实测连接、调用、启停跑通）
@@ -1310,8 +1358,10 @@
 - [ ] 版本检测和更新提醒
       （2026-10-18 真机已验通「取本机版本」这一半：`discover_tools` 的
       `run_commands=true` 拿到 scoop 0.5.3 / winget 1.12.350 / node 22.22.2 /
-      python 3.12.0。仍缺的是另一半——没有「最新版本」来源，也没有把版本写回
-      `data/tools/` 条目的口径，所以提醒还立不起来）
+      python 3.12.0。）「最新版本」这一半在 2026-10-24 落地成 `check_package_updates`
+      （见「包升级查询与 UniGetUI 外部口径」）：读盘差集 + UniGetUI 外部口径。
+      仍缺的是**提醒**那一层——工具只能被问，没有把结果写回 `data/tools/` 条目、
+      也没有定时/主动通知的口径
 - [x] 工具使用统计 — ✅ 已完成（2026-10-18，见「工具使用统计（P3）」小节）：
       dispatch 五个出口各记一行 JSONL 到 `<runtime>/usage.log`（不含参数），
       第 17 个对外工具 `get_usage_stats` 按窗口聚合；刻意不做跨进程计数精度保证、
@@ -1471,8 +1521,8 @@ awam-tool-manager/
     ├── test_app_launcher.py          # kind=app 启动执行（execute 路径底座）
     ├── test_tool_help.py             # 帮助取数分层 + help 命令执行（run 才 spawn）
     ├── test_discovery.py             # 发现清单校验 + 三态折叠 + 默认零 spawn
-    ├── test_pkgman.py                # 包管理适配层：合成 scoop 树 + 三态 + 入口挑选 + 只构造命令
-    ├── test_pkgman_handlers.py       # 包管理四个工具：默认零 spawn + 门禁位置 + 错误分类
+    ├── test_pkgman.py                # 包管理适配层：合成 scoop 树 + 三态 + 入口挑选 + 只构造命令 + 升级差集与 UniGetUI 载荷解析
+    ├── test_pkgman_handlers.py       # 包管理五个工具：默认零 spawn + 门禁位置 + 错误分类 + 两条升级口径的降级理由
     ├── test_steam_library.py         # vdf/acf 只读解析：嵌套块/转义/快速失败/逐库存在性
     ├── test_steam_launcher.py        # steam 适配器：动作形状 + 注册表定位 + argv + 未授权拦截
     ├── test_arg_aliases.py           # 入参别名与规范名等价 + 必填自描述 + schema 与归一化自洽

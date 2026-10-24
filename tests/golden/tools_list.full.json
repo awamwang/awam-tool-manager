@@ -1613,5 +1613,42 @@
       ],
       "additionalProperties": true
     }
+  },
+  {
+    "name": "check_package_updates",
+    "description": "查哪些包有可用更新；默认零 spawn（读 scoop 已装版本 vs 本地 bucket 索引），execute=true 才问 UniGetUI（可带 manager 查 winget/pip 等，需本机 UniGetUI 在运行）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "manager": {
+          "type": "string",
+          "description": "可选，只查某个安装器（UniGetUI 的稳定 id，如 scoop / winget / pip / npm / chocolatey / dotnet-tool）；纯读盘口径只覆盖 scoop"
+        },
+        "execute": {
+          "type": "boolean",
+          "description": "可选，默认 false。true 才 spawn UniGetUI 的只读查询（探不到会话时自动退回读盘口径，不冷启动它的窗口）"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "可选，UniGetUI 命令的超时秒数（默认 120，上限 600；纯读盘不跑命令）"
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
   }
 ]

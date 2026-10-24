@@ -6,7 +6,8 @@
   `search_tools → start_backend/list_backend_tools → call_backend_tool`；
 - `default`：在 lazy 之上补 7 个意图级前门工具（文件搜索、打开路径、打开应用、
   Steam 游戏、启动器动作），模型看到工具名就知道能力存在；
-- `full`：再补 4 个低频/执行面工具（文件元信息、Everything 状态、winget 搜索与安装）。
+- `full`：再补 5 个低频/执行面工具（文件元信息、Everything 状态、winget 搜索与安装、
+  包升级查询）。
 
 模式在进程启动时解析一次（MCP 客户端需重连才会拿到新的 tools/list）。
 优先级：`EXPOSURE_MODE` 环境变量 > `data/exposure.json` 的 `mode` > `lazy`。
@@ -114,6 +115,7 @@ _FAMILIES: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("install_package", "安装 scoop 包；需 execute=true 且 allowDestructive=true"),
             ("search_winget_packages", "用 winget 搜索可安装/可升级的包"),
             ("install_winget_package", "用 winget 安装或升级包；需 execute=true 且 allowDestructive=true"),
+            ("check_package_updates", "查哪些包有可用更新；默认读 scoop 盘上的版本差集，execute=true 才问 UniGetUI"),
         ),
     ),
     (

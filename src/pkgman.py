@@ -5,10 +5,16 @@ r"""本机包管理器适配层（P2-07）：只读枚举已安装包 + 解析�
 同一套 `{ENV}` 取值纪律（进程环境 → 注册表回退），所以本模块只 import `discovery`
 的 `registry_env_value`，不再实现第二份注册表读取。
 
-**默认零执行**：列清单与搜索**只读盘**——scoop 把已装状态写在 `apps/<name>/<ver>/
-manifest.json` 与 `install.json`、把可装清单写在 `buckets/<bucket>/bucket/*.json`，
-一次 `scoop list` 都不必跑（跑了也只是把这些文件读一遍再格式化）。只有
-`install_package` / `launch_package` 真的起子进程，且都要显式参数才起。
+**默认零执行**：列清单、搜索、以及「谁有可用更新」的默认口径**只读盘**——scoop 把已装
+状态写在 `apps/<name>/<ver>/manifest.json` 与 `install.json`、把可装清单写在
+`buckets/<bucket>/bucket/*.json`，一次 `scoop list` 都不必跑（跑了也只是把这些文件读一
+遍再格式化）；升级差集就是这两个版本号相比。只有
+`install_package` / `launch_package` / 显式 `execute=true` 的 UniGetUI 升级查询才起子进程。
+
+UniGetUI（`uniget.exe`）在本模块里**不是包管理后端**，只是一层可选的只读升级查询：
+它自己也要 spawn 底层安装器，且必须连上一个活的 UniGetUI 会话，所以走
+`locate_uniget_cli` + `uniget_*_argv` + 解析函数的显式路径，探不到就由调用方
+回落到上面的读盘差集。
 
 真机勘察（2026-10-19，`S:\Libs\Scoop`）决定了这里几个不显眼但关键的取舍：
 
@@ -49,11 +55,19 @@ __all__ = [
     "install_argv",
     "launch_target",
     "list_installed",
+    "locate_uniget_cli",
+    "parse_uniget_running",
+    "parse_uniget_updates",
+    "read_disk_updates",
     "resolve_root",
     "run_argv",
     "search_packages",
     "shim_paths",
+    "uniget_status_argv",
+    "uniget_updates_argv",
     "validate_name",
+    "validate_uniget_manager",
+    "version_key",
 ]
 
 # 已实现的后端。winget / npm 尚未接线：`winget list` 没有可靠的纯读盘来源，
@@ -75,6 +89,10 @@ MAX_TIMEOUT = 600
 # 命令输出回传上限（stdout / stderr 各一份）：装包日志能到几百 KB，
 # 全量塞进 MCP 响应会把客户端上下文吃掉一半，留尾部才是有用那段。
 OUTPUT_MAX_CHARS = 4000
+# 但「留尾部」只对**日志**成立：`uniget package updates` 是结构化 JSON，按 4000
+# 字符切尾会把文档拦腰截断（本机实测整份 57652 字符 / 238 条可升级），解析必失败。
+# 这类调用方自己抬上限，并检查返回里的 `stdoutTruncated`。
+UNIGET_OUTPUT_MAX_CHARS = 200_000
 
 
 def _decode(raw: bytes) -> str:
@@ -194,24 +212,29 @@ def _load_json(path: Path) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def _version_dirs(app_dir: Path) -> list[str]:
-    """app 目录下的版本目录名（排除 `current`），按「点分段数字优先」排序。
+def version_key(value: Any) -> list:
+    """版本号的比较键：逐段比数值，非数字段回落小写串。
 
     scoop 版本号形如 `25.01` / `2025.12.0` / `0.50`，字符串排序会把 `19.8.3` 排在
-    `2.3.1` 前面，所以逐段比数值；非数字段回落到小写串比较。
+    `2.3.1` 前面。空值返回 `[]`，任何非空版本都比它大——所以「读不到已装版本」的行
+    必须在调用侧先挡掉，不能靠这里兜（否则会给出「有更新」的假信号）。
     """
+    parts = []
+    for seg in re.split(r"[._-]+", str(value or "")):
+        if not seg:
+            continue  # 前后分隔符产生的空段不算一层，否则 `version_key(None)` 不是 []
+        parts.append((0, int(seg)) if seg.isdigit() else (1, seg.lower()))
+    return parts
+
+
+def _version_dirs(app_dir: Path) -> list[str]:
+    """app 目录下的版本目录名（排除 `current`），按「点分段数字优先」排序。"""
     try:
         entries = [p.name for p in app_dir.iterdir() if p.is_dir() and p.name != "current"]
     except OSError:
         return []
 
-    def key(v: str):
-        parts = []
-        for seg in re.split(r"[._-]+", v):
-            parts.append((0, int(seg)) if seg.isdigit() else (1, seg.lower()))
-        return parts
-
-    return sorted(entries, key=key, reverse=True)
+    return sorted(entries, key=version_key, reverse=True)
 
 
 def _abs_under(base: Path, rel: str) -> Path | None:
@@ -575,6 +598,241 @@ def search_packages(root: str, query: str, limit: Any = None) -> dict:
             "scannedManifests": scanned_manifests, "limit": cap}
 
 
+# ---- 升级探测：本地 bucket 索引差集（零 spawn）+ UniGetUI 只读查询（显式执行）----
+
+# `uniget package updates --manager <id>` 的稳定 id 白名单（docs/CLI.md 的取值表，
+# 2026-10-24 对照本机 v2026.3.2 核对）。argv 直传不过 shell，但参数位一旦开放就会被
+# `--elevated` 这类选项字符串走私，所以只认这批固定值——与 `install_argv` 不预留
+# 透传 flag 位是同一条纪律。
+UNIGET_MANAGERS = (
+    "apt", "bun", "cargo", "chocolatey", "dnf", "dotnet-tool", "flatpak",
+    "homebrew", "npm", "pacman", "pip", "pwsh", "scoop", "snap", "vcpkg",
+    "winget", "winps",
+)
+
+# 命令行入口的显式覆盖（同 AWAM_* 系列：由部署者指路径）
+UNIGET_CLI_ENV_VAR = "AWAM_UNIGET_CLI"
+
+# 单次探测最多回传多少条升级项：兜住异常大的机器，本机实测读盘差集是 4 条
+MAX_UPDATE_ROWS = 100
+
+
+def validate_uniget_manager(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text not in UNIGET_MANAGERS:
+        raise PackageError(
+            f"不支持的安装器标识: {value!r}（UniGetUI 的稳定 id 只有: "
+            f"{', '.join(UNIGET_MANAGERS)}）",
+            ErrorType.INVALID_PARAMS,
+        )
+    return text
+
+
+def bucket_version(root: str, bucket: str, name: str) -> str | None:
+    """本地 bucket 索引里这个包的最新版本（纯读盘）。
+
+    目录布局与 `search_packages` 同源：`buckets/<bucket>/bucket/<name>.json`，少数
+    平铺的 bucket 回落 `buckets/<bucket>/<name>.json`。`bucket` 取自 install.json、
+    `name` 取自我们的已装清单，两者都参与路径拼接，所以一个用 `_abs_under` 收越界、
+    一个用 `validate_name` 收字符集——本地盘上的数据不算可信输入。
+    """
+    base = _abs_under(Path(root) / "buckets", str(bucket or ""))
+    if base is None:
+        return None
+    try:
+        safe = validate_name(name)
+    except PackageError:
+        return None
+    for cand in (base / "bucket" / f"{safe}.json", base / f"{safe}.json"):
+        if cand.is_file():
+            version = (_load_json(cand) or {}).get("version")
+            return version.strip() if isinstance(version, str) and version.strip() else None
+    return None
+
+
+def read_disk_updates(root: str) -> dict:
+    """已装版本 vs 本地 bucket 索引版本 的差集：**纯读盘**，不 spawn、不联网。
+
+    口径要说清楚：它回答的是「本地 bucket 索引认为谁有新版本」，索引本身新旧取决于
+    上次 `scoop update`，不等于上游最新发布。比不了的包进 `unknown` 并给原因
+    （直链安装没有 bucket、`no_manifest` 读不到已装版本、索引里没有这个包），
+    不猜成「已是最新」——`version_key` 对空值返回 `[]`，任何版本都比它大，
+    正因如此缺基准的行必须在这里先挡住。
+    """
+    installed = list_installed(root)
+    rows: list[dict] = []
+    unknown: list[dict] = []
+    for row in installed:
+        name = row["name"]
+        bucket = row.get("bucket")
+        version = row.get("version")
+        if not bucket and not version:
+            # 本机实测：scoop / openssl-light / scoop-search 连 install.json 都没有
+            unknown.append({
+                "name": name,
+                "reason": "install.json 读不到（scoop 本体与手工目录都是这种），已装版本和 bucket 都缺",
+            })
+        elif not bucket:
+            # 直链安装：install.json 写的是 url 而不是 bucket（本机 bayes / oh-my-posh）
+            unknown.append({
+                "name": name,
+                "reason": "直链安装（install.json 记 url 而非 bucket），本地 bucket 索引里没有可比版本",
+            })
+        elif not version:
+            unknown.append({
+                "name": name,
+                "reason": f"已装版本读不到（state={row['state']}），没有比较基准",
+            })
+        else:
+            available = bucket_version(root, bucket, name)
+            if available is None:
+                unknown.append({
+                    "name": name,
+                    "reason": f"bucket '{bucket}' 的索引里没有 {name}.json",
+                })
+            elif version_key(available) > version_key(version):
+                rows.append({
+                    "manager": "scoop",
+                    "name": name,
+                    "installedVersion": version,
+                    "availableVersion": available,
+                    "bucket": bucket,
+                    "state": row["state"],
+                })
+    rows.sort(key=lambda r: r["name"].lower())
+    return {
+        "rows": rows[:MAX_UPDATE_ROWS],
+        "truncated": len(rows) > MAX_UPDATE_ROWS,
+        "scanned": len(installed),
+        "unknown": unknown,
+    }
+
+
+def locate_uniget_cli() -> tuple[str | None, str]:
+    """定位 UniGetUI 的命令行入口 `uniget.exe`（只做文件检查，不 spawn）。
+
+    候选只有显式覆盖和安装器会写的两个位置：`UniGetUI.iss` 的 `DefaultDirName` 是
+    `{autopf64}\\UniGetUI`，per-user 装即 `%LOCALAPPDATA%\\Programs\\UniGetUI`（本机
+    实测就在这），系统装即 `%ProgramFiles%\\UniGetUI`。**不走 PATH 兜底**——与
+    `install_argv` 同一条纪律：要跑外部入口，就得说清跑的是哪一个。
+    """
+    override = os.environ.get(UNIGET_CLI_ENV_VAR, "").strip().strip('"')
+    if override:
+        exe = Path(override)
+        if exe.is_file():
+            return str(exe), f"环境变量 {UNIGET_CLI_ENV_VAR}"
+        return None, f"{UNIGET_CLI_ENV_VAR} 指向的文件不存在: {exe}"
+
+    candidates = []
+    local = (os.environ.get("LOCALAPPDATA") or "").strip()
+    if local:
+        candidates.append(Path(local) / "Programs" / "UniGetUI")
+    for var in ("ProgramW6432", "ProgramFiles"):
+        text = (os.environ.get(var) or "").strip()
+        if text:
+            candidates.append(Path(text) / "UniGetUI")
+    candidates = list(dict.fromkeys(candidates))
+    if not candidates:
+        return None, (
+            f"LOCALAPPDATA / ProgramFiles 都取不到，无法定位 uniget.exe"
+            f"（可用 {UNIGET_CLI_ENV_VAR} 显式指定）"
+        )
+    for root in candidates:
+        exe = root / "uniget.exe"
+        if exe.is_file():
+            return str(exe), f"官方安装位置 {root}"
+    return None, (
+        "没找到 uniget.exe（试过: "
+        + ", ".join(str(root / "uniget.exe") for root in candidates)
+        + f"；可用 {UNIGET_CLI_ENV_VAR} 显式指定）"
+    )
+
+
+def uniget_status_argv(exe: str) -> list[str]:
+    """构造 `uniget status`：只问「本机有没有活的 UniGetUI 会话」。
+
+    这一步不是冗余：`status` 是唯一不需要 token 的命令，而其余数据命令在没有会话时
+    会把参数转给 `UniGetUI.exe` 去冷启动——先探一次，就把「顺手弹出一个 GUI」的
+    可能挡在门外。
+    """
+    return [str(exe), "status"]
+
+
+def uniget_updates_argv(exe: str, manager: str | None = None) -> list[str]:
+    """构造 `uniget package updates`（只读查询）。只构造、不执行。"""
+    argv = [str(exe), "package", "updates"]
+    if manager:
+        argv += ["--manager", validate_uniget_manager(manager)]
+    return argv
+
+
+def _parse_uniget_json(text: str, what: str) -> dict:
+    data: Any
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        raise PackageError(
+            f"{what} 的输出不是 JSON: {str(text)[:200]!r}", ErrorType.RUNTIME_ERROR
+        ) from None
+    if not isinstance(data, dict):
+        raise PackageError(f"{what} 的输出不是 JSON 对象", ErrorType.RUNTIME_ERROR)
+    return data
+
+
+def parse_uniget_running(text: str) -> bool:
+    """`uniget status` → 会话是否活着（实测字段 `running`，非 true 一律按不可用处理）"""
+    return _parse_uniget_json(text, "uniget status").get("running") is True
+
+
+def parse_uniget_updates(text: str) -> dict:
+    """`uniget package updates` 的 JSON → 我们的行。
+
+    UniGetUI 失败时给出的仍是 JSON，只是 `status` 为 `error`（实测两种：没有活会话
+    `The IPC API token is not available`；某个 manager 没就绪
+    `No ready package manager matching "..."`），所以先看 status 再取数组。
+    数组键按命令不同：`package updates` 是 `updates`，`package installed` 才是
+    `packages`（本机各取过一份真实应答核对）——读错键会得到「没有更新」的假阴性。
+    `name` 取 `id`（能直接交给安装命令的那个标识），显示名只在与 id 不同时才带。
+    """
+    data = _parse_uniget_json(text, "uniget package updates")
+    if data.get("status") != "success":
+        raise PackageError(
+            f"uniget package updates 返回失败: "
+            f"{data.get('message') or data.get('status')}",
+            ErrorType.RUNTIME_ERROR,
+        )
+    rows: list[dict] = []
+    items = data.get("updates")
+    if not isinstance(items, list):
+        raise PackageError(
+            "uniget package updates 的成功响应里没有 updates 数组"
+            f"（顶层键: {', '.join(sorted(data)) or '无'}）；"
+            "把它读成「没有可用更新」会是假阴性",
+            ErrorType.RUNTIME_ERROR,
+        )
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if not (item.get("isUpgradable") or item.get("newVersion")):
+            continue
+        name = str(item.get("id") or item.get("name") or "").strip()
+        if not name:
+            continue
+        display = str(item.get("name") or "").strip()
+        row = {
+            "manager": str(item.get("manager") or ""),
+            "name": name,
+            "installedVersion": item.get("version") or None,
+            "availableVersion": item.get("newVersion") or None,
+            "source": item.get("source") or None,
+        }
+        if display and display != name:
+            row["displayName"] = display
+        rows.append(row)
+    rows.sort(key=lambda r: (r["manager"], r["name"].lower()))
+    return {"rows": rows[:MAX_UPDATE_ROWS], "truncated": len(rows) > MAX_UPDATE_ROWS}
+
+
 def install_argv(root: str, name: str) -> list[str]:
     """构造安装命令。只构造、不执行——执行权在 handler，且要过 destructive 门禁。
 
@@ -593,16 +851,23 @@ def install_argv(root: str, name: str) -> list[str]:
     return [str(shim), "install", safe]
 
 
-async def run_argv(argv: list[str], timeout: int = DEFAULT_TIMEOUT) -> dict:
+async def run_argv(
+    argv: list[str],
+    timeout: int = DEFAULT_TIMEOUT,
+    max_output: int = OUTPUT_MAX_CHARS,
+) -> dict:
     """执行一条已构造好的命令并捕获输出（异步，照 `tool_help.run_help_command` 的路子）。
 
-    三点不是风格而是约束：
+    四点不是风格而是约束：
     - **`stdin=DEVNULL`**：子进程若继承 server 的 stdio 管道，会偷走 inbound
       JSON-RPC 字节，真机上打死过整个网关（见 TASKS.md 缺陷②）；
     - **不用 `subprocess.run`**：handler 跑在事件循环里，装包是分钟级动作，
       同步等待会把整个 MCP server 冻住；
     - **限时用 `anyio.fail_after`**：`asyncio.wait_for` 从外部任务取消协程会撕裂
       传输层 scope（backend_client 里四处注释反复交代过同一个坑）。
+    - **`max_output` 留的是尾部**：对日志是对的（有用的是最后那段），对结构化
+      输出（JSON）是错的——这类调用方要么抬 `max_output`，要么必须查
+      `stdoutTruncated`，不要把截断串当完整文档解析。
     """
     cap = _clamp_int(timeout, default=DEFAULT_TIMEOUT, low=1,
                      high=MAX_TIMEOUT, what="timeout")
@@ -633,12 +898,15 @@ async def run_argv(argv: list[str], timeout: int = DEFAULT_TIMEOUT) -> dict:
         except Exception:
             pass
 
+    stdout_text = _decode(stdout)
+    stderr_text = _decode(stderr)
     return {
         "ok": (not timed_out) and process.returncode == 0,
         "exitCode": process.returncode,
         "timedOut": timed_out,
-        "stdout": _decode(stdout)[-OUTPUT_MAX_CHARS:],
-        "stderr": _decode(stderr)[-OUTPUT_MAX_CHARS:],
+        "stdout": stdout_text[-max_output:],
+        "stderr": stderr_text[-max_output:],
+        "stdoutTruncated": len(stdout_text) > max_output,
         "argv": argv,
         "timeout": cap,
     }

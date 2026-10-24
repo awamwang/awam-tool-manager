@@ -1018,6 +1018,155 @@ async def _handle_install_package(arguments: dict, ctx: ToolContext) -> dict:
     return payload
 
 
+async def _uniget_update_probe(manager: str, timeout: Any) -> dict:
+    """跑一遍 UniGetUI 的只读升级查询；任何一步不成就说清卡在哪。
+
+    先 `status` 再取数据不是冗余：`status` 是唯一不需要 token 的命令，而数据命令在
+    没有活会话时会把参数转给 `UniGetUI.exe` 去冷启动（实测无会话时退出码 2、
+    「Start UniGetUI and try again」）。先探一下，就不会替用户弹出一个 GUI。
+    """
+    exe, exe_source = pkgman.locate_uniget_cli()
+    if exe is None:
+        return {"available": False, "exe": None, "reason": exe_source}
+
+    status = await pkgman.run_argv(pkgman.uniget_status_argv(exe), timeout)
+    if not status["ok"]:
+        return {
+            "available": False, "exe": exe,
+            "reason": f"uniget status 未成功（退出码 {status['exitCode']}"
+            + ("，已超时终止" if status["timedOut"] else "")
+            + f"）: {status['stderr'][:200]}",
+        }
+    try:
+        running = pkgman.parse_uniget_running(status["stdout"])
+    except pkgman.PackageError as exc:
+        return {"available": False, "exe": exe, "reason": str(exc)}
+    if not running:
+        return {
+            "available": False, "exe": exe,
+            "reason": "UniGetUI 会话未运行（status 返回 running=false）；"
+            "不代为冷启动它的窗口，需要外部口径请启动 UniGetUI 后重试",
+        }
+
+    run = await pkgman.run_argv(
+        pkgman.uniget_updates_argv(exe, manager or None),
+        timeout,
+        max_output=pkgman.UNIGET_OUTPUT_MAX_CHARS,
+    )
+    if not run["ok"]:
+        return {
+            "available": False, "exe": exe,
+            "reason": f"uniget package updates 未成功（退出码 {run['exitCode']}"
+            + ("，已超时终止" if run["timedOut"] else "")
+            + f"）: {(run['stdout'] or run['stderr'])[:200]}",
+        }
+    try:
+        parsed = pkgman.parse_uniget_updates(run["stdout"])
+    except pkgman.PackageError as exc:
+        reason = str(exc)
+        if run.get("stdoutTruncated"):
+            reason += (
+                f"（输出超过 {pkgman.UNIGET_OUTPUT_MAX_CHARS} 字符被截断；"
+                "传 manager 限定单个安装器再试）"
+            )
+        return {"available": False, "exe": exe, "reason": reason}
+    return {
+        "available": True, "exe": exe, "rows": parsed["rows"],
+        "truncated": parsed["truncated"],
+    }
+
+
+async def _handle_check_package_updates(arguments: dict, ctx: ToolContext) -> dict:
+    """查「哪些包有可用更新」，默认口径**零 spawn**。
+
+    两条路共用一个工具，但只有一条是默认值：
+    - 默认读盘：scoop 的已装版本 vs 本地 bucket 索引里的版本，不 spawn、不联网；
+    - `execute=true` 才问 UniGetUI（`uniget package updates`，只读，但它自己会
+      spawn 底层安装器并联网，且必须连一个活的会话）。探不到会话就退回读盘层，
+      并把「为什么退回来」原样带回 `uniget.reason`，不静默换口径。
+    """
+    manager_arg = str(arguments.get("manager") or "").strip().lower()
+    if manager_arg:
+        try:
+            manager_arg = pkgman.validate_uniget_manager(manager_arg)
+        except pkgman.PackageError as exc:
+            fail(str(exc), error_type=exc.error_type, manager=manager_arg)
+
+    uniget: dict[str, Any] = {"available": False, "exe": None}
+    if arguments.get("execute"):
+        uniget = await _uniget_update_probe(
+            manager_arg, arguments.get("timeout")
+        )
+    else:
+        uniget["reason"] = "未启用外部查询：UniGetUI 口径需要显式 execute=true"
+
+    if uniget["available"]:
+        return {
+            "success": True,
+            "engine": "uniget",
+            "manager": manager_arg or None,
+            "count": len(uniget["rows"]),
+            "updates": uniget["rows"],
+            "truncated": uniget["truncated"],
+            "cli": uniget["exe"],
+            "note": (
+                "这份清单来自 UniGetUI（它会 spawn 底层安装器并联网比版本），"
+                "只含**可升级项**，已最新的包不在其中，所以没有总数；"
+                "要和本机 scoop 的读盘差集对照，请用 execute=false"
+            ),
+        }
+
+    if manager_arg and manager_arg != "scoop":
+        # 读盘层覆盖不到这个安装器：空清单会被读成「没有更新」，必须显式失败
+        fail(
+            f"{manager_arg} 的升级查询只能由 UniGetUI 提供，而它这次不可用："
+            f"{uniget.get('reason')}（纯读盘口径目前只覆盖 scoop）",
+            error_type=ErrorType.INSTALL_REQUIRED,
+            manager=manager_arg,
+        )
+
+    try:
+        root, root_reason = pkgman.resolve_root("scoop")
+    except pkgman.PackageError as exc:
+        fail(str(exc), error_type=exc.error_type, manager="scoop")
+    if root is None:
+        fail(
+            f"定位不到 scoop 的安装根目录：{root_reason}；"
+            f"UniGetUI 也不可用（{uniget.get('reason')}）",
+            error_type=ErrorType.INSTALL_REQUIRED,
+            manager="scoop",
+        )
+
+    diff = pkgman.read_disk_updates(root)
+    payload: dict[str, Any] = {
+        "success": True,
+        "engine": "read_disk",
+        "manager": "scoop",
+        "root": root,
+        "rootSource": root_reason,
+        "scanned": diff["scanned"],
+        "count": len(diff["rows"]),
+        "updates": diff["rows"],
+        "unknown": diff["unknown"],
+        "truncated": diff["truncated"],
+        "cli": uniget.get("exe"),
+        "uniget": uniget,
+    }
+    if not diff["rows"]:
+        payload["note"] = (
+            "读盘差集为空：本地 bucket 索引里没有比已装版本更高的条目。"
+            "这只说明**索引认为**没更新——索引新旧取决于上次 `scoop update`，"
+            "不等于上游最新发布；要联网比版本用 execute=true"
+        )
+    else:
+        payload["note"] = (
+            f"口径：已装版本 vs 本地 bucket 索引里的版本（{diff['scanned']} 个已装包里 "
+            f"{len(diff['rows'])} 个更高）。索引本身的新旧取决于上次 `scoop update`，"
+            "不等于上游最新发布；unknown 里的包没有可比基准，不代表它们已最新"
+        )
+    return payload
+
+
 # ---- 意图级前门工具（default）与低频补充工具（full）----
 # 这些工具仍是同一张声明表里的普通条目：policy / usage / 生命周期走同一条
 # dispatch 出口。它们只做「解析目标 → 门禁 → 调用既有能力」，不复制后端实现。
@@ -2713,6 +2862,41 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
             "required": ["identifier"]
         },
         annotations={"openWorldHint": True, "destructiveHint": True},
+        exposure=("full",),
+    ),
+    ServerToolSpec(
+        name="check_package_updates",
+        handler=_handle_check_package_updates,
+        description=(
+            "查哪些包有可用更新；默认零 spawn（读 scoop 已装版本 vs 本地 bucket 索引），"
+            "execute=true 才问 UniGetUI（可带 manager 查 winget/pip 等，需本机 UniGetUI 在运行）"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "manager": {
+                    "type": "string",
+                    "description": (
+                        "可选，只查某个安装器（UniGetUI 的稳定 id，如 scoop / winget / pip / "
+                        "npm / chocolatey / dotnet-tool）；纯读盘口径只覆盖 scoop"
+                    )
+                },
+                "execute": {
+                    "type": "boolean",
+                    "description": (
+                        "可选，默认 false。true 才 spawn UniGetUI 的只读查询"
+                        "（探不到会话时自动退回读盘口径，不冷启动它的窗口）"
+                    )
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": (
+                        "可选，UniGetUI 命令的超时秒数（默认 120，上限 600；纯读盘不跑命令）"
+                    )
+                },
+            }
+        },
+        annotations={"readOnlyHint": True, "destructiveHint": False},
         exposure=("full",),
     ),
 )

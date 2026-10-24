@@ -316,7 +316,7 @@ async def _noop_handler(arguments: dict, ctx) -> dict:
 
 
 def test_build_mcp_tools_still_covers_all_specs():
-    """别名改造没碰工具集本身：full 模式下 33 个工具一个不少、顺序不变"""
+    """别名改造没碰工具集本身：full 模式下 34 个工具一个不少、顺序不变"""
     assert [t.name for t in build_mcp_tools("full")] == [
         s.name for s in SERVER_TOOL_SPECS
     ]

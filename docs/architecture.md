@@ -96,23 +96,23 @@ awam-tool-manager/
 │   ├── app_launcher.py       # kind=app 启动执行（launch_tool 的 execute=true 路径）
 │   ├── tool_help.py          # 帮助信息分层取数 + 帮助命令执行（get_tool_help 的底座）
 │   ├── discovery.py          # 本机工具发现（声明清单 + 只读探测，默认零 spawn）
-│   ├── pkgman.py             # 包管理器适配层（scoop：读盘列包 / 搜 bucket / 解析入口 / 构造安装命令）
+│   ├── pkgman.py             # 包管理器适配层（scoop：读盘列包 / 搜 bucket / 解析入口 / 构造安装命令 / 读盘查升级；UniGetUI CLI 只是可选的只读外部口径，不是后端）
 │   ├── steam_library.py      # Steam 库只读解析（libraryfolders.vdf + appmanifest_*.acf）
 │   ├── usage.py              # 调用使用统计：dispatch 出口记 usage.log + 按窗口聚合
 │   └── runtime_paths.py      # 运行时目录解析 + 旧路径迁移
 ├── scripts/
 │   └── generate_format_doc.py  # 由 schema.py 生成 docs/format.md 的字段表
-└── tests/                    # 22 个用例文件，557 passed（含真实 MCP 会话与文档漂移检测）
-                              # 另有 tests/e2e/ 9 个真实会话用例，默认不收集
-    └── e2e/                  # 真实子进程 / 真实 stdio 端到端层（ARC-P3-02）：9 个用例
+└── tests/                    # 25 个用例文件，713 passed（含真实 MCP 会话与文档漂移检测）
+                              # 另有 tests/e2e/ 9 个文件 / 11 个真实会话用例，默认不收集
+    └── e2e/                  # 真实子进程 / 真实 stdio 端到端层（ARC-P3-02）：11 个用例
                               # **默认不收集**（起真实子进程、慢、依赖本机解释器），
                               # 发布 / CI 前须显式跑 `pytest -m e2e -q`；另有
                               # manual_install_gate.py（依赖本机 npm，手工跑，不进 pytest）
 ```
 
-> **用例数口径（2026-10-19 更新）**：`pytest tests/ -q` = **557 passed**（另有 9 个
-> e2e 用例被 deselect）。557 **不是**全部用例数——真实 e2e 层不进默认收集，
-> 总数应表述为「557（默认）+ 9（e2e，`pytest -m e2e`）= 566」。
+> **用例数口径（2026-10-24 更新）**：`pytest -q` = **713 passed**（另有 11 个
+> e2e 用例被 deselect）。713 **不是**全部用例数——真实 e2e 层不进默认收集，
+> 总数应表述为「713（默认）+ 11（e2e，`pytest -m e2e`）= 724」。
 
 运行时数据（**不在仓库**，A14 起）：`%LOCALAPPDATA%\.awam-tool-manager/`
 （环境变量 `AWAM_RUNTIME_DIR` 可覆盖；server 启动时自动从旧路径迁移）
@@ -361,8 +361,8 @@ npm 官方无 MCP server，需求澄清不到可选型的程度）——将来�
 | `tool_help.py` | 256 | 帮助信息分层（`get_tool_help` 的底座）：`resolve_help_command()`（`help.command` > `launch.command`，`help.args` > `--help`，**永不复用 `launch.args`**；timeout 默认 5s / 封顶 30s）+ `entry_help` / `backend_summary` / `launcher_summary` 纯取数 + `run_help_command()`（`create_subprocess_exec` 无 shell、PIPE 捕获、UTF-8→GBK→replace 三级解码、超时必 kill、>20000 字符截断、非零但有文本仍算成功） | `errors`、`anyio` |
 | `usage.py` | 209 | 调用使用统计（P3）：`record_call()` 在 dispatch 每个出口 append 一行 JSONL 到 `<runtime>/usage.log`（**刻意不记参数**；落盘失败只向 stderr 告警，绝不把「统计写不进去」变成「工具调用失败」）+ `read_rows()` 容错读取（缺文件算空、坏行跳过并汇总告警一次）+ 日历日窗口 + `aggregate()` 纯函数折成 byName / targets / byDay / errorTypes + `window()` 让结果自证口径。选日志而非内存计数器：网关会整池回收进程，计数必须在盘上才是真相源 | `runtime_paths`、标准库 |
 | `discovery.py` | 653 | 本机工具发现（P1）：`load_manifest()`（文件不存在算空清单，坏文件抛 `DiscoveryError`）+ `validate_manifest()`（调用期校验，与 `policy` 的 import 期快速失败刻意不同；`registry_value` 探针按类型分支校验 `hive`/`key`/`value`/`require_exists`）+ `expand_path()`（`{ENV}` 模板：进程环境优先、取不到回退 `registry_env_value()` 查注册表，两处都没有才判「没检查成」，**绝不退化成相对路径**）+ `_read_reg_string()` / `_probe_registry_value()`（注册表登记值：读数分 `ok`/`absent`/`empty`/`unreadable`/`unexpanded` 四档，只有前者能下结论）+ `run_probes()` / `fold_verdicts()`（`hit` / `miss` / `inconclusive` 三态；未接线的探针类型一律判 inconclusive，不让 `Path("") == "."` 假命中）+ `resolve_executable()`（Windows 上校验 which 结果的后缀，无扩展名垫片按「目录外层 / PATHEXT 内层」重扫 PATH 换成真目标）+ `probe_command()`（默认只解析 PATH 不 spawn，`run=true` 才用绝对路径无 shell 执行、`stdin=DEVNULL`、按 `version_pattern` 取版本号，超时/OSError 都折成结论不抛）+ `discover()`（纯编排，折成 `status` / `confidence` / `registered` + summary）+ `note_for()`（自证探测面是声明出来的、不是穷举） | 标准库（Windows 另用 `winreg`） |
-| `pkgman.py` | 644 | 本机包管理器适配层（P2-07，`list_packages` / `search_packages` / `launch_package` / `install_package` 的底座）：`resolve_root()`（进程环境 `SCOOP` → `registry_env_value` 回退 → `%USERPROFILE%\scoop`，取不到就说取不到）+ `list_installed` / `find_installed`（**纯读盘**，三态 `ok` / `current_broken` / `no_manifest`：`current` 断链回落版本目录、bucket 取自 `install.json`、`bin` 写成字符串时归一、无 `bin` 时用 `shims/<包名>`）+ `_candidates` / `launch_target`（候选按 快捷方式 → bin → shim 排序，每项带 `exists` / `runnable`；`runnable` 按实测可 spawn 的后缀判定——`.cmd` 可、`.ps1` 抛 WinError 193；`launchable` 与 `launch_target` 共用同一批候选，一行数据不许有两种答案）+ `search_packages`（按 bucket manifest **文件名**筛、命中才读 JSON：本机 4 bucket / 4287 份清单，全量读是几百毫秒级浪费）+ `install_argv` / `run_argv`（只构造 / 异步执行，`stdin=DEVNULL` + `anyio.fail_after`，输出各留尾部 4000 字符）；`PackageError` 自带 `error_type`，handler 不做文案猜测 | `discovery`（仅 `registry_env_value`）、`errors`、`anyio` |
-| `tool_specs.py` | 1423 | 对外 MCP 工具声明式注册表（SSOT）：22 条 `ServerToolSpec`（name/description/inputSchema/annotations/handler 同条记录）+ 22 个 handler + `build_mcp_tools()` / `get_spec()` / `validate_specs()`（import 期自检：重名/空 handler/非法注解键快速失败） | `mcp`、`errors`、`launcher_client`、`app_launcher`、`tool_help`、`discovery`、`pkgman`、`policy`、`usage` |
+| `pkgman.py` | 912 | 本机包管理器适配层（P2-07，`list_packages` / `search_packages` / `launch_package` / `install_package` / `check_package_updates` 的底座）：`resolve_root()`（进程环境 `SCOOP` → `registry_env_value` 回退 → `%USERPROFILE%\scoop`，取不到就说取不到）+ `list_installed` / `find_installed`（**纯读盘**，三态 `ok` / `current_broken` / `no_manifest`：`current` 断链回落版本目录、bucket 取自 `install.json`、`bin` 写成字符串时归一、无 `bin` 时用 `shims/<包名>`）+ `_candidates` / `launch_target`（候选按 快捷方式 → bin → shim 排序，每项带 `exists` / `runnable`；`runnable` 按实测可 spawn 的后缀判定——`.cmd` 可、`.ps1` 抛 WinError 193；`launchable` 与 `launch_target` 共用同一批候选，一行数据不许有两种答案）+ `search_packages`（按 bucket manifest **文件名**筛、命中才读 JSON：本机 4 bucket / 4287 份清单，全量读是几百毫秒级浪费）+ `install_argv` / `run_argv`（只构造 / 异步执行，`stdin=DEVNULL` + `anyio.fail_after`；输出按 `max_output` **留尾部**并给 `stdoutTruncated`——留尾对日志是对的，对 JSON 是拦腰砍，所以 `run_argv` 多了一个上限参数，结构化输出用 `UNIGET_OUTPUT_MAX_CHARS`）+ 升级查询（2026-10-24）：`version_key`（逐段比数值、非数字段回落小写串，从 `_version_dirs` 提到模块级）+ `bucket_version`（`buckets/<bucket>/bucket/<包名>.json`，路径拼接走 `_abs_under` 防穿越）+ `read_disk_updates`（已装版本 vs 本地 bucket 索引，零 spawn；比不了的进 `unknown` 给成因，不猜「已最新」；`MAX_UPDATE_ROWS=100` 截断）+ `validate_uniget_manager`（17 个稳定 id 白名单，`--elevated` 这类选项串按 `invalid_params` 拒）+ `locate_uniget_cli`（`AWAM_UNIGET_CLI` > `%LOCALAPPDATA%\Programs\UniGetUI` > `Program Files\UniGetUI`，**不走 PATH**，取不到就枚举试过的路径）+ `uniget_status_argv` / `uniget_updates_argv` + `parse_uniget_running`（只有 `running` 是布尔 true 才算有会话）+ `parse_uniget_updates`（先看 `status`，数组键必须是 `updates`——`package installed` 才用 `packages`，读错键会得假阴性；`id` 作规范名）；`PackageError` 自带 `error_type`，handler 不做文案猜测 | `discovery`（仅 `registry_env_value`）、`errors`、`anyio` |
+| `tool_specs.py` | 3027 | 对外 MCP 工具声明式注册表（SSOT）：34 条 `ServerToolSpec`（name/description/inputSchema/annotations/handler/exposure 同条记录）+ 34 个 handler + `build_mcp_tools(mode)` / `get_spec()` / `validate_specs()`（import 期自检：重名/空 handler/非法注解键快速失败） | `mcp`、`errors`、`launcher_client`、`app_launcher`、`tool_help`、`discovery`、`pkgman`、`policy`、`usage` |
 | `policy.py` | 483 | 破坏性门禁 + 部署策略：`decide_destructive(kind, tool, sub_op, args)`（mcp 子工具精确匹配 / launcher 动作级 glob / app 条目级 / package 按操作 fail-closed 白名单 `PACKAGE_CONFIRMED_OPS`；`destructive.mode` 参与判定）+ `check_call(name)`（dispatch 前置 deny/白名单）+ `load_policy()`（import 期校验，坏策略快速失败）+ 结构化审计行（stderr + `<runtime>/audit.log`） | `runtime_paths`、`schema`、标准库 |
 | `server.py` | 525 | MCP 协议入口：协议装配 + 查表薄分发（`dispatch_tool` 约 40 行：策略前置 → 查表 → handler → 统一 `json.dumps`，五个出口各记一行使用统计）+ Resources/Prompts + 生命周期（启动预热/状态恢复），启动时后台检测依赖 + 恢复期望状态 | `mcp`、`store`、`registry`、`backend_client`、`runtime_paths`、`launcher_client`、`schema`、`errors`、`tool_specs`、`policy`、`usage` |
 | `scripts/generate_format_doc.py` | 148 | 读 `schema.py` 渲染字段表并就地替换 `docs/format.md` 的生成区块；`--check` 做漂移检查 | 标准库、`schema` |

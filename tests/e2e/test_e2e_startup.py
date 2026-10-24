@@ -97,7 +97,7 @@ def test_e2e_default_mode_exposes_front_door(e2e_repo, e2e_runtime):
 
 @pytest.mark.e2e
 def test_e2e_full_mode_exposes_everything(e2e_repo, e2e_runtime):
-    """`EXPOSURE_MODE=full`：真实进程下发全部 33 个工具"""
+    """`EXPOSURE_MODE=full`：真实进程下发全部 34 个工具"""
     names, fields, log, elapsed = asyncio.run(
         _collect(e2e_repo, e2e_runtime, {"EXPOSURE_MODE": "full"})
     )

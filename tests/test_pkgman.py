@@ -396,6 +396,18 @@ def test_run_argv_output_is_capped(scoop):
     assert "y" not in res["stdout"]
 
 
+def test_run_argv_reports_truncation_and_honours_a_larger_cap(scoop):
+    """留尾对日志是对的，对 JSON 是拦腰砍：调用方要能抬上限，并且知道到底截没截"""
+    argv = [sys.executable, "-c",
+            "import sys; sys.stdout.write('x' * %d)" % (pkgman.OUTPUT_MAX_CHARS + 1000)]
+    narrow = run(pkgman.run_argv(argv))
+    assert len(narrow["stdout"]) == pkgman.OUTPUT_MAX_CHARS
+    assert narrow["stdoutTruncated"] is True
+    wide = run(pkgman.run_argv(argv, max_output=pkgman.UNIGET_OUTPUT_MAX_CHARS))
+    assert wide["stdoutTruncated"] is False
+    assert len(wide["stdout"]) == pkgman.OUTPUT_MAX_CHARS + 1000
+
+
 def test_run_argv_timeout_is_capped(scoop):
     res = run(pkgman.run_argv([sys.executable, "-c", "print('ok')"], timeout=99999))
     assert res["timeout"] == pkgman.MAX_TIMEOUT
@@ -421,3 +433,267 @@ def test_brief_shape(scoop):
     }
     # 瘦身视图里不许出现绝对路径：那正是它要省掉的体积
     assert not any(isinstance(v, str) and ("apps" in v or "shims" in v) for v in b.values())
+
+
+# ---- 版本比较键 ----
+
+
+@pytest.mark.parametrize(
+    "newer,older",
+    [("19.8.3", "2.3.1"), ("25.01", "1.3.1"), ("2.66.1", "0.50"), ("1.10.0", "1.9.9")],
+)
+def test_version_key_compares_numeric_segments(newer, older):
+    """字符串排序会把 19.8.3 排在 2.3.1 前面，差集就会给出反的答案"""
+    assert pkgman.version_key(newer) > pkgman.version_key(older)
+
+
+def test_version_key_empty_is_lowest_but_caller_must_guard():
+    """空值返回 [] —— 任何版本都比它大，所以「读不到已装版本」必须在差集里先挡掉"""
+    assert pkgman.version_key(None) == []
+    assert pkgman.version_key("") < pkgman.version_key("0.0.1")
+
+
+# ---- 本地 bucket 索引差集（纯读盘）----
+
+
+def make_bucket(root: Path, bucket: str, name: str, version: str | None) -> None:
+    write_json(root / "buckets" / bucket / "bucket" / f"{name}.json", {"version": version})
+
+
+def test_bucket_version_reads_layout_used_by_search_packages(scoop):
+    make_bucket(scoop, "main", "goodpkg", "1.3.0")
+    assert pkgman.bucket_version(str(scoop), "main", "goodpkg") == "1.3.0"
+
+
+def test_bucket_version_accepts_flat_bucket_dir(scoop):
+    """少数 bucket 把清单平铺在 `buckets/<bucket>/`，与 search_packages 同一条回落"""
+    write_json(scoop / "buckets" / "flat" / "goodpkg.json", {"version": "9.9.9"})
+    assert pkgman.bucket_version(str(scoop), "flat", "goodpkg") == "9.9.9"
+
+
+@pytest.mark.parametrize("bucket", ["../escape", "..\\windows", "/abs"])
+def test_bucket_version_refuses_traversal(scoop, bucket):
+    """bucket 名来自盘上的 install.json，但它参与路径拼接，越界一律不读"""
+    make_bucket(scoop, "main", "goodpkg", "1.3.0")
+    assert pkgman.bucket_version(str(scoop), bucket, "goodpkg") is None
+
+
+def test_bucket_version_missing_manifest_is_none(scoop):
+    assert pkgman.bucket_version(str(scoop), "main", "nothere") is None
+
+
+def test_read_disk_updates_lists_only_strictly_newer(scoop):
+    make_bucket(scoop, "main", "goodpkg", "1.3.0")      # 1.2.3 → 1.3.0：有更新
+    make_bucket(scoop, "extras", "brokenpkg", "2.0.0")  # 已装就是 2.0.0：不动
+    d = pkgman.read_disk_updates(str(scoop))
+    assert [(r["name"], r["installedVersion"], r["availableVersion"]) for r in d["rows"]] == [
+        ("goodpkg", "1.2.3", "1.3.0")
+    ]
+    assert d["rows"][0]["bucket"] == "main"
+    assert d["rows"][0]["state"] == "ok"
+    assert d["scanned"] == 3
+
+
+def test_read_disk_updates_keeps_broken_current_visible(scoop):
+    """current 断链的包照样能比版本，但 state 必须带出去，别让调用方当成正常安装"""
+    make_bucket(scoop, "extras", "brokenpkg", "3.1.0")
+    row = pkgman.read_disk_updates(str(scoop))["rows"][0]
+    assert row["state"] == "current_broken"
+
+
+def test_read_disk_updates_reasons_are_distinguished(scoop):
+    """三种比不了的成因分开说：没有 install.json / 直链安装 / 索引里没这个包"""
+    make_app(scoop, "urlpkg", manifest={"version": "1.0.0"},
+             install={"url": "https://x/y.json"})
+    d = pkgman.read_disk_updates(str(scoop))
+    reasons = {u["name"]: u["reason"] for u in d["unknown"]}
+    assert "install.json 读不到" in reasons["nomanifest"]
+    assert "直链安装" in reasons["urlpkg"]
+    assert "urlpkg" not in [r["name"] for r in d["rows"]]
+
+
+def test_read_disk_updates_missing_bucket_manifest_is_unknown(scoop):
+    """有 bucket 但索引里没有这个包（例如包已从 bucket 移除）→ 说「比不了」，不说「已最新」"""
+    d = pkgman.read_disk_updates(str(scoop))
+    assert {u["name"] for u in d["unknown"]} == {"goodpkg", "brokenpkg", "nomanifest"}
+    assert any("索引里没有 goodpkg.json" in u["reason"] for u in d["unknown"])
+
+
+def test_read_disk_updates_truncates_rows(monkeypatch, scoop):
+    make_bucket(scoop, "main", "goodpkg", "9.9.9")
+    make_bucket(scoop, "extras", "brokenpkg", "9.9.9")
+    monkeypatch.setattr(pkgman, "MAX_UPDATE_ROWS", 1)
+    d = pkgman.read_disk_updates(str(scoop))
+    assert len(d["rows"]) == 1 and d["truncated"] is True
+
+
+def test_read_disk_updates_on_missing_buckets_dir(scoop):
+    """整个 buckets 目录都不存在：不抛，全部进 unknown，差集为空"""
+    import shutil
+
+    shutil.rmtree(scoop / "buckets", ignore_errors=True)
+    d = pkgman.read_disk_updates(str(scoop))
+    assert d["rows"] == [] and d["scanned"] == 3 and d["unknown"]
+
+
+# ---- UniGetUI 入口定位与命令构造 ----
+
+
+def test_locate_uniget_cli_prefers_env_override(tmp_path, monkeypatch):
+    exe = tmp_path / "somewhere" / "uniget.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("fake", encoding="utf-8")
+    monkeypatch.setenv(pkgman.UNIGET_CLI_ENV_VAR, str(exe))
+    found, source = pkgman.locate_uniget_cli()
+    assert found == str(exe) and "AWAM_UNIGET_CLI" in source
+
+
+def test_locate_uniget_cli_env_override_missing_file_does_not_fall_through(tmp_path, monkeypatch):
+    """显式指了路径却指错：说清是覆盖失效，而不是偷偷去找默认位置"""
+    monkeypatch.setenv(pkgman.UNIGET_CLI_ENV_VAR, str(tmp_path / "nope.exe"))
+    found, reason = pkgman.locate_uniget_cli()
+    assert found is None and "AWAM_UNIGET_CLI" in reason and "不存在" in reason
+
+
+def test_locate_uniget_cli_finds_default_install_dir(tmp_path, monkeypatch):
+    r"""安装器 per-user 模式写在 %LOCALAPPDATA%\Programs\UniGetUI（本机实测位置）"""
+    exe = tmp_path / "Programs" / "UniGetUI" / "uniget.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("fake", encoding="utf-8")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    found, source = pkgman.locate_uniget_cli()
+    assert found == str(exe) and "官方安装位置" in source
+
+
+def test_locate_uniget_cli_reports_every_path_it_tried(tmp_path, monkeypatch):
+    monkeypatch.delenv(pkgman.UNIGET_CLI_ENV_VAR, raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
+    monkeypatch.setenv("ProgramFiles", str(tmp_path / "pf"))
+    monkeypatch.delenv("ProgramW6432", raising=False)
+    found, reason = pkgman.locate_uniget_cli()
+    assert found is None and "没找到 uniget.exe" in reason
+    assert str(tmp_path / "la" / "Programs" / "UniGetUI" / "uniget.exe") in reason
+    assert str(tmp_path / "pf" / "UniGetUI" / "uniget.exe") in reason
+
+
+def test_locate_uniget_cli_without_any_env(monkeypatch):
+    monkeypatch.delenv(pkgman.UNIGET_CLI_ENV_VAR, raising=False)
+    for var in ("LOCALAPPDATA", "ProgramFiles", "ProgramW6432"):
+        monkeypatch.delenv(var, raising=False)
+    found, reason = pkgman.locate_uniget_cli()
+    assert found is None and "无法定位" in reason
+
+
+def test_uniget_status_argv_is_bare():
+    assert pkgman.uniget_status_argv("C:\\x\\uniget.exe") == ["C:\\x\\uniget.exe", "status"]
+
+
+def test_uniget_updates_argv_passes_manager_as_whitelisted_value():
+    argv = pkgman.uniget_updates_argv("uniget.exe", "Winget")
+    assert argv == ["uniget.exe", "package", "updates", "--manager", "winget"]
+
+
+def test_uniget_updates_argv_without_manager_has_no_flag():
+    assert pkgman.uniget_updates_argv("uniget.exe") == ["uniget.exe", "package", "updates"]
+
+
+@pytest.mark.parametrize("bad", ["--elevated", "--wait", "scoop; calc", "../x", "not-a-manager"])
+def test_uniget_manager_rejects_option_smuggling(bad):
+    """参数位一旦开放就会被选项字符串走私，所以只认 docs/CLI.md 那批稳定 id"""
+    with pytest.raises(PackageError) as exc:
+        pkgman.uniget_updates_argv("uniget.exe", bad)
+    assert exc.value.error_type == "invalid_params"
+
+
+@pytest.mark.parametrize("good", list(pkgman.UNIGET_MANAGERS))
+def test_every_documented_uniget_manager_is_accepted(good):
+    assert pkgman.validate_uniget_manager(good) == good.lower()
+
+
+# ---- UniGetUI 输出解析（载荷形状取自 2026-10-24 本机 v2026.3.2 实测）----
+
+
+def test_parse_uniget_running_true():
+    assert pkgman.parse_uniget_running('{"running": true}') is True
+
+
+@pytest.mark.parametrize("text", ['{"running": false}', "{}", '{"running": "true"}'])
+def test_parse_uniget_running_is_false_unless_boolean_true(text):
+    """非 true 一律按「不可用」处理：字符串 "true" 不算数，否则会把无会话当有会话"""
+    assert pkgman.parse_uniget_running(text) is False
+
+
+def test_parse_uniget_updates_maps_id_to_name_and_holds_display_name():
+    text = json.dumps({
+        "status": "success",
+        "updates": [
+            {"name": "7-Zip", "id": "7zip.7zip", "version": "25.01",
+             "newVersion": "26.05", "source": "WinGet: winget", "manager": "winget",
+             "isUpgradable": True},
+            {"name": "scoop", "id": "scoop", "version": "0.99", "newVersion": "1.0",
+             "source": "Scoop: main", "manager": "scoop", "isUpgradable": True},
+        ],
+    })
+    rows = pkgman.parse_uniget_updates(text)["rows"]
+    by_name = {r["name"]: r for r in rows}
+    assert [r["name"] for r in rows] == ["scoop", "7zip.7zip"], "按 (manager, name) 排序"
+    winget = by_name["7zip.7zip"]
+    assert winget["installedVersion"] == "25.01"
+    assert winget["availableVersion"] == "26.05"
+    assert winget["source"] == "WinGet: winget"
+    assert winget["displayName"] == "7-Zip"
+    assert "displayName" not in by_name["scoop"], "id 与显示名相同时不重复给字段"
+
+
+def test_parse_uniget_updates_drops_rows_without_a_new_version():
+    text = json.dumps({"status": "success", "updates": [
+        {"name": "x", "id": "x", "version": "1.0", "newVersion": "",
+         "manager": "scoop", "isUpgradable": False},
+    ]})
+    assert pkgman.parse_uniget_updates(text)["rows"] == []
+
+
+def test_parse_uniget_updates_empty_array_means_up_to_date():
+    """`updates: []` 是真的「都最新」，与下面缺键的假成功不是一回事"""
+    res = pkgman.parse_uniget_updates('{"status": "success", "updates": []}')
+    assert res == {"rows": [], "truncated": False}
+
+
+def test_parse_uniget_updates_requires_the_updates_array():
+    """数组键按命令不同：`package installed` 是 packages，`package updates` 是 updates
+
+    读错键会得到 status=success + 空清单，被下游当成「没有可用更新」——假阴性，
+    所以缺这个键必须报错，而不是返回空。
+    """
+    with pytest.raises(PackageError) as exc:
+        pkgman.parse_uniget_updates(
+            json.dumps({"status": "success", "packages": [{"id": "x", "isUpgradable": True}]})
+        )
+    assert "updates 数组" in str(exc.value)
+
+
+def test_parse_uniget_updates_surfaces_uniget_error_message():
+    """UniGetUI 失败时也是 JSON，只是 status=error（实测的无会话消息）"""
+    text = json.dumps({
+        "status": "error",
+        "command": "",
+        "message": "The IPC API token is not available. Start UniGetUI and try again.",
+    })
+    with pytest.raises(PackageError) as exc:
+        pkgman.parse_uniget_updates(text)
+    assert exc.value.error_type == "runtime_error"
+    assert "IPC API token" in str(exc.value)
+
+
+@pytest.mark.parametrize("text", ["", "not json", "[1,2]", '{"packages": "oops"}'])
+def test_parse_uniget_updates_rejects_unexpected_shapes(text):
+    """status 缺失、顶层不是对象、只有别的键——都不能被读成「没有更新」"""
+    with pytest.raises(PackageError):
+        pkgman.parse_uniget_updates(text)
+
+
+@pytest.mark.parametrize("text", ["", "not json", "[1,2]"])
+def test_parse_uniget_running_rejects_non_object_json(text):
+    """status 输出的形状不对时按失败处理，而不是默认「会话在跑」"""
+    with pytest.raises(PackageError):
+        pkgman.parse_uniget_running(text)

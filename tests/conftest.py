@@ -77,6 +77,7 @@ EXPECTED_TOOL_NAMES_FULL = EXPECTED_TOOL_NAMES_DEFAULT | {
     "get_everything_status",
     "search_winget_packages",
     "install_winget_package",
+    "check_package_updates",
 }
 
 # 既有引用的口径：协议出口的默认模式是 lazy。新用例请直接用带模式后缀的常量。

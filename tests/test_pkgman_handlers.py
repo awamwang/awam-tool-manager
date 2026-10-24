@@ -393,3 +393,199 @@ def test_install_gate_audit_row_labels_package_op(tmp_path, fake_root, monkeypat
     assert rows[0]["kind"] == "package"
     assert rows[0]["tool"] == "scoop:yt-dlp"
     assert rows[0]["decision"] == "block"
+
+
+# ---- check_package_updates：两条口径，只有一条是默认值 ----
+
+
+FAKE_EXE = "C:\\Fake\\UniGetUI\\uniget.exe"
+
+
+def _fake_uniget(monkeypatch, *, exe=FAKE_EXE, running=True, updates=None,
+                 updates_ok=True, updates_exit=0):
+    """把两次外部查询打成脚本化的应答，并记下真实收到的 argv 与 timeout。
+
+    第一条命令必须是 `status`：它不需要 token，是「有没有活会话」的探针。探针说没有
+    就不许再发第二条——第二条会把参数转给 `UniGetUI.exe` 去冷启动 GUI。
+    """
+    calls: list[dict] = []
+    payload = updates if updates is not None else {
+        "status": "success",
+        "updates": [
+            {"name": "7-Zip", "id": "7zip.7zip", "version": "25.01",
+             "newVersion": "26.05", "source": "WinGet: winget", "manager": "winget",
+             "isUpgradable": True},
+        ],
+    }
+
+    async def _run(argv, timeout=None, max_output=pkgman.OUTPUT_MAX_CHARS):
+        command = "status" if argv[-1] == "status" else "updates"
+        calls.append({"argv": list(argv), "timeout": timeout, "maxOutput": max_output})
+        if command == "status":
+            stdout = json.dumps({"running": running, "version": "2026.3.2"})
+            return {"ok": True, "exitCode": 0, "timedOut": False, "stdoutTruncated": False,
+                    "stdout": stdout, "stderr": "", "argv": argv, "timeout": timeout}
+        return {"ok": updates_ok, "exitCode": updates_exit, "timedOut": False,
+                "stdoutTruncated": False,
+                "stdout": json.dumps(payload), "stderr": "", "argv": argv,
+                "timeout": timeout}
+
+    monkeypatch.setattr(pkgman, "run_argv", _run)
+    monkeypatch.setattr(pkgman, "locate_uniget_cli", lambda: (exe, "test: 单测指定的入口"))
+    return calls
+
+
+def test_check_updates_default_is_read_disk_and_never_spawns(tmp_path, fake_root, monkeypatch):
+    """默认口径零 spawn：升级信号来自已装版本 vs 本地 bucket 索引，不碰任何外部进程"""
+    _spawn_forbidden(monkeypatch, pkgman, "run_argv")
+    write_json(fake_root / "buckets" / "main" / "bucket" / "goodpkg.json", {"version": "1.3.0"})
+    res = run(tool_specs._handle_check_package_updates({}, _ctx(tmp_path)))
+    assert res["engine"] == "read_disk"
+    assert res["scanned"] == 3
+    assert [(r["name"], r["installedVersion"], r["availableVersion"]) for r in res["updates"]] == [
+        ("goodpkg", "1.2.3", "1.3.0")
+    ]
+    assert res["count"] == 1
+    assert res["uniget"]["available"] is False
+    assert "execute=true" in res["uniget"]["reason"]
+    assert res["cli"] is None
+    assert "scoop update" in res["note"], "要说清索引新鲜度不等于上游最新发布"
+
+
+def test_check_updates_default_lists_unknowable_packages(tmp_path, fake_root, monkeypatch):
+    """比不了的包进 unknown 并给原因，不许被静默当成「已最新」"""
+    _spawn_forbidden(monkeypatch, pkgman, "run_argv")
+    res = run(tool_specs._handle_check_package_updates({}, _ctx(tmp_path)))
+    assert {u["name"] for u in res["unknown"]} == {"goodpkg", "brokenpkg", "nomanifest"}
+    assert res["updates"] == []
+
+
+@pytest.mark.parametrize("bad", ["--elevated", "not-a-manager"])
+def test_check_updates_bad_manager_is_invalid_params(tmp_path, fake_root, monkeypatch, bad):
+    _spawn_forbidden(monkeypatch, pkgman, "run_argv")
+    with pytest.raises(ToolError) as exc:
+        run(tool_specs._handle_check_package_updates({"manager": bad}, _ctx(tmp_path)))
+    assert _err(exc)["errorType"] == "invalid_params"
+
+
+def test_check_updates_missing_cli_falls_back_to_read_disk(tmp_path, fake_root, monkeypatch):
+    """没装 UniGetUI 不是失败：退回读盘口径，并把「为什么退回来」原样带回"""
+    _spawn_forbidden(monkeypatch, pkgman, "run_argv")  # 连 status 都不该发
+    monkeypatch.setattr(
+        pkgman, "locate_uniget_cli",
+        lambda: (None, "没找到 uniget.exe（试过: C:\\x\\uniget.exe）"),
+    )
+    res = run(tool_specs._handle_check_package_updates({"execute": True}, _ctx(tmp_path)))
+    assert res["engine"] == "read_disk"
+    assert res["uniget"]["available"] is False
+    assert "没找到 uniget.exe" in res["uniget"]["reason"]
+    assert res["cli"] is None
+
+
+def test_check_updates_no_session_stops_after_status_probe(tmp_path, fake_root, monkeypatch):
+    """探针说没会话就收手：只发过 status，绝不发第二条（第二条会冷启动 UniGetUI 窗口）"""
+    calls = _fake_uniget(monkeypatch, running=False)
+    res = run(tool_specs._handle_check_package_updates({"execute": True}, _ctx(tmp_path)))
+    assert [c["argv"][-1] for c in calls] == ["status"], "无会话时不许再发 package updates"
+    assert res["engine"] == "read_disk"
+    assert "running=false" in res["uniget"]["reason"]
+    assert "不代为冷启动" in res["uniget"]["reason"]
+    assert res["cli"] == FAKE_EXE, "入口找到了，卡点在没有会话——载荷要区分这两件事"
+
+
+def test_check_updates_execute_uses_uniget_rows_without_touching_disk(tmp_path, monkeypatch):
+    """外部口径成立时不读 scoop：连 resolve_root 都不碰，本机没装 scoop 也能查 winget"""
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("UniGetUI 口径可用时不该再走读盘层")
+
+    monkeypatch.setattr(pkgman, "resolve_root", _boom)
+    calls = _fake_uniget(monkeypatch)
+    res = run(tool_specs._handle_check_package_updates(
+        {"execute": True, "timeout": 45}, _ctx(tmp_path)
+    ))
+    assert res["engine"] == "uniget"
+    assert res["count"] == 1
+    assert res["updates"][0]["name"] == "7zip.7zip"
+    assert res["updates"][0]["displayName"] == "7-Zip"
+    assert res["cli"] == FAKE_EXE
+    assert [c["timeout"] for c in calls] == [45, 45], "timeout 要真的传到每条命令"
+    assert calls[0]["argv"] == [FAKE_EXE, "status"]
+    assert calls[1]["argv"] == [FAKE_EXE, "package", "updates"]
+
+
+def test_check_updates_raises_the_output_cap_for_json_payloads(tmp_path, monkeypatch):
+    """`uniget package updates` 是 JSON，不是日志：按 4000 字符留尾会拦腰截断（本机整份 57652 字符）"""
+    monkeypatch.setattr(pkgman, "resolve_root", lambda *a, **k: (None, "本机没有 scoop"))
+    calls = _fake_uniget(monkeypatch)
+    run(tool_specs._handle_check_package_updates({"execute": True}, _ctx(tmp_path)))
+    assert calls[0]["maxOutput"] == pkgman.OUTPUT_MAX_CHARS, "status 输出很短，默认口径够用"
+    assert calls[1]["maxOutput"] == pkgman.UNIGET_OUTPUT_MAX_CHARS
+
+
+def test_check_updates_truncated_json_degrades_instead_of_reporting_zero(tmp_path, fake_root, monkeypatch):
+    """抬了上限仍被截：要说「输出被截断」，不能把半个 JSON 读成 0 条更新"""
+
+    async def _run(argv, timeout=None, max_output=pkgman.OUTPUT_MAX_CHARS):
+        is_status = argv[-1] == "status"
+        return {
+            "ok": True, "exitCode": 0, "timedOut": False,
+            "stdoutTruncated": not is_status,
+            "stdout": json.dumps({"running": True}) if is_status
+            else '{"status": "success", "updates": [{"id": "x", "isUpgradable": true}',
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(pkgman, "run_argv", _run)
+    monkeypatch.setattr(pkgman, "locate_uniget_cli", lambda: (FAKE_EXE, "test"))
+    res = run(tool_specs._handle_check_package_updates({"execute": True}, _ctx(tmp_path)))
+    assert res["engine"] == "read_disk"
+    assert "被截断" in res["uniget"]["reason"]
+    assert "manager" in res["uniget"]["reason"], "要给出可自救的那一步：按安装器分开查"
+
+
+def test_check_updates_manager_reaches_the_command(tmp_path, monkeypatch):
+    monkeypatch.setattr(pkgman, "resolve_root", lambda *a, **k: (None, "本机没有 scoop"))
+    calls = _fake_uniget(monkeypatch)
+    res = run(tool_specs._handle_check_package_updates(
+        {"execute": True, "manager": "Winget"}, _ctx(tmp_path)
+    ))
+    assert calls[1]["argv"] == [FAKE_EXE, "package", "updates", "--manager", "winget"]
+    assert res["manager"] == "winget"
+
+
+def test_check_updates_failed_command_degrades_with_exit_code(tmp_path, fake_root, monkeypatch):
+    """第二条命令非零退出（实测无 token 时就是退出码 2）：退回读盘并带上退出码"""
+    _fake_uniget(monkeypatch, updates_ok=False, updates_exit=2,
+                 updates={"status": "error", "message": "The IPC API token is not available."})
+    res = run(tool_specs._handle_check_package_updates({"execute": True}, _ctx(tmp_path)))
+    assert res["engine"] == "read_disk"
+    assert "退出码 2" in res["uniget"]["reason"]
+    assert "IPC API token" in res["uniget"]["reason"]
+
+
+def test_check_updates_other_manager_without_uniget_is_install_required(tmp_path, fake_root, monkeypatch):
+    """读盘层覆盖不到 winget：返回空清单会被读成「没有更新」，必须显式失败"""
+    _spawn_forbidden(monkeypatch, pkgman, "run_argv")
+    monkeypatch.setattr(pkgman, "locate_uniget_cli", lambda: (None, "没找到 uniget.exe"))
+    with pytest.raises(ToolError) as exc:
+        run(tool_specs._handle_check_package_updates(
+            {"manager": "winget", "execute": True}, _ctx(tmp_path)
+        ))
+    err = _err(exc)
+    assert err["errorType"] == "install_required"
+    assert "只能由 UniGetUI 提供" in err["error"]
+    assert err["manager"] == "winget"
+
+
+def test_check_updates_without_either_source_is_install_required(tmp_path, monkeypatch):
+    """两条口径都没了：说清读盘为什么定位不到、外部为什么不可用"""
+    monkeypatch.setattr(
+        pkgman, "resolve_root", lambda manager="scoop": (None, "环境变量与注册表里都没有 SCOOP")
+    )
+    monkeypatch.setattr(pkgman, "locate_uniget_cli", lambda: (None, "没找到 uniget.exe"))
+    with pytest.raises(ToolError) as exc:
+        run(tool_specs._handle_check_package_updates({"execute": True}, _ctx(tmp_path)))
+    err = _err(exc)
+    assert err["errorType"] == "install_required"
+    assert "SCOOP" in err["error"] and "没找到 uniget.exe" in err["error"]
