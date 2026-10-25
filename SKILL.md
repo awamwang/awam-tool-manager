@@ -1,5 +1,6 @@
 ---
 name: awam-tool-manager
+version: 0.0.1
 description: 统一工具管理器，维护本机工具名单，提供统一的工具注册、搜索、启动能力。作为 MCP Server 暴露给 AI 客户端，支持搜索工具、列出工具、启动工具、路由调用后端 MCP、管理后端进程等。调用入参：目标工具一律用 `tool_id`（也可写 `id`），搜索词用 `keyword`（也可写 `query`），包名用 `package`（也可写 `name`）。
 ---
 
