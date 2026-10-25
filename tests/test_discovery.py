@@ -744,8 +744,13 @@ def test_resolve_replaces_extensionless_shim_with_real_target(fake_bin, monkeypa
     make_exec(fake_bin / "alpha")
     make_exec(fake_bin / "alpha.cmd")
     monkeypatch.setattr(discovery.os, "name", "nt")
+    # 「裸名先命中」这个前提随 Python 版本变：3.13 的 `which(mode=X_OK)`
+    # 只按 PATHEXT 补后缀，不再优先返回裸名（真机 `where.exe` 会）。这里
+    # 直接把前提桩出来，让断言只测 resolve_executable 的二次解析。
+    monkeypatch.setattr(
+        discovery.shutil, "which", lambda name: str(fake_bin / "alpha")
+    )
 
-    assert Path(discovery.shutil.which("alpha")).name == "alpha"
     assert Path(discovery.resolve_executable("alpha")).name.lower() == "alpha.cmd"
 
 
@@ -798,6 +803,10 @@ def test_resolve_keeps_which_hit_when_no_executable_sibling(fake_bin, monkeypatc
     """补不到真身就照旧交回裸名：`available` 不降级，失败由实跑如实报出"""
     make_exec(fake_bin / "alpha")
     monkeypatch.setattr(discovery.os, "name", "nt")
+    # 同前：which 命中裸名这一前提显式桩出，避免依赖 Python/PATHEXT 的选择顺序
+    monkeypatch.setattr(
+        discovery.shutil, "which", lambda name: str(fake_bin / "alpha")
+    )
 
     assert Path(discovery.resolve_executable("alpha")).name == "alpha"
 

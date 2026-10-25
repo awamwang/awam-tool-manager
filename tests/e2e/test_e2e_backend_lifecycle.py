@@ -52,7 +52,7 @@ ECHO_TEXT = "awam-e2e-hello"
 
 async def _status_of(session, tool_id: str) -> str | None:
     """当前后端状态；拿不到返回 None（调用失败 / 后端未配置）。"""
-    err, payload = await call_tool(session, "get_backend_status", {"tool_id": tool_id})
+    err, payload = await call_tool(session, "get_runtime_status", {"tool_id": tool_id})
     if err:
         return None
     return (payload.get("status") or {}).get("status")
@@ -105,17 +105,17 @@ async def _run(repo, runtime, tmp_path):
     async with stdio_session(repo, runtime, env_without_npm()) as (session, log):
         mark("session_ready")
 
-        # 1) 启动：start_backend 成功后会自动同步一次工具目录
+        # 1) 启动：start_runtime 成功后会自动同步一次工具目录
         observations["start_err"], observations["start"] = await call_tool(
-            session, "start_backend", {"tool_id": TOOL_ID}
+            session, "start_runtime", {"tool_id": TOOL_ID}
         )
-        mark("start_backend")
+        mark("start_runtime")
         observations["status_running"] = await _poll_status(session, TOOL_ID, "running")
         mark("status_running")
 
         # 2) 状态详情：tools_count 在替身时代恒为 0，这里第一次拿到真值
         _, status_payload = await call_tool(
-            session, "get_backend_status", {"tool_id": TOOL_ID}
+            session, "get_runtime_status", {"tool_id": TOOL_ID}
         )
         observations["status_payload"] = status_payload
         observations["desired_after_start"] = _desired_file(runtime, TOOL_ID).exists()
@@ -137,16 +137,17 @@ async def _run(repo, runtime, tmp_path):
         # 4) 真实调用往返
         observations["call_err"], observations["call"] = await call_tool(
             session,
-            "call_backend_tool",
-            {"tool_id": TOOL_ID, "tool_name": "echo", "arguments": {"text": ECHO_TEXT}},
+            "call_capability",
+            {"tool_id": TOOL_ID, "capability_id": "echo",
+             "arguments": {"text": ECHO_TEXT}, "execute": True},
         )
         observations["calls_after_call"] = _call_count(calls_file)
-        mark("call_backend_tool")
+        mark("call_capability")
 
-        # 5) 同步目录：Q3 裁决——从 sync_backend_tools 的返回值反推，
+        # 5) 同步目录：Q3 裁决——从 sync_capabilities 的返回值反推，
         #    不手工维护后端工具清单，也不修产品代码
         observations["sync_err"], observations["sync"] = await call_tool(
-            session, "sync_backend_tools", {"tool_id": TOOL_ID}
+            session, "sync_capabilities", {"tool_id": TOOL_ID}
         )
         cache_path = runtime / "backend-tools" / f"{TOOL_ID}.json"
         observations["cache_exists"] = cache_path.exists()
@@ -158,14 +159,14 @@ async def _run(repo, runtime, tmp_path):
 
         # 6) 子工具清单（真实 schema，替身时代恒空）
         observations["list_err"], observations["list"] = await call_tool(
-            session, "list_backend_tools", {"tool_id": TOOL_ID}
+            session, "list_capabilities", {"tool_id": TOOL_ID}
         )
 
         # 7) 停止 → 进程树收尸
         observations["stop_err"], observations["stop"] = await call_tool(
-            session, "stop_backend", {"tool_id": TOOL_ID}
+            session, "stop_runtime", {"tool_id": TOOL_ID}
         )
-        mark("stop_backend")
+        mark("stop_runtime")
         observations["status_stopped"] = await _poll_status(session, TOOL_ID, "stopped")
         observations["desired_after_stop"] = _desired_file(runtime, TOOL_ID).exists()
         mark("status_stopped")
@@ -206,10 +207,10 @@ def test_e2e_backend_full_lifecycle(e2e_repo, e2e_runtime, tmp_path):
             print(f"[场景③] 分步耗时 {obs['marks']}")
 
         # ── 1) 启动成功，且自动同步过工具目录 ──────────────────────────
-        assert not obs["start_err"], f"start_backend 返回 isError：{obs['start']}\n{tail}"
-        assert obs["start"].get("success") is True, f"start_backend 未成功：{obs['start']}"
+        assert not obs["start_err"], f"start_runtime 返回 isError：{obs['start']}\n{tail}"
+        assert obs["start"].get("success") is True, f"start_runtime 未成功：{obs['start']}"
         assert "工具目录已自动同步" in obs["start"].get("message", ""), (
-            f"start_backend 未自动同步工具目录：{obs['start'].get('message')!r}"
+            f"start_runtime 未自动同步工具目录：{obs['start'].get('message')!r}"
         )
 
         # ── 2) 状态真的走到 running，且 tools_count 非零 ────────────────
@@ -230,8 +231,8 @@ def test_e2e_backend_full_lifecycle(e2e_repo, e2e_runtime, tmp_path):
         )
 
         # ── 4) 真实调用往返一致，且后端确实被调用了一次 ────────────────
-        assert not obs["call_err"], f"call_backend_tool 返回 isError：{obs['call']}\n{tail}"
-        assert obs["call"].get("success") is True, f"call_backend_tool 未成功：{obs['call']}"
+        assert not obs["call_err"], f"call_capability 返回 isError：{obs['call']}\n{tail}"
+        assert obs["call"].get("success") is True, f"call_capability 未成功：{obs['call']}"
         assert ECHO_TEXT in (obs["call"].get("result") or ""), (
             f"往返结果不一致：{obs['call'].get('result')!r}"
         )
@@ -240,7 +241,7 @@ def test_e2e_backend_full_lifecycle(e2e_repo, e2e_runtime, tmp_path):
         )
 
         # ── 5) 同步目录：返回值 + 落盘双向核对 ─────────────────────────
-        assert not obs["sync_err"], f"sync_backend_tools 返回 isError：{obs['sync']}\n{tail}"
+        assert not obs["sync_err"], f"sync_capabilities 返回 isError：{obs['sync']}\n{tail}"
         assert obs["sync"].get("success") is True, f"sync 未成功：{obs['sync']}"
         assert (obs["sync"].get("count") or 0) >= 1, f"同步到的工具数为 0：{obs['sync']}"
         # 静默失败观察点：success=true 但 count=0 时产品**不报错**（设计 Q3 裁决：
@@ -249,12 +250,12 @@ def test_e2e_backend_full_lifecycle(e2e_repo, e2e_runtime, tmp_path):
         assert "echo" in obs["cache_names"], f"缓存里的工具名不符：{obs['cache_names']}"
 
         # ── 6) 子工具清单（真实 inputSchema）────────────────────────────
-        assert not obs["list_err"], f"list_backend_tools 返回 isError：{obs['list']}\n{tail}"
-        names = {t.get("name") for t in obs["list"].get("tools", [])}
+        assert not obs["list_err"], f"list_capabilities 返回 isError：{obs['list']}\n{tail}"
+        names = {t.get("capabilityId") for t in obs["list"].get("capabilities", [])}
         assert {"echo", "add"} <= names, f"后端子工具清单不符：{sorted(names)}"
 
         # ── 7) 停止：状态回 stopped、意图清除、进程树全灭 ───────────────
-        assert not obs["stop_err"], f"stop_backend 返回 isError：{obs['stop']}\n{tail}"
+        assert not obs["stop_err"], f"stop_runtime 返回 isError：{obs['stop']}\n{tail}"
         assert obs["status_stopped"] == "stopped", f"后端未回到 stopped：{obs['status_stopped']}"
         assert obs["desired_after_stop"] is False, "stop 后期望状态文件未被清除"
 

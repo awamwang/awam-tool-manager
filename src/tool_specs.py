@@ -11,8 +11,11 @@ async def _handle_xxx」，`build_mcp_tools()` / `dispatch_tool` /
 `conftest.EXPECTED_TOOL_NAMES` 的守卫测试全部自动跟随。
 
 与 `schema.py` 的分工：schema.py 管辖**数据条目**（`data/tools/*.json`），
-本模块管辖**对外 MCP 工具**（协议层暴露的 22 个 `tools/call` 入口）。
+本模块管辖**对外 MCP 工具**（协议层 `tools/call` 入口，按暴露模式切片）。
 两者字段名有重叠但语义不同，互不 import、互不引用。
+
+能力的实际路由在 `capabilities.py`：本模块只声明对外工具与门禁入口，
+Provider / Capability / Runtime 的解析与调用不在这里复制第二份。
 """
 
 import json
@@ -28,6 +31,14 @@ except ImportError:  # pragma: no cover
     ToolAnnotations = None
 
 from errors import ErrorType, ToolError, fail, ensure_success  # noqa: F401（handler 侧经本模块转手）
+import capabilities
+from capabilities import (
+    EVERYTHING_TOOL_ID,
+    STEAM_TOOL_ID,
+    WINGET_TOOL_ID,
+    RUNTIME_RUNNING,
+    ensure_runtime,
+)
 from app_launcher import launch_app
 import file_ops
 # 发现清单走「环境变量指路径」而不是模块全局常量，所以按值 import 就够：
@@ -80,7 +91,7 @@ class ServerToolSpec:
 
     字段语义：
     - `annotations`：`dict | None`。**`{}` 与 `None` 都表示不挂注解**——逐一
-      复现搬迁前现状：`set_backend_log_level` 的注解就是 `{}`，而原
+      复现搬迁前现状：`set_runtime_log_level` 的注解就是 `{}`，而原
       `list_tools()` 的 `if hints:` 对空 dict 取假从而不挂。
     - `output_schema`：`dict | None`，`None` → 回落 `SHARED_OUTPUT_SCHEMA`。
       为将来某个工具需要差异化输出声明时预留。
@@ -165,6 +176,7 @@ DEFAULT_ARG_ALIASES: dict[str, tuple[str, ...]] = {
 _EXAMPLE_VALUES: dict[str, str] = {
     "tool_id": "everything",
     "tool_name": "search_files",
+    "capability_id": "search_files",
     "keyword": "文件",
     "package": "7zip",
     "level": "warning",
@@ -337,28 +349,6 @@ def normalize_arguments(spec: ServerToolSpec, arguments: dict) -> dict:
 # 必报 NameError，第一批测试即红）。
 
 
-def _lookup_action_type(
-    ctx: ToolContext, tool_id: str, action_id: str | None, action_name: str | None
-) -> str:
-    """从动作清单缓存里取动作的 `type`（id 优先，其次 name）；找不到返回空串。
-
-    `type` 只用于 `destructiveActions` 的 glob 匹配；动作清单是 partial 时
-    （只有 ID、没有名称/类型）返回空串，匹配自然落空——附录 A 的既定语义：
-    宁可漏拦（未命中）也不误放，部署者需按实际清单核对模式。
-    缓存缺失 / 损坏不应影响门禁主流程，吞掉异常按空处理。
-    """
-    try:
-        catalog = ctx.store.load_launcher_catalog(tool_id) or {}
-    except Exception:  # noqa: BLE001 —— 缓存问题不阻断门禁
-        return ""
-    for action in catalog.get("actions") or []:
-        if action_id and action.get("id") == action_id:
-            return action.get("type") or ""
-        if action_name and action.get("name") == action_name:
-            return action.get("type") or ""
-    return ""
-
-
 async def _handle_search_tools(arguments: dict, ctx: ToolContext) -> dict:
     keyword = arguments.get("keyword", "")
     kind = arguments.get("kind")
@@ -460,7 +450,7 @@ async def _handle_launch_tool(arguments: dict, ctx: ToolContext) -> dict:
         # 硬契约）。execute 缺省/False 时本函数与改造前完全等价。
         return res
     # 执行路径：调用方显式 execute=true 才启动。条目级 destructive 门禁走
-    # policy（与 call_backend_tool / run_launcher_action 同一判定入口）；
+    # policy（与 call_capability 同一判定入口）；
     # install 门禁（ARC-P0-01）防的是「无意图执行」，本路径的意图就是
     # 这次显式调用本身。
     target_tool = ctx.registry.get_tool(tool_id)
@@ -510,7 +500,7 @@ async def _handle_get_tool_help(arguments: dict, ctx: ToolContext) -> dict:
         payload["backendToolCount"] = len(backend_tools)
         if not backend_tools:
             payload["note"] = (
-                "后端子工具缓存为空：先 start_backend 或 sync_backend_tools 再取帮助"
+                "能力缓存为空：先 start_runtime 或 sync_capabilities 再取帮助"
             )
     elif kind == "launcher":
         catalog = ctx.store.load_launcher_catalog(tool_id) or {}
@@ -520,7 +510,7 @@ async def _handle_get_tool_help(arguments: dict, ctx: ToolContext) -> dict:
         payload["lastSynced"] = catalog.get("lastSynced")
         payload["source"] = catalog.get("source")
         if not actions:
-            payload["note"] = "动作清单缓存为空：先 sync_launcher_actions 再取帮助"
+            payload["note"] = "动作清单缓存为空：先 sync_capabilities 再取帮助"
 
     if not arguments.get("run"):
         return payload
@@ -558,154 +548,60 @@ async def _handle_get_tool_help(arguments: dict, ctx: ToolContext) -> dict:
     return ensure_success(payload)
 
 
-async def _handle_get_backend_status(arguments: dict, ctx: ToolContext) -> dict:
+async def _handle_list_capabilities(arguments: dict, ctx: ToolContext) -> dict:
+    return await capabilities.list_capabilities(
+        ctx,
+        arguments.get("tool_id", ""),
+        keyword=arguments.get("keyword"),
+        limit=arguments.get("limit"),
+        refresh=bool(arguments.get("refresh")),
+    )
+
+
+async def _handle_call_capability(arguments: dict, ctx: ToolContext) -> dict:
+    return await capabilities.call_capability(
+        ctx,
+        arguments.get("tool_id", ""),
+        arguments.get("capability_id", ""),
+        arguments.get("arguments") or {},
+        execute=arguments.get("execute"),
+        allow_destructive=bool(arguments.get("allowDestructive")),
+        wait=arguments.get("wait"),
+    )
+
+
+async def _handle_sync_capabilities(arguments: dict, ctx: ToolContext) -> dict:
+    return await capabilities.sync_capabilities(ctx, arguments.get("tool_id", ""))
+
+
+async def _handle_start_runtime(arguments: dict, ctx: ToolContext) -> dict:
+    tool_id = arguments.get("tool_id", "")
+    ctx.log(f"启动运行时: {tool_id}")
+    return ensure_success(await ctx.backend_manager.start_backend(tool_id))
+
+
+async def _handle_stop_runtime(arguments: dict, ctx: ToolContext) -> dict:
+    tool_id = arguments.get("tool_id", "")
+    ctx.log(f"停止运行时: {tool_id}")
+    return ensure_success(await ctx.backend_manager.stop_backend(tool_id))
+
+
+async def _handle_get_runtime_status(arguments: dict, ctx: ToolContext) -> dict:
     tool_id = arguments.get("tool_id")
-    res = ensure_success(ctx.backend_manager.get_backend_status(tool_id))
-    return res
+    return ensure_success(ctx.backend_manager.get_backend_status(tool_id))
 
 
-async def _handle_call_backend_tool(arguments: dict, ctx: ToolContext) -> dict:
-    tool_id = arguments.get("tool_id", "")
-    tool_name = arguments.get("tool_name", "")
-    backend_args = arguments.get("arguments") or {}
-
-    # A2/A12 → ARC-P1-05 Phase 1：判定收敛到 policy.decide_destructive
-    # （判定表与审计见 src/policy.py）。mcp 未配置 destructiveTools 时整后端拦，
-    # 与接入前逐字等价；判定只算一次，转发后的 warning 复用同一结果。
-    target_tool = ctx.registry.get_tool(tool_id)
-    decision = decide_destructive(
-        "mcp", target_tool, {"tool_name": tool_name}, arguments
-    )
-    if decision["blocked"]:
-        fail(
-            decision["reason"],
-            error_type=decision["error_type"],
-            toolId=tool_id,
-            toolName=tool_name,
-        )
-    if decision["required_confirm"]:
-        ctx.log(f"⚠️ 已确认转发到 destructive 工具: {tool_id}/{tool_name}")
-
-    ctx.log(f"路由调用: {tool_id}/{tool_name}")
-    res = ensure_success(
-        await ctx.backend_manager.call_backend_tool(tool_id, tool_name, backend_args)
-    )
-    # 与上面的拦截判定保持同源：免确认的子工具不该被标注成 destructive
-    if decision["required_confirm"]:
-        res["warning"] = f"目标工具 '{tool_id}/{tool_name}' 被判定为 destructive"
-    return res
-
-
-async def _handle_list_backend_tools(arguments: dict, ctx: ToolContext) -> dict:
-    tool_id = arguments.get("tool_id", "")
-    force_refresh = arguments.get("force_refresh", False)
-    res = ensure_success(
-        await ctx.backend_manager.list_backend_tools(tool_id, force_refresh=force_refresh)
-    )
-    return res
-
-
-async def _handle_start_backend(arguments: dict, ctx: ToolContext) -> dict:
-    tool_id = arguments.get("tool_id", "")
-    ctx.log(f"启动后端: {tool_id}")
-    res = ensure_success(await ctx.backend_manager.start_backend(tool_id))
-    return res
-
-
-async def _handle_stop_backend(arguments: dict, ctx: ToolContext) -> dict:
-    tool_id = arguments.get("tool_id", "")
-    ctx.log(f"停止后端: {tool_id}")
-    res = ensure_success(await ctx.backend_manager.stop_backend(tool_id))
-    return res
-
-
-async def _handle_get_backend_logs(arguments: dict, ctx: ToolContext) -> dict:
+async def _handle_get_runtime_logs(arguments: dict, ctx: ToolContext) -> dict:
     tool_id = arguments.get("tool_id", "")
     level = arguments.get("level")
     limit = arguments.get("limit", 50)
-    res = ensure_success(ctx.backend_manager.get_backend_logs(tool_id, level, limit))
-    return res
+    return ensure_success(ctx.backend_manager.get_backend_logs(tool_id, level, limit))
 
 
-async def _handle_set_backend_log_level(arguments: dict, ctx: ToolContext) -> dict:
+async def _handle_set_runtime_log_level(arguments: dict, ctx: ToolContext) -> dict:
     tool_id = arguments.get("tool_id", "")
     level = arguments.get("level", "")
-    res = ensure_success(ctx.backend_manager.set_backend_log_level(tool_id, level))
-    return res
-
-
-async def _handle_sync_backend_tools(arguments: dict, ctx: ToolContext) -> dict:
-    tool_id = arguments.get("tool_id", "")
-    ctx.log(f"手动同步后端工具目录: {tool_id}")
-    res = ensure_success(await ctx.backend_manager.sync_tools_catalog(tool_id))
-    return res
-
-
-async def _handle_sync_launcher_actions(arguments: dict, ctx: ToolContext) -> dict:
-    tool_id = arguments.get("tool_id", "")
-    ctx.log(f"手动同步启动器动作清单: {tool_id}")
-    res = ensure_success(ctx.launcher_manager.sync(tool_id))
-    return res
-
-
-async def _handle_list_launcher_actions(arguments: dict, ctx: ToolContext) -> dict:
-    tool_id = arguments.get("tool_id", "")
-    keyword = arguments.get("keyword")
-    limit = arguments.get("limit")
-    # A13：默认读缓存（陈旧会自动重扫）；refresh=true 强制重扫
-    refresh = bool(arguments.get("refresh"))
-    # list_actions 返回的是数组而非结果字典，不能用 ensure_success 包；
-    # 启动器自己的错误转成带 errorType 的失败，而不是落到内部异常兜底
-    try:
-        actions = ctx.launcher_manager.list_actions(
-            tool_id, keyword=keyword, limit=limit, refresh=refresh
-        )
-    except LauncherError as exc:
-        fail(str(exc), error_type=ErrorType.LAUNCHER_ERROR, toolId=tool_id)
-    # 带上 lastSynced / source：调用方要能判断这份清单有多旧、是否完整，
-    # 否则「自动刷新」只是把不透明变得更不透明。
-    catalog = ctx.store.load_launcher_catalog(tool_id) or {}
-    return {
-        "success": True,
-        "toolId": tool_id,
-        "count": len(actions),
-        "lastSynced": catalog.get("lastSynced"),
-        "source": catalog.get("source"),
-        "actions": actions,
-    }
-
-
-async def _handle_run_launcher_action(arguments: dict, ctx: ToolContext) -> dict:
-    tool_id = arguments.get("tool_id", "")
-    target_tool = ctx.registry.get_tool(tool_id)
-    # 执行动作是真的会跑起来（Quicker 动作可以是任何操作）：
-    # 条目未标 destructive → 放行；配了 destructiveActions → 只拦命中动作
-    # （glob）；未配 → 回退条目级全拦（与接入前逐字等价）。
-    action_id = arguments.get("action_id")
-    action_name = arguments.get("action_name")
-    sub_op = {"action_id": action_id, "action_name": action_name, "action_type": ""}
-    # 动作 type 只服务 glob 匹配；未配置 destructiveActions 时不引入额外 IO
-    if target_tool and target_tool.get("destructiveActions") is not None:
-        sub_op["action_type"] = _lookup_action_type(ctx, tool_id, action_id, action_name)
-    decision = decide_destructive("launcher", target_tool, sub_op, arguments)
-    if decision["blocked"]:
-        fail(
-            decision["reason"],
-            error_type=decision["error_type"],
-            toolId=tool_id,
-        )
-    if decision["required_confirm"]:
-        ctx.log(f"⚠️ 已确认执行 destructive 启动器动作: {tool_id}")
-    res = ensure_success(
-        await ctx.launcher_manager.run_action(
-            tool_id,
-            action_id=action_id,
-            action_name=action_name,
-            param=arguments.get("param"),
-            wait=arguments.get("wait"),
-        )
-    )
-    return res
+    return ensure_success(ctx.backend_manager.set_backend_log_level(tool_id, level))
 
 
 async def _handle_get_usage_stats(arguments: dict, ctx: ToolContext) -> dict:
@@ -1171,13 +1067,6 @@ async def _handle_check_package_updates(arguments: dict, ctx: ToolContext) -> di
 # 这些工具仍是同一张声明表里的普通条目：policy / usage / 生命周期走同一条
 # dispatch 出口。它们只做「解析目标 → 门禁 → 调用既有能力」，不复制后端实现。
 
-EVERYTHING_TOOL_ID = "everything-search-mcp"
-WINGET_TOOL_ID = "winget-mcp"
-STEAM_TOOL_ID = "steam"
-
-_BACKEND_RUNNING = "running"
-
-
 def _clamp_int(value: Any, *, default: int, low: int, high: int) -> int:
     if value is None:
         return default
@@ -1186,29 +1075,6 @@ def _clamp_int(value: Any, *, default: int, low: int, high: int) -> int:
     except (TypeError, ValueError):
         fail(f"limit 必须是整数（收到: {value!r}）", error_type=ErrorType.INVALID_PARAMS)
     return max(low, min(number, high))
-
-
-async def _ensure_backend_running(ctx: ToolContext, tool_id: str) -> dict:
-    """意图工具的前置：后端未运行就拉起（start_backend 自身幂等）。"""
-    status_res = ctx.backend_manager.get_backend_status(tool_id)
-    if not status_res.get("success"):
-        fail(
-            status_res.get("error") or f"MCP 工具 '{tool_id}' 未配置",
-            error_type=status_res.get("errorType") or ErrorType.CONFIG_ERROR,
-            toolId=tool_id,
-        )
-    status = (status_res.get("status") or {}).get("status")
-    if status == _BACKEND_RUNNING:
-        return status_res.get("status") or {}
-    ctx.log(f"意图工具自动启动后端: {tool_id}（当前状态: {status}）")
-    started = await ctx.backend_manager.start_backend(tool_id)
-    if not started.get("success"):
-        fail(
-            started.get("error") or f"启动后端失败: {tool_id}",
-            error_type=started.get("errorType") or ErrorType.CONNECTION_ERROR,
-            toolId=tool_id,
-        )
-    return started
 
 
 async def _call_backend_json(
@@ -1340,7 +1206,7 @@ async def _handle_search_files(arguments: dict, ctx: ToolContext) -> dict:
     if arguments.get("regex"):
         backend_args["regex"] = True
 
-    await _ensure_backend_running(ctx, EVERYTHING_TOOL_ID)
+    await ensure_runtime(ctx, EVERYTHING_TOOL_ID)
     payload = await _call_backend_json(
         ctx, EVERYTHING_TOOL_ID, "search_files", backend_args
     )
@@ -1350,7 +1216,7 @@ async def _handle_search_files(arguments: dict, ctx: ToolContext) -> dict:
 
 async def _handle_get_file_info(arguments: dict, ctx: ToolContext) -> dict:
     path = str(arguments.get("path") or "").strip()
-    await _ensure_backend_running(ctx, EVERYTHING_TOOL_ID)
+    await ensure_runtime(ctx, EVERYTHING_TOOL_ID)
     payload = await _call_backend_json(
         ctx, EVERYTHING_TOOL_ID, "get_file_info", {"path": path}
     )
@@ -1374,7 +1240,7 @@ async def _handle_get_everything_status(arguments: dict, ctx: ToolContext) -> di
         "backendStatus": status,
         "_usageTarget": EVERYTHING_TOOL_ID,
     }
-    if status.get("status") != _BACKEND_RUNNING:
+    if status.get("status") != RUNTIME_RUNNING:
         payload["note"] = (
             "Everything 后端未运行；调用 search_files / get_file_info 会自动启动它"
         )
@@ -1611,7 +1477,7 @@ async def _handle_search_games(arguments: dict, ctx: ToolContext) -> dict:
     if not actions:
         payload["note"] = (
             "Steam 游戏清单为空：可能未安装 Steam、游戏库不可读，或尚未同步。"
-            "可先 sync_launcher_actions(tool_id='steam') 再查"
+            "可先 sync_capabilities(tool_id='steam') 再查"
         )
     return payload
 
@@ -1919,7 +1785,7 @@ async def _handle_search_winget_packages(arguments: dict, ctx: ToolContext) -> d
     }
     if keyword:
         backend_args["query"] = keyword
-    await _ensure_backend_running(ctx, WINGET_TOOL_ID)
+    await ensure_runtime(ctx, WINGET_TOOL_ID)
     payload = await _call_backend_json(
         ctx, WINGET_TOOL_ID, "find-winget-packages", backend_args
     )
@@ -1965,7 +1831,7 @@ async def _handle_install_winget_package(arguments: dict, ctx: ToolContext) -> d
     if decision["required_confirm"]:
         ctx.log(f"⚠️ 已确认 winget 安装/升级: {identifier}")
 
-    await _ensure_backend_running(ctx, WINGET_TOOL_ID)
+    await ensure_runtime(ctx, WINGET_TOOL_ID)
     result = await _call_backend_json(
         ctx, WINGET_TOOL_ID, "install-winget-package", backend_args
     )
@@ -2073,58 +1939,39 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
             },
             "required": ["tool_id"]
         },
-        # execute=true 会真的 spawn 进程，与 run_launcher_action 同款只标 openWorld
+        # execute=true 会真的 spawn 进程，与 call_capability 同款只标 openWorld
         annotations={"openWorldHint": True},
     ),
     ServerToolSpec(
-        name="call_backend_tool",
-        handler=_handle_call_backend_tool,
-        description="路由调用：转发请求到指定 MCP 工具的后端 Server 执行具体操作",
+        name="list_capabilities",
+        handler=_handle_list_capabilities,
+        description=(
+            "列出某个工具提供的能力：MCP 子工具 / 启动器动作 / 应用的 launch，"
+            "每条带完整 inputSchema；可按关键词与条数收窄"
+        ),
         input_schema={
             "type": "object",
             "properties": {
                 "tool_id": {
                     "type": "string",
-                    "description": "MCP 工具 ID（如 everything-search-mcp）"
+                    "description": "工具 ID（如 everything-search-mcp、quicker、steam）"
                 },
-                "tool_name": {
+                "keyword": {
                     "type": "string",
-                    "description": "要调用的后端工具名"
+                    "description": "可选，按能力名称/描述/元数据过滤"
                 },
-                "arguments": {
-                    "type": "object",
-                    "description": "调用参数"
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 500,
+                    "description": "可选，最多返回多少条"
                 },
-                "allowDestructive": {
+                "refresh": {
                     "type": "boolean",
-                    "description": "目标工具被标记为 destructive 时，需显式传 true 才会转发"
-                }
-            },
-            "required": ["tool_id", "tool_name"]
-        },
-        # 这里的 `name` 指的是**后端子工具**名，不是本服务的工具 ID——
-        # 所以不能用默认表（那条会把 name 映射到 tool_id，语义正好反）。
-        # `tool_id` 仍吃默认表的 `id`，两个名字在本工具里不打架。
-        arg_aliases={
-            "tool_name": ("name",),
-        },
-        # 转发到后端 MCP，属于"与外部世界交互"但静态无法判定副作用
-        annotations={"openWorldHint": True},
-    ),
-    ServerToolSpec(
-        name="list_backend_tools",
-        handler=_handle_list_backend_tools,
-        description="列出指定 MCP 工具的后端提供的所有子工具（含完整参数 schema）",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "tool_id": {
-                    "type": "string",
-                    "description": "MCP 工具 ID"
-                },
-                "force_refresh": {
-                    "type": "boolean",
-                    "description": "是否强制刷新缓存"
+                    "description": (
+                        "可选，MCP 工具强制向后端刷新一次能力缓存"
+                        "（默认读盘；启动器清单按自身的陈旧策略自动重扫）"
+                    )
                 }
             },
             "required": ["tool_id"]
@@ -2132,9 +1979,69 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
         annotations={"readOnlyHint": True, "destructiveHint": False},
     ),
     ServerToolSpec(
-        name="start_backend",
-        handler=_handle_start_backend,
-        description="启动指定的后端 MCP Server 并建立连接",
+        name="call_capability",
+        handler=_handle_call_capability,
+        description=(
+            "调用某个工具的能力：把 arguments 交给 MCP 子工具 / 启动器动作 / 应用的 launch；"
+            "默认只预览，execute=true 才产生副作用，destructive 能力还需 allowDestructive=true"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tool_id": {
+                    "type": "string",
+                    "description": "工具 ID（如 everything-search-mcp、quicker、steam）"
+                },
+                "capability_id": {
+                    "type": "string",
+                    "description": "能力 ID（取自 list_capabilities 的 capabilityId；应用的固定能力是 launch）"
+                },
+                "arguments": {
+                    "type": "object",
+                    "description": "能力自己的参数，结构见 list_capabilities 返回的 inputSchema；默认 {}",
+                    "additionalProperties": True
+                },
+                "execute": {
+                    "type": "boolean",
+                    "description": "可选，是否真的执行；缺省时只读能力自动执行、写/破坏性能力只预览"
+                },
+                "allowDestructive": {
+                    "type": "boolean",
+                    "description": "能力被标记为 destructive 时，执行需显式传 true"
+                },
+                "wait": {
+                    "type": "number",
+                    "description": "可选，启动器动作/应用启动的观察窗口秒数（默认取条目配置）"
+                }
+            },
+            "required": ["tool_id", "capability_id"]
+        },
+        # 会访问外部世界（MCP 后端 / 启动器 / 进程），静态无法判定副作用
+        annotations={"openWorldHint": True},
+    ),
+    ServerToolSpec(
+        name="sync_capabilities",
+        handler=_handle_sync_capabilities,
+        description=(
+            "同步某个工具的能力清单：MCP 会启动运行时并刷新子工具目录，"
+            "启动器会重新扫描本地数据（应用没有可变清单）"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tool_id": {
+                    "type": "string",
+                    "description": "工具 ID"
+                }
+            },
+            "required": ["tool_id"]
+        },
+        annotations={"idempotentHint": True},
+    ),
+    ServerToolSpec(
+        name="start_runtime",
+        handler=_handle_start_runtime,
+        description="启动 MCP 提供者的运行时并建立连接（非 mcp 工具没有运行时）",
         input_schema={
             "type": "object",
             "properties": {
@@ -2148,9 +2055,9 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
         annotations={"idempotentHint": True},
     ),
     ServerToolSpec(
-        name="stop_backend",
-        handler=_handle_stop_backend,
-        description="停止指定的后端 MCP Server",
+        name="stop_runtime",
+        handler=_handle_stop_runtime,
+        description="停止 MCP 提供者的运行时",
         input_schema={
             "type": "object",
             "properties": {
@@ -2164,24 +2071,24 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
         annotations={"idempotentHint": True},
     ),
     ServerToolSpec(
-        name="get_backend_status",
-        handler=_handle_get_backend_status,
-        description="获取后端 MCP Server 的运行状态",
+        name="get_runtime_status",
+        handler=_handle_get_runtime_status,
+        description="获取 MCP 提供者的运行时状态",
         input_schema={
             "type": "object",
             "properties": {
                 "tool_id": {
                     "type": "string",
-                    "description": "MCP 工具 ID，不填则返回所有后端状态"
+                    "description": "MCP 工具 ID，不填则返回所有运行时状态"
                 }
             }
         },
         annotations={"readOnlyHint": True, "destructiveHint": False},
     ),
     ServerToolSpec(
-        name="get_backend_logs",
-        handler=_handle_get_backend_logs,
-        description="获取后端 MCP Server 的运行日志",
+        name="get_runtime_logs",
+        handler=_handle_get_runtime_logs,
+        description="获取 MCP 提供者的运行时日志",
         input_schema={
             "type": "object",
             "properties": {
@@ -2203,9 +2110,9 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
         annotations={"readOnlyHint": True, "destructiveHint": False},
     ),
     ServerToolSpec(
-        name="set_backend_log_level",
-        handler=_handle_set_backend_log_level,
-        description="设置后端 MCP Server 的日志级别",
+        name="set_runtime_log_level",
+        handler=_handle_set_runtime_log_level,
+        description="设置 MCP 提供者的运行时日志级别",
         input_schema={
             "type": "object",
             "properties": {
@@ -2220,115 +2127,8 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
             },
             "required": ["tool_id", "level"]
         },
-        # 搬迁前即不挂注解（TOOL_ANNOTATION_HINTS 里是 {}），保留原样
+        # 历史条目即不挂注解，保留原样
         annotations={},
-    ),
-    ServerToolSpec(
-        name="sync_backend_tools",
-        handler=_handle_sync_backend_tools,
-        description="手动同步后端 MCP 的工具目录（自动获取所有工具的参数 schema 并保存）",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "tool_id": {
-                    "type": "string",
-                    "description": "MCP 工具 ID"
-                }
-            },
-            "required": ["tool_id"]
-        },
-        annotations={"idempotentHint": True},
-    ),
-    ServerToolSpec(
-        name="sync_launcher_actions",
-        handler=_handle_sync_launcher_actions,
-        description="手动同步启动器的动作清单（从启动器本地数据扫描，Quicker 的动作名依赖其缓存，可能只拿到 ID）",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "tool_id": {
-                    "type": "string",
-                    "description": "启动器工具 ID"
-                }
-            },
-            "required": ["tool_id"]
-        },
-        annotations={"idempotentHint": True},
-    ),
-    ServerToolSpec(
-        name="list_launcher_actions",
-        handler=_handle_list_launcher_actions,
-        description="列出/搜索启动器（如 Quicker）的动作：按名称、描述、所属程序或 ID 关键词过滤",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "tool_id": {
-                    "type": "string",
-                    "description": "启动器工具 ID"
-                },
-                "keyword": {
-                    "type": "string",
-                    "description": "可选，按名称/描述/所属程序/ID 过滤"
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "可选，最多返回多少条"
-                },
-                "refresh": {
-                    "type": "boolean",
-                    "description": "可选，强制重新扫描启动器本地数据（默认读缓存，缓存超过 5 分钟会自动重扫）"
-                }
-            },
-            "required": ["tool_id"]
-        },
-        annotations={"readOnlyHint": True, "destructiveHint": False},
-    ),
-    ServerToolSpec(
-        name="run_launcher_action",
-        handler=_handle_run_launcher_action,
-        description="调用启动器的动作（如执行一个 Quicker 动作），可传参并等待返回结果",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "tool_id": {
-                    "type": "string",
-                    "description": "启动器工具 ID"
-                },
-                "action_id": {
-                    "type": "string",
-                    "description": "动作 ID（推荐：稳定不变；二选一，与 action_name 至少给一个）"
-                },
-                "action_name": {
-                    "type": "string",
-                    "description": "动作名称（Quicker 要求名称不重复且不含空格）"
-                },
-                "param": {
-                    "type": "string",
-                    "description": "可选，传给动作的参数（Quicker 用 ? 分隔符，不支持换行）"
-                },
-                "wait": {
-                    "type": "number",
-                    "description": "可选，最长等待秒数（默认取 launcher.timeout，缺省 20）"
-                },
-                "allowDestructive": {
-                    "type": "boolean",
-                    "description": "启动器被标记为 destructive 时，需显式传 true 才会执行"
-                }
-            },
-            "required": ["tool_id"]
-        },
-        # 本工具的 `id` / `name` 天然指**动作**（调用方通常已把 tool_id 写全），
-        # 不能让默认表把它们当成 tool_id 的别名——那会把动作名折成工具 ID。
-        # 而且这里 tool_id 与动作是**两个都要给**的参数：`id` 若同时归 tool_id，
-        # `{"tool_id":"quicker","id":"<动作>"}` 会撞成「同一参数取值不同」直接报错。
-        # 所以 `id`/`name` 让给 action_id/action_name，tool_id 在本工具显式不接别名。
-        arg_aliases={
-            "tool_id": (),
-            "action_id": ("id",),
-            "action_name": ("name",),
-        },
-        # 执行动作会真的跑起来，只标 openWorld
-        annotations={"openWorldHint": True},
     ),
     ServerToolSpec(
         name="get_tool_help",

@@ -165,7 +165,7 @@ def test_generated_launcher_catalog_is_valid(tmp_path):
 # ---- 4. 校验器自身的分档行为 ----
 
 def test_backend_catalog_rejects_broken_shape():
-    """子工具缺 name 会让 call_backend_tool 的查表静默失效，必须在校验期拦下"""
+    """子工具缺 name 会让 call_capability 的查表静默失效，必须在校验期拦下"""
     assert validate_backend_catalog({"parent": "x", "tools": [{"description": "没名字"}]}) is not None
     assert validate_backend_catalog({"parent": "x", "tools": "不是数组"}) is not None
     assert validate_backend_catalog("不是对象") is not None

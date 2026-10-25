@@ -28,7 +28,7 @@ EXPECTED_RESOURCE_URIS = {
     "awam://tools",
     "awam://backends/status",
 }
-EXPECTED_PROMPTS = {"getting_started", "how_to_search", "how_to_call_backend"}
+EXPECTED_PROMPTS = {"getting_started", "how_to_search", "how_to_call_capability"}
 # data/tools/ 里真实存在的条目（tmp 副本自带），用它证明读出来的是真数据
 KNOWN_TOOL_ID = "everything-search-mcp"
 

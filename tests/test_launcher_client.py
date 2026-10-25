@@ -835,14 +835,22 @@ def test_validate_launcher_catalog_rejects_broken():
 # ---- 对外工具：执行动作的确认门禁 ----
 
 
-def test_run_action_blocked_without_confirmation():
+def test_run_action_blocked_without_confirmation(monkeypatch):
     """Quicker 动作可以是任何操作，条目标 destructive → 未确认不得执行"""
     import server  # noqa: PLC0415
+
+    _patch_launcher_gate(monkeypatch)
+    monkeypatch.setattr(
+        server.launcher_manager,
+        "list_actions",
+        lambda tool_id: [{"id": "whatever", "name": "随便", "type": "XAction"}],
+    )
 
     with pytest.raises(server.ToolError) as exc:
         asyncio.run(
             server.dispatch_tool(
-                "run_launcher_action", {"tool_id": "quicker", "action_id": "whatever"}
+                "call_capability",
+                {"tool_id": "quicker", "capability_id": "whatever", "execute": True},
             )
         )
     payload = json.loads(str(exc.value))
@@ -869,6 +877,11 @@ def _patch_launcher_gate(monkeypatch, **entry_extra):
 def test_run_action_with_destructive_actions_allows_unlisted(monkeypatch):
     """ARC-P1-05：配了 destructiveActions 后，未命中的动作直接执行"""
     server = _patch_launcher_gate(monkeypatch, destructiveActions=["*卸载*"])
+    monkeypatch.setattr(
+        server.launcher_manager,
+        "list_actions",
+        lambda tool_id: [{"id": "open-browser", "name": "打开浏览器", "type": "XAction"}],
+    )
     calls = []
 
     async def fake_run(tool_id, action_id=None, action_name=None, param=None, wait=None):
@@ -879,17 +892,24 @@ def test_run_action_with_destructive_actions_allows_unlisted(monkeypatch):
 
     text = asyncio.run(
         server.dispatch_tool(
-            "run_launcher_action", {"tool_id": "quicker", "action_id": "open-browser"}
+            "call_capability",
+            {"tool_id": "quicker", "capability_id": "open-browser", "execute": True},
         )
     )
     payload = json.loads(text)
     assert payload["success"] is True
+    assert payload["risk"] == "write", "未命中 destructiveActions 的动作不该被标成破坏性"
     assert calls == [("quicker", "open-browser")]
 
 
 def test_run_action_with_destructive_actions_blocks_match(monkeypatch):
     """ARC-P1-05：配了 destructiveActions 后，命中动作仍拦；确认后才执行"""
     server = _patch_launcher_gate(monkeypatch, destructiveActions=["*卸载*"])
+    monkeypatch.setattr(
+        server.launcher_manager,
+        "list_actions",
+        lambda tool_id: [{"id": "x", "name": "卸载微信", "type": "XAction"}],
+    )
     calls = []
 
     async def fake_run(tool_id, action_id=None, action_name=None, param=None, wait=None):
@@ -902,8 +922,8 @@ def test_run_action_with_destructive_actions_blocks_match(monkeypatch):
     with pytest.raises(server.ToolError) as exc:
         asyncio.run(
             server.dispatch_tool(
-                "run_launcher_action",
-                {"tool_id": "quicker", "action_id": "x", "action_name": "卸载微信"},
+                "call_capability",
+                {"tool_id": "quicker", "capability_id": "x", "execute": True},
             )
         )
     payload = json.loads(str(exc.value))
@@ -914,11 +934,11 @@ def test_run_action_with_destructive_actions_blocks_match(monkeypatch):
     # 显式确认后可执行
     text = asyncio.run(
         server.dispatch_tool(
-            "run_launcher_action",
+            "call_capability",
             {
                 "tool_id": "quicker",
-                "action_id": "x",
-                "action_name": "卸载微信",
+                "capability_id": "x",
+                "execute": True,
                 "allowDestructive": True,
             },
         )
@@ -932,7 +952,7 @@ def test_list_actions_needs_no_confirmation():
     import server  # noqa: PLC0415
 
     text = asyncio.run(
-        server.dispatch_tool("list_launcher_actions", {"tool_id": "quicker", "limit": 2})
+        server.dispatch_tool("list_capabilities", {"tool_id": "quicker", "limit": 2})
     )
     payload = json.loads(text)
     assert payload["success"] is True
@@ -1060,13 +1080,13 @@ def test_refresh_failure_keeps_serving_old_cache(tmp_path):
     assert after == before, "刷新失败应静默沿用旧缓存，而不是抛异常或清空"
 
 
-def test_list_launcher_actions_reports_freshness():
+def test_list_capabilities_reports_freshness():
     """对外工具要暴露 lastSynced / source，否则调用方不知道清单有多旧"""
     import server  # noqa: PLC0415
 
     payload = json.loads(
         asyncio.run(
-            server.dispatch_tool("list_launcher_actions", {"tool_id": "quicker", "limit": 1})
+            server.dispatch_tool("list_capabilities", {"tool_id": "quicker", "limit": 1})
         )
     )
     assert "lastSynced" in payload

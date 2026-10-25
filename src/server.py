@@ -185,7 +185,10 @@ async def dispatch_tool(name: str, arguments: dict) -> str:
     started = time.perf_counter()
 
     def _record(
-        ok: bool, error_type: str | None = None, target: str | None = None
+        ok: bool,
+        error_type: str | None = None,
+        target: str | None = None,
+        capability: str | None = None,
     ) -> None:
         usage.record_call(
             name,
@@ -194,6 +197,7 @@ async def dispatch_tool(name: str, arguments: dict) -> str:
             error_type=error_type,
             duration_ms=int((time.perf_counter() - started) * 1000),
             target=target,
+            capability=capability,
         )
 
     spec = get_spec(name)
@@ -227,11 +231,14 @@ async def dispatch_tool(name: str, arguments: dict) -> str:
         _record(False, ErrorType.INTERNAL_ERROR)
         raise
     # 意图工具用 `_usageTarget` 标注真实目标（后端 / scoop 包 / 启动器），
-    # 该字段只进统计，不进对外载荷。
+    # call_capability 再加 `_usageCapability` 标注具体能力；两个字段都只进
+    # 统计，不进对外载荷。
     usage_target = None
+    usage_capability = None
     if isinstance(payload, dict):
         usage_target = payload.pop("_usageTarget", None)
-    _record(True, target=usage_target)
+        usage_capability = payload.pop("_usageCapability", None)
+    _record(True, target=usage_target, capability=usage_capability)
     return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 
 
@@ -314,8 +321,8 @@ async def list_prompts() -> list[Prompt]:
             description="如何搜索和查找工具"
         ),
         Prompt(
-            name="how_to_call_backend",
-            description="如何调用后端 MCP 工具"
+            name="how_to_call_capability",
+            description="如何列出并调用工具的能力"
         ),
     ]
 
@@ -336,14 +343,15 @@ awam-tool-manager 是一个统一的工具管理器，聚合各种 MCP 工具和
 1. **搜索工具**：用 `search_tools` 按关键词搜索已注册的工具
 2. **查看详情**：用 `get_tool_info` 查看工具的详细信息
 3. **列出工具**：用 `list_tools` 查看所有已注册的工具（可按类型筛选）
-4. **调用后端**：用 `call_backend_tool` 路由调用后端 MCP 的工具
-5. **管理后端**：用 `start_backend` / `stop_backend` / `get_backend_status` 管理后端连接
+4. **列出能力**：用 `list_capabilities` 查看某个工具提供的能力与参数 schema
+5. **调用能力**：用 `call_capability` 执行 MCP 子工具 / 启动器动作 / 应用启动
+6. **管理运行时**：用 `start_runtime` / `stop_runtime` / `get_runtime_status` 管理 MCP 运行时
 
 ## 快速流程
 
 1. 先 `list_tools` 看看有哪些工具
-2. 然后 `list_backend_tools` 看看某个 MCP 工具下有什么子工具
-3. 最后 `call_backend_tool` 调用具体工具
+2. 然后 `list_capabilities(tool_id=...)` 看看该工具有哪些能力、每个能力要什么参数
+3. 最后 `call_capability(tool_id=..., capability_id=..., arguments={...})` 调用
 """
 
     elif name == "how_to_search":
@@ -370,35 +378,40 @@ awam-tool-manager 是一个统一的工具管理器，聚合各种 MCP 工具和
 3. 查看某个工具详情：`get_tool_info(tool_id="everything")`
 """
 
-    elif name == "how_to_call_backend":
-        text = """# 如何调用后端 MCP 工具
+    elif name == "how_to_call_capability":
+        text = """# 如何调用工具的能力
 
-只有 `kind=mcp` 的工具才有后端连接，这里以 `everything-search-mcp` 为例。
+每个工具条目提供若干能力：MCP 工具是它的子工具，启动器是本地动作，
+普通应用是固定的 `launch`。
 
 ## 步骤
 
-1. **查看后端状态**：`get_backend_status(tool_id="everything-search-mcp")`
-2. **如果未运行，先启动**：`start_backend(tool_id="everything-search-mcp")`
-3. **列出后端工具**：`list_backend_tools(tool_id="everything-search-mcp")`
-   - 这会返回每个子工具的名称、描述、参数 schema
-4. **调用工具**：`call_backend_tool(tool_id="everything-search-mcp", tool_name="search_files", arguments={"query": "测试"})`
+1. **列出能力**：`list_capabilities(tool_id="everything-search-mcp")`
+   - 每条能力给出 `capabilityId`、`risk`、`execution` 与完整 `inputSchema`
+2. **组织参数**：`arguments` 必须符合该能力的 `inputSchema`（它放在嵌套对象里，
+   不和 `execute` / `allowDestructive` 这些门禁参数混在一起）
+3. **调用能力**：
+   `call_capability(tool_id="everything-search-mcp", capability_id="search_files", arguments={"query": "测试"})`
+
+MCP 运行时未启动时 `call_capability` 会自动拉起；需要预热或排查时再用
+`start_runtime` / `get_runtime_status` / `get_runtime_logs`。
 
 ## 注意事项
 
-- 全部后端工具统一使用 `tool_id` 指定目标工具，不存在 `launcher_id` 参数
-- 子工具名必须和 `list_backend_tools` 返回的一致（注意大小写）
-- 参数必须匹配 inputSchema 的定义，必填参数不能少
-- 如果连接失败，先 `get_backend_logs` 看看日志
-- 可以用 `set_backend_log_level` 调整日志级别
+- 能力 ID 必须和 `list_capabilities` 返回的 `capabilityId` 一致（注意大小写）
+- 只读能力默认直接执行；写/破坏性能力默认只预览，`execute=true` 才执行
+- 被标记为 destructive 的能力还需要显式 `allowDestructive=true`
+- 启动器动作与启动应用还可能返回 `fireAndForget` / `deliveryOnly`：目标没有结果回传
+- 能力缓存为空时先 `sync_capabilities(tool_id=...)`
 
 ## 错误处理
 
 调用失败时本服务会返回 MCP 协议层的错误（isError），文本部分是 JSON：
 
-- `connection_error`：后端未运行，用 `start_backend` 启动
-- `runtime_error`：参数错误或工具执行失败，检查参数
-- `config_error`：工具缺少 connection 配置，或 kind 不是 mcp
-- `not_found`：工具 ID 不存在
+- `connection_error`：运行时启动失败；用 `start_runtime` 重试并看日志
+- `runtime_error`：参数错误或能力执行失败，对照 `inputSchema` 检查
+- `config_error`：工具缺少 connection 配置，或 kind 不支持能力路由
+- `not_found`：工具 ID 或能力 ID 不存在
 - `unknown_tool`：工具名不存在
 """
 

@@ -91,7 +91,7 @@ def test_load_policy_rejects_unknown_fields(tmp_path):
     """策略里拼错字段等于安全约束静默失效——未知字段必须拒绝"""
     bad = tmp_path / "policy.json"
     bad.write_text(
-        json.dumps({"version": 1, "tools": {"denied": ["stop_backend"]}}),
+        json.dumps({"version": 1, "tools": {"denied": ["stop_runtime"]}}),
         encoding="utf-8",
     )
     with pytest.raises(policy.PolicyError, match="校验失败"):
@@ -129,25 +129,25 @@ def test_bad_policy_fails_at_import(tmp_path):
 
 def test_deny_list_blocks_dispatch_call(monkeypatch):
     """deny 名单命中 → permission_denied（errorType 台账的触发用例）"""
-    _set_policy(monkeypatch, tools={"deny": ["stop_backend"], "allow": None})
+    _set_policy(monkeypatch, tools={"deny": ["stop_runtime"], "allow": None})
 
     with pytest.raises(server.ToolError) as exc:
-        server_run("stop_backend", {"tool_id": "mcp1"})
+        server_run("stop_runtime", {"tool_id": "mcp1"})
 
     payload = json.loads(str(exc.value))
     assert payload["errorType"] == "permission_denied"
     assert "deny" in payload["error"]
-    assert payload["toolName"] == "stop_backend"
+    assert payload["toolName"] == "stop_runtime"
 
 
 def test_deny_precedence_over_allow(monkeypatch):
     """deny 优先于 allow：同时在两个名单里也拒绝"""
     _set_policy(
         monkeypatch,
-        tools={"deny": ["stop_backend"], "allow": ["stop_backend", "search_tools"]},
+        tools={"deny": ["stop_runtime"], "allow": ["stop_runtime", "search_tools"]},
     )
     with pytest.raises(server.ToolError) as exc:
-        server_run("stop_backend", {"tool_id": "mcp1"})
+        server_run("stop_runtime", {"tool_id": "mcp1"})
     assert json.loads(str(exc.value))["errorType"] == "permission_denied"
 
 
@@ -157,7 +157,7 @@ def test_allow_list_whitelist_blocks_unlisted(monkeypatch):
 
     # 未收录 → 拒绝
     with pytest.raises(server.ToolError) as exc:
-        server_run("stop_backend", {"tool_id": "mcp1"})
+        server_run("stop_runtime", {"tool_id": "mcp1"})
     payload = json.loads(str(exc.value))
     assert payload["errorType"] == "permission_denied"
     assert "白名单" in payload["error"]
@@ -165,6 +165,17 @@ def test_allow_list_whitelist_blocks_unlisted(monkeypatch):
     # 收录 → 放行（search_tools 是纯读，真实 handler 可跑）
     text = server_run("search_tools", {"keyword": "quicker"})
     assert json.loads(text)["success"] is True
+
+
+def _stub_mcp_capability(monkeypatch, name: str = "nuke") -> None:
+    """让 call_capability 能解析到子工具（门禁用例不存在的只是后端缓存）"""
+    monkeypatch.setattr(
+        server.store,
+        "load_backend_tools",
+        lambda tool_id: [
+            {"name": name, "description": "", "inputSchema": {"type": "object"}}
+        ],
+    )
 
 
 # ---- 4. H1 验收：策略赢过客户端声明 ----
@@ -178,6 +189,7 @@ def test_deny_mode_overrides_client_allowdestructive(monkeypatch):
         tools={"deny": [], "allow": None},
     )
     monkeypatch.setattr(server.registry, "get_tool", lambda tool_id: _DESTRUCTIVE_ENTRY)
+    _stub_mcp_capability(monkeypatch)
 
     async def should_not_be_called(*args, **kwargs):  # pragma: no cover
         raise AssertionError("策略 deny 下不得转发破坏性调用")
@@ -186,10 +198,11 @@ def test_deny_mode_overrides_client_allowdestructive(monkeypatch):
 
     with pytest.raises(server.ToolError) as exc:
         server_run(
-            "call_backend_tool",
+            "call_capability",
             {
                 "tool_id": "boom",
-                "tool_name": "nuke",
+                "capability_id": "nuke",
+                "execute": True,
                 "allowDestructive": True,  # 客户端自声明——策略必须赢
             },
         )
@@ -224,11 +237,16 @@ def test_deny_mode_launcher_message_offers_no_self_service(monkeypatch):
         raise AssertionError("策略 deny 下不得执行动作")
 
     monkeypatch.setattr(server.launcher_manager, "run_action", should_not_run)
+    monkeypatch.setattr(
+        server.launcher_manager,
+        "list_actions",
+        lambda tool_id: [{"id": "x", "name": "卸载微信", "type": "XAction"}],
+    )
 
     with pytest.raises(server.ToolError) as exc:
         server_run(
-            "run_launcher_action",
-            {"tool_id": "quicker", "action_id": "x", "action_name": "卸载微信"},
+            "call_capability",
+            {"tool_id": "quicker", "capability_id": "x", "execute": True},
         )
     payload = json.loads(str(exc.value))
     assert payload["errorType"] == "permission_denied"
@@ -246,6 +264,12 @@ def test_mode_allow_skips_confirmation(monkeypatch):
         monkeypatch, destructive={"mode": "allow"}, tools={"deny": [], "allow": None}
     )
     monkeypatch.setattr(server.registry, "get_tool", lambda tool_id: _DESTRUCTIVE_ENTRY)
+    _stub_mcp_capability(monkeypatch)
+    monkeypatch.setattr(
+        server.backend_manager,
+        "get_backend_status",
+        lambda tool_id=None: {"success": True, "status": {"status": "running"}},
+    )
 
     async def fake_call(tool_id, tool_name, arguments):
         return {"success": True, "result": "done"}
@@ -253,7 +277,8 @@ def test_mode_allow_skips_confirmation(monkeypatch):
     monkeypatch.setattr(server.backend_manager, "call_backend_tool", fake_call)
 
     text = server_run(
-        "call_backend_tool", {"tool_id": "boom", "tool_name": "nuke"}
+        "call_capability",
+        {"tool_id": "boom", "capability_id": "nuke", "execute": True},
     )
     payload = json.loads(text)
     assert payload["success"] is True
@@ -268,9 +293,13 @@ def test_default_mode_keeps_phase1_behavior(monkeypatch):
         tools={"deny": [], "allow": None},
     )
     monkeypatch.setattr(server.registry, "get_tool", lambda tool_id: _DESTRUCTIVE_ENTRY)
+    _stub_mcp_capability(monkeypatch)
 
     with pytest.raises(server.ToolError) as exc:
-        server_run("call_backend_tool", {"tool_id": "boom", "tool_name": "nuke"})
+        server_run(
+            "call_capability",
+            {"tool_id": "boom", "capability_id": "nuke", "execute": True},
+        )
     assert json.loads(str(exc.value))["errorType"] == "destructive_blocked"
 
 

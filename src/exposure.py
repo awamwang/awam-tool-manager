@@ -2,8 +2,8 @@
 
 三种模式是**同一张声明表的不同切片**，不产生第二份工具定义：
 
-- `lazy`：保持改造前的 22 个管理工具，高频能力仍走
-  `search_tools → start_backend/list_backend_tools → call_backend_tool`；
+- `lazy`：19 个治理、能力路由与运行时工具，高频能力走
+  `list_tools → list_capabilities → call_capability`；
 - `default`：在 lazy 之上补 7 个意图级前门工具（文件搜索、打开路径、打开应用、
   Steam 游戏、启动器动作），模型看到工具名就知道能力存在；
 - `full`：再补 5 个低频/执行面工具（文件元信息、Everything 状态、winget 搜索与安装、
@@ -101,9 +101,6 @@ _FAMILIES: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             ("search_actions", "跨 Quicker / uTools 搜索动作或插件，返回 source / action_id / name"),
             ("run_action", "按动作 ID 或唯一名称执行 Quicker / uTools 动作；默认只预览"),
-            ("list_launcher_actions", "列出/搜索某个启动器的完整动作清单"),
-            ("run_launcher_action", "执行指定启动器的动作（需要已知 tool_id）"),
-            ("sync_launcher_actions", "重新扫描启动器的本地数据并刷新动作缓存"),
         ),
     ),
     (
@@ -119,21 +116,21 @@ _FAMILIES: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         ),
     ),
     (
-        "工具与后端",
+        "工具、能力与运行时",
         (
             ("search_tools", "按关键词搜索已登记工具，可按 kind / status / publisher 收窄"),
             ("list_tools", "列出所有已登记工具"),
-            ("get_tool_info", "查看工具详情"),
-            ("get_tool_help", "取工具帮助信息与能力清单"),
+            ("get_tool_info", "查看工具详情与运行状态"),
+            ("get_tool_help", "取工具帮助信息与能力概要"),
             ("discover_tools", "按声明清单探测本机是否安装了某个工具"),
-            ("call_backend_tool", "路由调用后端 MCP 的长尾子工具"),
-            ("list_backend_tools", "列出后端 MCP 的子工具及参数 schema"),
-            ("start_backend", "启动后端 MCP Server 并同步子工具目录"),
-            ("stop_backend", "停止后端 MCP Server"),
-            ("get_backend_status", "查看后端运行状态"),
-            ("get_backend_logs", "查看后端日志"),
-            ("set_backend_log_level", "设置后端日志级别"),
-            ("sync_backend_tools", "手动同步后端 MCP 子工具目录"),
+            ("list_capabilities", "列出某个工具的能力（MCP 子工具 / 启动器动作 / 应用的 launch）及完整 inputSchema"),
+            ("call_capability", "调用某个工具的能力；arguments 是能力自己的参数，默认只预览"),
+            ("sync_capabilities", "同步某个工具的能力清单（MCP 刷新目录 / 启动器重扫本地数据）"),
+            ("start_runtime", "启动 MCP 提供者的运行时并同步能力目录"),
+            ("stop_runtime", "停止 MCP 提供者的运行时"),
+            ("get_runtime_status", "查看 MCP 运行时状态"),
+            ("get_runtime_logs", "查看 MCP 运行时日志"),
+            ("set_runtime_log_level", "设置 MCP 运行时日志级别"),
             ("get_usage_stats", "查询工具调用统计"),
         ),
     ),
@@ -141,33 +138,35 @@ _FAMILIES: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
 
 _MODE_NOTES = {
     "lazy": (
-        "lazy：只暴露管理工具。找文件用 search_tools → start_backend → "
-        "list_backend_tools → call_backend_tool；游戏/动作先用 "
-        "list_launcher_actions 再 run_launcher_action。"
+        "lazy：只暴露治理、能力路由与运行时工具。找文件/游戏/动作先 "
+        "list_tools → list_capabilities → call_capability。"
     ),
     "default": (
         "default：高频意图已直接暴露为工具名。文件、应用、游戏、快捷动作优先用意图工具；"
-        "winget 与后端子工具仍走 search_tools → call_backend_tool。"
+        "长尾能力仍走 list_capabilities → call_capability。"
     ),
     "full": (
-        "full：全部能力都已直接暴露；长尾后端工具仍可用 search_tools → call_backend_tool。"
+        "full：全部能力都已直接暴露；长尾仍可用 list_capabilities → call_capability。"
     ),
 }
 
 _COMMON_RULES = (
     "1. open_path / open_app / open_game / run_action 默认只预览，execute=true 才产生副作用。",
     "2. 破坏性操作必须显式传 allowDestructive=true；多候选返回列表时先让用户确认，不要自动选。",
-    "3. 文件搜索优先 search_files（lazy 下用路由组合），禁止用 PowerShell 逐盘递归。",
-    "4. 意图工具会自动拉起所需后端；长尾 call_backend_tool 前若后端未运行，先 start_backend。",
+    "3. 文件搜索优先 search_files，禁止用 PowerShell 逐盘递归。",
+    "4. MCP 能力调用会自动拉起运行时；需要预热或排查时才用 start_runtime / get_runtime_status / get_runtime_logs。",
+    "5. 长尾能力先 list_capabilities 取 inputSchema，再按 capability_id + 嵌套 arguments 调 call_capability。",
 )
 
 # lazy 下前门工具不可见，规则里不能出现它们的名字——否则 instructions 会
 # 建议模型去调一个 tools/list 里根本不存在的工具。
 _LAZY_RULES = (
-    "1. launch_tool / run_launcher_action 默认只取预览，execute=true 才产生副作用。",
+    "1. launch_tool 默认只取预览，execute=true 才产生副作用。",
     "2. 破坏性操作必须显式传 allowDestructive=true；多候选返回列表时先让用户确认，不要自动选。",
-    "3. 文件搜索走 search_tools → start_backend → list_backend_tools → call_backend_tool，禁止用 PowerShell 逐盘递归。",
-    "4. 长尾 call_backend_tool 前若后端未运行，先 start_backend。",
+    "3. 文件搜索走 list_capabilities(tool_id='everything-search-mcp') → "
+    "call_capability(capability_id='search_files')，禁止用 PowerShell 逐盘递归。",
+    "4. MCP 能力调用会自动拉起运行时；排查用 get_runtime_status / get_runtime_logs。",
+    "5. 长尾能力先 list_capabilities 取 inputSchema，再按 capability_id + 嵌套 arguments 调 call_capability。",
 )
 
 

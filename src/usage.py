@@ -31,12 +31,14 @@ def record_call(
     error_type: str | None = None,
     duration_ms: int = 0,
     target: str | None = None,
+    capability: str | None = None,
 ) -> None:
     """记一行调用统计。
 
     `target` 由 dispatch 显式传入时优先（意图工具的真实目标是解析出来的
     tool_id / scoop 包 / 后端，而不是调用参数里的某个字段）；未传时保持
-    旧口径——取 `arguments["tool_id"]`。
+    旧口径——取 `arguments["tool_id"]`。`capability` 同理，只记
+    `call_capability` 解析出的能力 ID，不给普通工具编造这一维。
 
     旁路设施：**任何**落盘失败只往 stderr 告警，绝不向上抛——
     「统计写不进去」不该变成「工具调用失败」。
@@ -49,6 +51,8 @@ def record_call(
         "ok": bool(ok),
         "ms": max(0, int(duration_ms)),
     }
+    if capability:
+        row["capability"] = str(capability)
     if error_type:
         row["errorType"] = error_type
 
@@ -164,6 +168,7 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
     by_name: dict[str, dict[str, Any]] = {}
     by_target: dict[str, dict[str, Any]] = {}
+    by_capability: dict[tuple[str, str], dict[str, Any]] = {}
     by_day: dict[str, int] = {}
     error_types: dict[str, int] = {}
 
@@ -189,6 +194,15 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
             t_bucket["count"] += 1
             t_bucket["failed"] += 0 if ok else 1
 
+        capability = str(r.get("capability") or "")
+        if capability:
+            c_bucket = by_capability.setdefault((target, capability), {
+                "toolId": target, "capabilityId": capability,
+                "count": 0, "failed": 0,
+            })
+            c_bucket["count"] += 1
+            c_bucket["failed"] += 0 if ok else 1
+
         by_day[day] = by_day.get(day, 0) + 1
         if not ok:
             et = str(r.get("errorType") or "unknown_error")
@@ -206,6 +220,10 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "failed": failed,
         "byName": _named(list(by_name.values())),
         "targets": sorted(by_target.values(), key=lambda b: (-b["count"], b["toolId"])),
+        "capabilities": sorted(
+            by_capability.values(),
+            key=lambda b: (-b["count"], b["toolId"], b["capabilityId"]),
+        ),
         "byDay": [{"day": d, "count": c} for d, c in sorted(by_day.items())],
         "errorTypes": [
             {"errorType": k, "count": v}

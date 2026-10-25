@@ -46,11 +46,11 @@
 
 本项目中以下操作**都会改变可见工具**，但均未发通知：
 
-- `start_backend` / `sync_backend_tools` → 后端子工具目录变化
+- `start_runtime` / `sync_capabilities` → 提供者能力目录变化
 - 手工往 `data/tools/` 增删 JSON
 
-后果：客户端缓存的 `tools/list` 结果过期。虽然本 Server 的**顶层工具集是固定的**（12 个不变），
-后端子工具又是透过 `list_backend_tools` 动态查询的，因此实际影响有限，
+后果：客户端缓存的 `tools/list` 结果过期。虽然本 Server 的**顶层工具集按暴露模式固定**
+（lazy 19 / default 26 / full 31），能力目录又是透过 `list_capabilities` 动态查询的，因此实际影响有限，
 但严格来说属于未履行的协议约定。
 
 建议：若未来顶层工具集变为动态，务必补 `app.request_context.session.send_notifications...`。
@@ -60,7 +60,7 @@
 MCP 规范定义了标准的 `logging` 能力（`logging/setLevel` + `notifications/message`），
 让 Server 把日志结构化上报给客户端。
 
-本项目改为两条自定义 Tool：`get_backend_logs` / `set_backend_log_level`，
+本项目改为两条自定义 Tool：`get_runtime_logs` / `set_runtime_log_level`，
 外加 `print(..., file=sys.stderr)`。
 
 | 做法 | 评价 |
@@ -200,14 +200,14 @@ MCP Tool 支持 `annotations`（`title` / `readOnlyHint` / `destructiveHint` / `
 
 | 类别 | 工具 | hints |
 |---|---|---|
-| 只读 | `search_tools` / `list_tools` / `get_tool_info` / `list_backend_tools` / `get_backend_status` / `get_backend_logs` / `get_usage_stats` / `list_packages` / `search_packages` | `readOnlyHint=true`、`destructiveHint=false` |
-| 幂等 | `start_backend` / `stop_backend` / `sync_backend_tools` | `idempotentHint=true` |
-| 副作用静态不可知 | `call_backend_tool` / `launch_tool` / `get_tool_help` / `discover_tools` / `launch_package` | `openWorldHint=true`（**不谎报 readOnly**） |
+| 只读 | `search_tools` / `list_tools` / `get_tool_info` / `list_capabilities` / `get_runtime_status` / `get_runtime_logs` / `get_usage_stats` / `list_packages` / `search_packages` | `readOnlyHint=true`、`destructiveHint=false` |
+| 幂等 | `start_runtime` / `stop_runtime` / `sync_capabilities` | `idempotentHint=true` |
+| 副作用静态不可知 | `call_capability` / `launch_tool` / `get_tool_help` / `discover_tools` / `launch_package` | `openWorldHint=true`（**不谎报 readOnly**） |
 | 副作用静态可知且破坏性 | `install_package` | `openWorldHint=true`、`destructiveHint=true` |
 
-`call_backend_tool` 只标 `openWorldHint` 是刻意的：它转发到任意后端子工具，
-副作用取决于运行时的 `tool_name`，静态断言只读会误导客户端。真正的防护落在
-**转发前的 destructive 门禁**上：目标工具 `destructive=true` 时默认拒绝
+`call_capability` 只标 `openWorldHint` 是刻意的：它转发到任意能力，
+副作用取决于运行时的 `capability_id`，静态断言只读会误导客户端。真正的防护落在
+**转发前的 destructive 门禁**上：目标能力 `risk=destructive` 时默认拒绝
 （`errorType: destructive_blocked`），需显式传 `allowDestructive=true`。
 
 `launch_tool` 走同一条判定：默认只返回命令（零副作用），显式 `execute=true` 才
@@ -249,7 +249,7 @@ SDK 自己的文本，本项目无法把它转成 JSON——`search_packages lim
 所以「结构化错误载荷」指的是 **handler 层**的约定，不是整条调用链的不变式。
 两条边界因此是叠加而不是重复：schema 的 `minimum` / `enum` 是第一道（拦在门外，
 形态不受控），`pkgman._clamp_int` 与 `resolve_root` 的 `invalid_params` 是第二道
-（只有绕过 schema 的路径——直调 handler、或经 `call_backend_tool` 转发——才会走到）。
+（只有绕过 schema 的路径——直调 handler、或经 `call_capability` 转发——才会走到）。
 
 ---
 

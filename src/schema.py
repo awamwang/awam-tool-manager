@@ -130,7 +130,7 @@ TOOL_ENTRY_SCHEMA: dict[str, Any] = {
         },
         "install": {
             "type": "object",
-            "description": "安装方式；`start_backend` 检测到启动命令缺失时，仅在**显式授权**后才会执行一次 `command`（默认不执行，见安全约定），与 `update` 并存",
+            "description": "安装方式；`start_runtime` 检测到启动命令缺失时，仅在**显式授权**后才会执行一次 `command`（默认不执行，见安全约定），与 `update` 并存",
             "properties": {
                 "method": {
                     "type": "string",
@@ -190,7 +190,7 @@ TOOL_ENTRY_SCHEMA: dict[str, Any] = {
         "readOnly": {"type": "boolean", "description": "是否只读（对应 MCP 的 `readOnlyHint`）"},
         "destructive": {
             "type": "boolean",
-            "description": "是否有破坏性（对应 `destructiveHint`，`call_backend_tool` 会据此拦截）",
+            "description": "是否有破坏性（对应 `destructiveHint`，执行类工具会据此拦截）",
         },
         "destructiveTools": {
             "type": "array",
@@ -237,7 +237,7 @@ BACKEND_CATALOG_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "name": {
                         "type": "string",
-                        "description": "子工具名，即 `call_backend_tool` 的 `tool_name` 参数",
+                        "description": "子工具名，即 `call_capability` 的 `capability_id` 参数",
                     },
                     "description": {"type": "string", "description": "子工具描述"},
                     "inputSchema": {"type": "object", "description": "透传自后端 MCP 的 JSON Schema"},
@@ -313,7 +313,7 @@ LAUNCHER_ACTIONS_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "required": ["id"],
                 "properties": {
-                    "id": {"type": "string", "description": "动作 ID（`run_launcher_action` 用它指定动作）"},
+                    "id": {"type": "string", "description": "动作 ID（`call_capability` 用它指定 capability_id）"},
                     "name": {"type": "string", "description": "动作名称；取不到时为空串（只有 ID 也能调用）"},
                     "type": {"type": "string", "description": "动作类型（Quicker 如 XAction / SendKeys）"},
                     "app": {"type": "string", "description": "动作所属程序（Quicker 的上下文程序，如 `_global`）"},
@@ -337,7 +337,7 @@ def validate_backend_catalog(data: Any) -> str | None:
     """校验一份后端子工具缓存（`data/backend-tools/{tool_id}.json`）
 
     这类文件是自动生成的，所以只做结构校验：`tools` 不是数组、或子工具缺 `name`
-    都会让 `call_backend_tool` 的查表静默失效，不如加载时就告警。
+    都会让 `call_capability` 的查表静默失效，不如加载时就告警。
     """
     if not isinstance(data, dict):
         return f"顶层不是对象（实际为 {type(data).__name__}）"
@@ -350,7 +350,7 @@ def validate_launcher_catalog(data: Any) -> str | None:
     """校验一份启动器动作清单（`data/launcher-actions/{tool_id}.json`）
 
     与后端子工具缓存同理：自动生成，只做结构校验。`actions` 不是数组、或动作缺
-    `id` 都会让 `run_launcher_action` 的查表静默失效，不如加载时就告警。
+    `id` 都会让 `call_capability` 的查表静默失效，不如加载时就告警。
     """
     if not isinstance(data, dict):
         return f"顶层不是对象（实际为 {type(data).__name__}）"

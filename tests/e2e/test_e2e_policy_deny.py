@@ -15,14 +15,14 @@
    无法自行解除，提了等于误导）；
 4. `<runtime>/audit.log` 新增一行 `decision=block`（`policy.py:61`、`:228`）。
 
-**为什么 deny 名单里放 `stop_backend`**：它是唯一能证明「拒绝真的生效」的
+**为什么 deny 名单里放 `stop_runtime`**：它是唯一能证明「拒绝真的生效」的
 负向证据——被拒之后后端**仍在 running**。若策略层被绕过，后端会被真的停掉，
 状态立刻变 stopped，这条断言就红。
 
 **预算 6s（独立进程）——比设计文档原本写的 4s 多 2s，是刻意的取舍**：
 「后端零调用」这条断言只有在后端**真的活着**时才有意义（后端没起来的话，
 计数文件为 0 只是"没得调用"，什么都证明不了）。而把后端真拉起来要一次真实
-握手 ≈2.8s，是省不掉的硬成本。压回 4s 只有一条路——去掉 `start_backend`，
+握手 ≈2.8s，是省不掉的硬成本。压回 4s 只有一条路——去掉 `start_runtime`，
 那时证据就退化成空证据。**证据优先于预算**（2026-10-17 team-lead 裁决）。
 """
 
@@ -53,7 +53,7 @@ TOOL_ID = DEFAULT_FAKE_TOOL_ID
 # 多一个字段就会在 import 期直接失败——那是 test_policy_config 的地盘）
 POLICY = {
     "version": 1,
-    "tools": {"deny": ["call_backend_tool", "stop_backend"], "allow": None},
+    "tools": {"deny": ["call_capability", "stop_runtime"], "allow": None},
     "destructive": {"mode": "deny"},
     "audit": {"destructive": True},
 }
@@ -101,13 +101,13 @@ async def _run(repo, runtime, tmp_path):
     async with stdio_session(repo, runtime, env) as (session, log):
         # 先把后端真的拉起来：后端活着，「零调用」才是有意义的证据
         obs["start_err"], obs["start"] = await call_tool(
-            session, "start_backend", {"tool_id": TOOL_ID}
+            session, "start_runtime", {"tool_id": TOOL_ID}
         )
 
         async def status_is(want: str):
             async def probe():
                 err, payload = await call_tool(
-                    session, "get_backend_status", {"tool_id": TOOL_ID}
+                    session, "get_runtime_status", {"tool_id": TOOL_ID}
                 )
                 if err:
                     return None
@@ -133,16 +133,17 @@ async def _run(repo, runtime, tmp_path):
         # 被 deny 的调用：命中 deny 名单 → permission_denied
         obs["denied_err"], obs["denied"] = await call_tool(
             session,
-            "call_backend_tool",
-            {"tool_id": TOOL_ID, "tool_name": "echo", "arguments": {"text": "hi"}},
+            "call_capability",
+            {"tool_id": TOOL_ID, "capability_id": "echo",
+             "arguments": {"text": "hi"}},
         )
         obs["calls_after"] = _call_count(calls_file)
 
         # 被 deny 的 stop：后端应当**仍然在跑**（拒绝生效的负向证据）
         obs["stop_err"], obs["stop"] = await call_tool(
-            session, "stop_backend", {"tool_id": TOOL_ID}
+            session, "stop_runtime", {"tool_id": TOOL_ID}
         )
-        _, payload = await call_tool(session, "get_backend_status", {"tool_id": TOOL_ID})
+        _, payload = await call_tool(session, "get_runtime_status", {"tool_id": TOOL_ID})
         obs["status_after_denied_stop"] = (payload.get("status") or {}).get("status")
 
     # 网关进程退出 → Job Object 应当把后端进程树一并收掉（R2 的兜底路径）
@@ -169,7 +170,7 @@ def test_e2e_policy_deny_blocks_before_backend(e2e_repo, e2e_runtime, tmp_path):
         print(f"\n[场景⑤] policy deny 端到端耗时 {obs['elapsed']:.2f}s（预算 6s）")
 
         # ── 0) 前置：后端真的起来了（否则「零调用」是空话）────────────
-        assert not obs["start_err"], f"start_backend 返回 isError：{obs['start']}\n{tail}"
+        assert not obs["start_err"], f"start_runtime 返回 isError：{obs['start']}\n{tail}"
         assert obs["status_running"] == "running", f"后端未进入 running：{obs['status_running']}"
         assert obs["backend_alive"] is True, "后端进程未存活——零调用无从谈起"
 
@@ -200,12 +201,12 @@ def test_e2e_policy_deny_blocks_before_backend(e2e_repo, e2e_runtime, tmp_path):
         # ── 4) 审计落盘 ──────────────────────────────────────────────
         blocks = obs["audit_blocks"]
         assert blocks, f"audit.log 里没有 decision=block 的审计行：{tail}"
-        assert any(b.get("tool") == "call_backend_tool" for b in blocks), (
-            f"审计行里没有 call_backend_tool：{blocks}"
+        assert any(b.get("tool") == "call_capability" for b in blocks), (
+            f"审计行里没有 call_capability：{blocks}"
         )
 
         # ── 5) 被 deny 的 stop 没生效：后端仍在运行 ───────────────────
-        assert obs["stop_err"] is True, f"被 deny 的 stop_backend 没返回 isError：{obs['stop']}"
+        assert obs["stop_err"] is True, f"被 deny 的 stop_runtime 没返回 isError：{obs['stop']}"
         assert obs["stop"].get("errorType") == "permission_denied", f"stop 的 errorType 不对：{obs['stop']}"
         assert obs["status_after_denied_stop"] == "running", (
             f"被 deny 的 stop 之后后端状态是 {obs['status_after_denied_stop']}"

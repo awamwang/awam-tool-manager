@@ -1,9 +1,8 @@
 """破坏性门禁判定与部署策略（ARC-P1-05 Phase 1 方案 A，Phase 2 方案 C）。
 
 唯一判定入口 `decide_destructive(kind, tool, sub_op, args)`——执行类
-handler（`call_backend_tool` / `run_launcher_action` / `launch_tool` 的
-execute 路径 / `install_package` / `launch_package`）只调它，不再各自维护
-判定逻辑。Phase 2 起策略
+handler（`call_capability` / `launch_tool` 的 execute 路径 /
+`install_package` / `launch_package`）只调它，不再各自维护判定逻辑。Phase 2 起策略
 （`data/policy.json`）参与判定：
 
 - `check_call(name)`：`dispatch_tool` 前置的工具级策略（deny 名单优先于
@@ -471,7 +470,7 @@ def decide_destructive(
     if kind == "mcp":
         required, rule_hit, subject, tail = _decide_mcp(tool, sub_op)
         sub_op_label = sub_op.get("tool_name") or ""
-        audit_action = "call_backend_tool"
+        audit_action = "call_capability"
     elif kind == "launcher":
         required, rule_hit, subject, tail = _decide_launcher(tool, sub_op)
         sub_op_label = (
@@ -479,7 +478,7 @@ def decide_destructive(
             or sub_op.get("action_name")
             or ""
         )
-        audit_action = "run_launcher_action"
+        audit_action = "call_capability"
     elif kind == "app":
         required, rule_hit, subject, tail = _decide_app(tool, sub_op)
         sub_op_label = ""

@@ -87,22 +87,32 @@ def test_launch_unknown_tool_raises():
         run(dispatch_tool("launch_tool", {"tool_id": "ghost"}))
 
 
-def test_backend_call_on_app_tool_raises_config_error():
-    """everything 是 app 类型，没有后端连接 → config_error"""
+def test_capability_on_app_tool_only_has_launch():
+    """everything 是 app 类型，只有 launch 能力；未知能力 → not_found"""
     with pytest.raises(ToolError) as exc:
         run(dispatch_tool(
-            "call_backend_tool",
-            {"tool_id": "everything", "tool_name": "anything"}
+            "call_capability",
+            {"tool_id": "everything", "capability_id": "anything"}
         ))
+
+    payload = payload_of(exc)
+    assert payload["errorType"] == "not_found"
+    assert payload["capabilityId"] == "anything"
+
+
+def test_runtime_tools_reject_non_mcp_provider():
+    """应用 / 启动器没有运行时，start_runtime 应给 config_error"""
+    with pytest.raises(ToolError) as exc:
+        run(dispatch_tool("start_runtime", {"tool_id": "everything"}))
 
     assert payload_of(exc)["errorType"] == "config_error"
 
 
-def test_backend_status_and_logs():
+def test_runtime_status_and_logs():
     async def go():
-        status = json.loads(await dispatch_tool("get_backend_status", {}))
+        status = json.loads(await dispatch_tool("get_runtime_status", {}))
         logs = json.loads(await dispatch_tool(
-            "get_backend_logs", {"tool_id": "everything-search-mcp", "limit": 10}
+            "get_runtime_logs", {"tool_id": "everything-search-mcp", "limit": 10}
         ))
         return status, logs
 
@@ -117,12 +127,12 @@ def test_backend_status_and_logs():
 def test_set_log_level_dispatch():
     async def go():
         ok = json.loads(await dispatch_tool(
-            "set_backend_log_level",
+            "set_runtime_log_level",
             {"tool_id": "everything-search-mcp", "level": "warning"}
         ))
         # 复原，避免影响同进程内的其他断言
         await dispatch_tool(
-            "set_backend_log_level",
+            "set_runtime_log_level",
             {"tool_id": "everything-search-mcp", "level": "info"}
         )
         return ok
@@ -131,10 +141,26 @@ def test_set_log_level_dispatch():
 
     with pytest.raises(ToolError) as exc:
         run(dispatch_tool(
-            "set_backend_log_level",
+            "set_runtime_log_level",
             {"tool_id": "everything-search-mcp", "level": "verbose"}
         ))
     assert payload_of(exc)["success"] is False
+
+
+def _fake_mcp_capability(monkeypatch, name: str = "x") -> None:
+    """让 call_capability 能解析到能力并跳过真实启动。"""
+    monkeypatch.setattr(
+        server.store,
+        "load_backend_tools",
+        lambda tool_id: [
+            {"name": name, "description": "", "inputSchema": {"type": "object"}}
+        ],
+    )
+    monkeypatch.setattr(
+        server.backend_manager,
+        "get_backend_status",
+        lambda tool_id=None: {"success": True, "status": {"status": "running"}},
+    )
 
 
 def test_internal_exception_becomes_typed_error(monkeypatch):
@@ -143,6 +169,7 @@ def test_internal_exception_becomes_typed_error(monkeypatch):
     注意转换发生在 call_tool（协议入口）而不是 dispatch_tool：
     分发层保持「抛什么是什么」，统一包装交给入口，便于单测定位真实原因。
     """
+    _fake_mcp_capability(monkeypatch)
 
     async def boom(tool_id, tool_name, arguments):
         raise ValueError("模拟后端崩了")
@@ -151,8 +178,12 @@ def test_internal_exception_becomes_typed_error(monkeypatch):
 
     with pytest.raises(ToolError) as exc:
         run(server.call_tool(
-            "call_backend_tool",
-            {"tool_id": "everything-search-mcp", "tool_name": "x"}
+            "call_capability",
+            {
+                "tool_id": "everything-search-mcp",
+                "capability_id": "x",
+                "execute": True,
+            },
         ))
 
     payload = payload_of(exc)
@@ -167,6 +198,8 @@ def test_backend_busy_maps_to_typed_error(monkeypatch):
     → server 经 ensure_success 抛 ToolError → 协议层 isError。
     """
 
+    _fake_mcp_capability(monkeypatch)
+
     async def busy(tool_id, tool_name, arguments):
         return {
             "success": False,
@@ -178,8 +211,12 @@ def test_backend_busy_maps_to_typed_error(monkeypatch):
 
     with pytest.raises(ToolError) as exc:
         run(server.call_tool(
-            "call_backend_tool",
-            {"tool_id": "everything-search-mcp", "tool_name": "x"}
+            "call_capability",
+            {
+                "tool_id": "everything-search-mcp",
+                "capability_id": "x",
+                "execute": True,
+            },
         ))
 
     payload = payload_of(exc)
@@ -228,7 +265,7 @@ def test_tool_definitions():
     assert "launcher_id" not in dumped, "遗留参数名 launcher_id 不应再出现"
 
     by_name = {t.name: t for t in tools}
-    for name in ("search_tools", "call_backend_tool", "start_backend", "stop_backend"):
+    for name in ("search_tools", "list_capabilities", "start_runtime", "stop_runtime"):
         assert name in by_name
         assert by_name[name].inputSchema["type"] == "object"
 
@@ -283,7 +320,7 @@ def test_list_resources_definitions():
 def test_prompts_do_not_teach_legacy_params():
     """D16 回归：prompt 里不能把已废弃的参数名当用法教给 AI"""
     prompts = {p.name for p in run(server.list_prompts())}
-    assert prompts == {"getting_started", "how_to_search", "how_to_call_backend"}
+    assert prompts == {"getting_started", "how_to_search", "how_to_call_capability"}
 
     for name in prompts:
         messages = run(server.get_prompt(name))
@@ -296,10 +333,11 @@ def test_prompts_do_not_teach_legacy_params():
         assert "launcher_id=" not in text
         assert "mcp_tool_id=" not in text
 
-    how_to = run(server.get_prompt("how_to_call_backend"))
+    how_to = run(server.get_prompt("how_to_call_capability"))
     messages = how_to.messages if hasattr(how_to, "messages") else how_to
     body = messages[0].content.text
     assert "tool_id=" in body
+    assert "capability_id=" in body
     assert "search_files" in body
 
 

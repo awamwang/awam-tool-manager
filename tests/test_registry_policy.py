@@ -132,6 +132,23 @@ def test_search_matches_tool_id():
     assert any(t["id"] == "everything-search-mcp" for t in results)
 
 
+def _stub_capability(monkeypatch, *names: str) -> None:
+    """call_capability 的解析与自动启动前置：给缓存 + 一个 running 的运行时"""
+    monkeypatch.setattr(
+        server.store,
+        "load_backend_tools",
+        lambda tool_id: [
+            {"name": n, "description": "", "inputSchema": {"type": "object"}}
+            for n in names
+        ],
+    )
+    monkeypatch.setattr(
+        server.backend_manager,
+        "get_backend_status",
+        lambda tool_id=None: {"success": True, "status": {"status": "running"}},
+    )
+
+
 # ---- A2：destructive 门禁与 annotations ----
 
 
@@ -146,11 +163,12 @@ def test_destructive_call_is_blocked_without_confirmation(monkeypatch):
         raise AssertionError("未确认的 destructive 调用不应被转发")
 
     monkeypatch.setattr(server.backend_manager, "call_backend_tool", should_not_be_called)
+    _stub_capability(monkeypatch, "nuke")
 
     with pytest.raises(server.ToolError) as exc:
         run(server.dispatch_tool(
-            "call_backend_tool",
-            {"tool_id": "boom", "tool_name": "nuke"},
+            "call_capability",
+            {"tool_id": "boom", "capability_id": "nuke", "execute": True},
         ))
 
     payload = json.loads(str(exc.value))
@@ -168,10 +186,14 @@ def test_destructive_call_allowed_with_flag(monkeypatch):
         return {"success": True, "result": "done"}
 
     monkeypatch.setattr(server.backend_manager, "call_backend_tool", fake_call)
+    _stub_capability(monkeypatch, "nuke")
 
     text = run(server.dispatch_tool(
-        "call_backend_tool",
-        {"tool_id": "boom", "tool_name": "nuke", "allowDestructive": True},
+        "call_capability",
+        {
+            "tool_id": "boom", "capability_id": "nuke",
+            "execute": True, "allowDestructive": True,
+        },
     ))
     payload = json.loads(text)
 
@@ -200,15 +222,22 @@ def test_destructive_gate_is_per_sub_tool(monkeypatch):
         return {"success": True, "result": f"{tool_name} ok"}
 
     monkeypatch.setattr(server.backend_manager, "call_backend_tool", fake_call)
+    _stub_capability(monkeypatch, "nuke", "query")
 
     # 清单内的子工具：仍要显式确认
     with pytest.raises(server.ToolError) as exc:
-        run(server.dispatch_tool("call_backend_tool", {"tool_id": "boom", "tool_name": "nuke"}))
+        run(server.dispatch_tool(
+            "call_capability",
+            {"tool_id": "boom", "capability_id": "nuke", "execute": True},
+        ))
     assert json.loads(str(exc.value))["errorType"] == "destructive_blocked"
 
     # 清单外的子工具（纯查询）：免确认直接转发，且不带 destructive 告警
     payload = json.loads(
-        run(server.dispatch_tool("call_backend_tool", {"tool_id": "boom", "tool_name": "query"}))
+        run(server.dispatch_tool(
+            "call_capability",
+            {"tool_id": "boom", "capability_id": "query", "execute": True},
+        ))
     )
     assert payload["success"] is True
     assert "warning" not in payload, "免确认的子工具不应被标注为 destructive"
@@ -226,21 +255,25 @@ def test_destructive_without_sub_tool_list_still_blocks_everything(monkeypatch):
         raise AssertionError("未确认的 destructive 调用不应被转发")
 
     monkeypatch.setattr(server.backend_manager, "call_backend_tool", should_not_be_called)
+    _stub_capability(monkeypatch, "query")
 
     with pytest.raises(server.ToolError):
-        run(server.dispatch_tool("call_backend_tool", {"tool_id": "boom", "tool_name": "query"}))
+        run(server.dispatch_tool(
+            "call_capability",
+            {"tool_id": "boom", "capability_id": "query", "execute": True},
+        ))
 
 
 def test_read_only_tools_are_annotated():
     """只读工具必须带 readOnlyHint，转发类只标 openWorldHint"""
     tools = {t.name: t for t in run(server.list_tools())}
 
-    for name in ("search_tools", "list_tools", "get_tool_info", "get_backend_status"):
+    for name in ("search_tools", "list_tools", "get_tool_info", "get_runtime_status"):
         annotations = tools[name].annotations
         assert annotations is not None, f"{name} 缺少 annotations"
         assert annotations.readOnlyHint is True
 
-    forwarded = tools["call_backend_tool"].annotations
+    forwarded = tools["call_capability"].annotations
     assert forwarded is not None
     assert forwarded.openWorldHint is True
     assert forwarded.readOnlyHint is None, "副作用静态不可知，不应断言只读"

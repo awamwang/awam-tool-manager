@@ -10,7 +10,7 @@
 - **已授权（`AWAM_AUTO_INSTALL=1`）→ npm 真的被提交给 shell** 这条**保留手工**，
   就是本脚本，原因有二：
   1. 它依赖本机 npm，验的是「命令确实被 shell 执行」这一副作用面；
-  2. `errorType` 受「启动预热 vs start_backend」竞态影响，**不能断言**（见下）。
+  2. `errorType` 受「启动预热 vs start_runtime」竞态影响，**不能断言**（见下）。
   做成自动用例只会引入 flaky 与本机依赖。
 
 运行（在仓库根）：
@@ -62,8 +62,8 @@ PROBE = {
 }
 
 
-async def _call_start_backend(repo_dir: Path, runtime_dir: Path, authorized: bool):
-    """真实 stdio 会话里调一次 start_backend，返回 (isError, payload, stderr)"""
+async def _call_start_runtime(repo_dir: Path, runtime_dir: Path, authorized: bool):
+    """真实 stdio 会话里调一次 start_runtime，返回 (isError, payload, stderr)"""
     env = build_env(runtime_dir, {"AWAM_AUTO_INSTALL": "1"} if authorized else None)
 
     params = StdioServerParameters(
@@ -74,7 +74,7 @@ async def _call_start_backend(repo_dir: Path, runtime_dir: Path, authorized: boo
     async with stdio_client(params, errlog=stderr) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
-            result = await session.call_tool("start_backend", {"tool_id": PROBE_ID})
+            result = await session.call_tool("start_runtime", {"tool_id": PROBE_ID})
 
     stderr.seek(0)
     log = stderr.read()
@@ -98,10 +98,10 @@ async def main() -> int:
         write_tool_entry(repo, PROBE)
 
         # 场景：已授权（AWAM_AUTO_INSTALL=1）→ 命令真的被提交给 shell
-        is_error, payload, log = await _call_start_backend(repo, runtime, authorized=True)
+        is_error, payload, log = await _call_start_runtime(repo, runtime, authorized=True)
         print("── 场景：已授权（AWAM_AUTO_INSTALL=1）──────────")
         print(f"isError      : {is_error}")
-        # errorType 受「预热安装 vs start_backend 竞态」影响：服务启动预热
+        # errorType 受「预热安装 vs start_runtime 竞态」影响：服务启动预热
         # 持锁安装中时，start 走 A14 返回 backend_installing；安装已结束则是
         # A11 的 runtime_error——两个取值都合法，故本场景不对该字段断言
         # （2026-10-17 QA 连跑 4 次实测 3×runtime_error / 1×backend_installing）。

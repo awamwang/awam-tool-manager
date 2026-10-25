@@ -56,7 +56,7 @@
 | `update` | `object` | - | 更新方式 |
 | `update.method` | `string` | - | 更新渠道（取值：`winget` / `scoop` / `npm` / `manual`） |
 | `update.packageId` | `string` | - | 包管理器中的包 ID |
-| `install` | `object` | - | 安装方式；`start_backend` 检测到启动命令缺失时，仅在**显式授权**后才会执行一次 `command`（默认不执行，见安全约定），与 `update` 并存 |
+| `install` | `object` | - | 安装方式；`start_runtime` 检测到启动命令缺失时，仅在**显式授权**后才会执行一次 `command`（默认不执行，见安全约定），与 `update` 并存 |
 | `install.method` | `string` | - | 安装渠道（取值：`npm` / `winget` / `scoop` / `manual`） |
 | `install.command` | `string` | - | 安装命令 |
 | `install.auto` | `boolean` | - | 是否允许自动执行 `command`；默认 false。需显式设为 true，或设环境变量 AWAM_AUTO_INSTALL=1，否则 install.command 永不被自动执行 |
@@ -69,7 +69,7 @@
 | `actions` | `array<string>` | - | 支持的动作（如 `launch` / `search`） |
 | `capabilities` | `array<string>` | - | 能力标签（如 `search` / `index`） |
 | `readOnly` | `boolean` | - | 是否只读（对应 MCP 的 `readOnlyHint`） |
-| `destructive` | `boolean` | - | 是否有破坏性（对应 `destructiveHint`，`call_backend_tool` 会据此拦截） |
+| `destructive` | `boolean` | - | 是否有破坏性（对应 `destructiveHint`，执行类工具会据此拦截） |
 | `destructiveTools` | `array<string>` | - | 子工具级破坏性清单：只有列在这里的后端子工具需要 `allowDestructive` 确认；未配置时回退到条目级 `destructive`（即整个后端的所有调用都要确认） |
 | `destructiveActions` | `array<string>` | - | 启动器动作级破坏性清单（glob，大小写不敏感）：按动作的 id/name/type 匹配，命中才需要 `allowDestructive` 确认；未配置时回退到条目级 `destructive`（即该启动器的所有动作都要确认） |
 | `metadata` | `object` | - | 扩展元数据，键值对自由 |
@@ -141,7 +141,7 @@
 
 ## 数据层 2：后端子工具缓存（Backend Tool Catalog）
 
-由 `sync_backend_tools` 自动生成并写入**运行时目录**的 `backend-tools/{tool_id}.json`
+由 `sync_capabilities` 自动生成并写入**运行时目录**的 `backend-tools/{tool_id}.json`
 （`%LOCALAPPDATA%\.awam-tool-manager/`，A14 前在 `data/backend-tools/`），**不建议手工编辑**。
 结构同样由 `src/schema.py` 的 `BACKEND_CATALOG_SCHEMA` 定义并生成本表。
 
@@ -153,7 +153,7 @@
 | `lastSynced` | `string` | - | 上次同步时间，ISO 8601；用于判断缓存有多旧 |
 | `source` | `string` | - | 来源，表示由后端自动拉取而非人工维护（取值：`auto`） |
 | `tools` | `array<object>` | ✅ | 后端 MCP 提供的子工具列表 |
-| `tools[].name` | `string` | ✅ | 子工具名，即 `call_backend_tool` 的 `tool_name` 参数 |
+| `tools[].name` | `string` | ✅ | 子工具名，即 `call_capability` 的 `capability_id` 参数 |
 | `tools[].description` | `string` | - | 子工具描述 |
 | `tools[].inputSchema` | `object` | - | 透传自后端 MCP 的 JSON Schema |
 
@@ -182,7 +182,7 @@
 
 ## 数据层 2.5：启动器动作清单（Launcher Action Catalog）
 
-由 `sync_launcher_actions` 自动生成并写入**运行时目录**的
+由 `sync_capabilities` 自动生成并写入**运行时目录**的
 `launcher-actions/{tool_id}.json`（与数据层 2 同构），**不建议手工编辑**。
 结构由 `src/schema.py` 的 `LAUNCHER_ACTIONS_SCHEMA` 定义（本表为手写，
 未纳入生成器，改结构时请同步更新此处与 schema）。
@@ -193,7 +193,7 @@
 | `lastSynced` | `string` | - | 上次同步时间，ISO 8601；缓存超过 `ACTIONS_CACHE_TTL`（300s）后 list/run 会自动重扫 |
 | `source` | `string` | - | 来源（取值：`auto` / `partial`，`partial` 表示部分动作只解析出 ID） |
 | `actions` | `array<object>` | ✅ | 启动器动作列表 |
-| `actions[].id` | `string` | ✅ | 动作 ID（Quicker 的 UUID；uTools 为 `<插件名>/<关键词>`），`run_launcher_action` 的 `action_id` 参数 |
+| `actions[].id` | `string` | ✅ | 动作 ID（Quicker 的 UUID；uTools 为 `<插件名>/<关键词>`），`call_capability` 的 `capability_id` 参数 |
 | `actions[].name` | `string` | - | 动作名称（尽力而为：来自 state 缓存与运行日志，可能缺失） |
 | `actions[].type` | `string` | - | 动作类型（来自 state 缓存） |
 | `actions[].app` | `string` | - | 动作面向的应用（来自 state 缓存） |
@@ -301,7 +301,7 @@ Windows 变量名里的括号也支持（`{ProgramFiles(x86)}`）。token 取值
 ## 对外契约：MCP 工具
 
 本技能作为 MCP Server 暴露给 AI 客户端的工具列表（**不是磁盘上的数据层**）。
-后端相关工具统一使用 **`tool_id`** 指定目标工具。
+能力/运行时工具统一使用 **`tool_id`** 定位提供者、**`capability_id`** 定位能力。
 可静态判定的工具都带 annotations（`readOnlyHint` / `idempotentHint` / `openWorldHint`）。
 
 | 工具名 | 参数 | 说明 |
@@ -310,17 +310,14 @@ Windows 变量名里的括号也支持（`{ProgramFiles(x86)}`）。token 取值
 | `list_tools` | `kind`、`status`、`publisher` | 列出所有工具（`status` 精确匹配、条目未写时按 `installed` 计；`publisher` 子串、大小写不敏感；空值/纯空白等于不设筛选） |
 | `get_tool_info` | `tool_id`(必填) | 查看工具详情 |
 | `launch_tool` | `tool_id`(必填)、`execute`、`wait`、`allowDestructive` | 返回启动命令；**默认只返回、不执行**，显式 `execute=true` 才启动进程（条目 `destructive` 时需 `allowDestructive=true`；`wait` 是执行后的早退观察窗口，默认 5s、封顶 30s） |
-| `call_backend_tool` | `tool_id`、`tool_name`(必填)、`arguments`、`allowDestructive` | 路由调用后端子工具（目标标记 `destructive` 时需 `allowDestructive=true`） |
-| `list_backend_tools` | `tool_id`(必填)、`force_refresh` | 列出后端子工具 |
-| `start_backend` | `tool_id`(必填) | 启动后端并同步目录 |
-| `stop_backend` | `tool_id`(必填) | 停止后端 |
-| `get_backend_status` | `tool_id` | 查看后端状态 |
-| `get_backend_logs` | `tool_id`(必填)、`level`、`limit` | 查看后端日志 |
-| `set_backend_log_level` | `tool_id`、`level`(必填) | 设置日志级别 |
-| `sync_backend_tools` | `tool_id`(必填) | 同步子工具目录 |
-| `sync_launcher_actions` | `tool_id`(必填) | 手动同步启动器动作清单 |
-| `list_launcher_actions` | `tool_id`(必填)、`keyword`、`limit`、`refresh` | 列出/搜索启动器动作（缓存超过 5 分钟自动重扫） |
-| `run_launcher_action` | `tool_id`(必填)、`action_id`/`action_name`(至少一个)、`param`、`wait`、`allowDestructive` | 执行启动器动作（条目或目标标记 `destructive` 时需 `allowDestructive=true`；配 `destructiveActions` 时按动作 id/name/type 的 glob 判定，仅命中的动作需确认） |
+| `list_capabilities` | `tool_id`(必填)、`keyword`、`limit`、`refresh` | 列出提供者能力（MCP 子工具 / 启动器动作 / 应用 `launch`），每条带 `capabilityId` 与完整 `inputSchema` |
+| `call_capability` | `tool_id`、`capability_id`(均必填)、`arguments`、`execute`、`allowDestructive`、`wait` | 统一调用入口（`arguments` 嵌套能力参数）；只读能力默认执行，写/破坏性默认只预览，destructive 需 `allowDestructive=true` |
+| `sync_capabilities` | `tool_id`(必填) | 同步能力清单（MCP 启动运行时并刷新，启动器重扫，应用无可变清单） |
+| `start_runtime` | `tool_id`(必填) | 启动 MCP 运行时并建立连接 |
+| `stop_runtime` | `tool_id`(必填) | 停止 MCP 运行时 |
+| `get_runtime_status` | `tool_id` | 查看 MCP 运行时状态 |
+| `get_runtime_logs` | `tool_id`(必填)、`level`、`limit` | 查看运行时日志 |
+| `set_runtime_log_level` | `tool_id`、`level`(必填) | 设置运行时日志级别 |
 | `get_tool_help` | `tool_id`(必填)、`run`、`timeout`、`allowDestructive` | 取工具帮助信息：文档链接 + 能力清单（`kind=mcp` 子工具 / `kind=launcher` 动作）+ 帮助命令预览。**默认只读数据、不 spawn**；`kind=app` 显式 `run=true` 才执行 `help.command`/`launch.command` + `help.args`（缺省 `--help`）并捕获输出（条目 `destructive` 时需 `allowDestructive=true`；`timeout` 默认 5s、封顶 30s） |
 | `get_usage_stats` | `days`、`tool_id` | 查询调用使用统计（只读 `<runtime>/usage.log`）：按天 / 按对外工具 / 按目标 `tool_id` 聚合调用量、成败与耗时。`days` 按日历日含今天、缺省 7、越界收敛到 1~365；`tool_id` 与记录里的 `target` 精确匹配 |
 | `discover_tools` | `run_commands`、`status` | 按 `data/discovery.json` 发现本机工具：`path_exists` / `registry_value` / `dir_count` / 命令是否在 PATH 四类**只读**探测，输出 `status`（installed / not_installed / unknown）+ `confidence` + `registered` + 逐条证据。**默认不 spawn**，`run_commands=true` 才执行清单里的版本命令取版本号；`status` 带 `enum`，只裁剪返回的候选，`summary` 仍是整份清单的计数 |
@@ -382,7 +379,7 @@ Windows 变量名里的括号也支持（`{ProgramFiles(x86)}`）。token 取值
 - 符合 MCP 官方 Tool Schema 规范，`inputSchema` 必须是合法 JSON Schema
 - 元工具模式：只暴露少量高层工具，内部路由到具体实现
 - `readOnly` / `destructive` 与 MCP Tool annotations 语义对齐：
-  只读工具已下发 `readOnlyHint`，`destructive` 已在 `call_backend_tool` 转发前设门禁
+  只读工具已下发 `readOnlyHint`，`destructive` 已在 `call_capability` 转发前设门禁
 - **单一真相源**：`src/schema.py` 既是运行期校验依据，也是上面两张字段表的生成源。
   改字段只改 schema，再跑 `python scripts/generate_format_doc.py`；
   本文件其余部分（示例、对外契约、错误约定）仍手写，

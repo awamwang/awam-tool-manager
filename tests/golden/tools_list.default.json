@@ -205,63 +205,116 @@
     }
   },
   {
-    "name": "call_backend_tool",
-    "description": "路由调用：转发请求到指定 MCP 工具的后端 Server 执行具体操作。必填：tool_id（可写 id）、tool_name（可写 name）",
+    "name": "list_capabilities",
+    "description": "列出某个工具提供的能力：MCP 子工具 / 启动器动作 / 应用的 launch，每条带完整 inputSchema；可按关键词与条数收窄。必填：tool_id（可写 id）",
     "inputSchema": {
       "type": "object",
       "properties": {
         "tool_id": {
           "type": "string",
-          "description": "MCP 工具 ID（如 everything-search-mcp）"
+          "description": "工具 ID（如 everything-search-mcp、quicker、steam）"
         },
-        "tool_name": {
+        "keyword": {
           "type": "string",
-          "description": "要调用的后端工具名"
+          "description": "可选，按能力名称/描述/元数据过滤"
         },
-        "arguments": {
-          "type": "object",
-          "description": "调用参数"
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "description": "可选，最多返回多少条"
         },
-        "allowDestructive": {
+        "refresh": {
           "type": "boolean",
-          "description": "目标工具被标记为 destructive 时，需显式传 true 才会转发"
+          "description": "可选，MCP 工具强制向后端刷新一次能力缓存（默认读盘；启动器清单按自身的陈旧策略自动重扫）"
         },
         "id": {
           "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID（如 everything-search-mcp）"
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID（如 everything-search-mcp、quicker、steam）"
         },
-        "name": {
+        "query": {
           "type": "string",
-          "description": "`tool_name` 的别名（与 tool_name 二选一，两者都给以 tool_name 为准）：要调用的后端工具名"
+          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：可选，按能力名称/描述/元数据过滤"
         }
       },
-      "allOf": [
+      "anyOf": [
         {
-          "anyOf": [
-            {
-              "required": [
-                "tool_id"
-              ]
-            },
-            {
-              "required": [
-                "id"
-              ]
-            }
+          "required": [
+            "tool_id"
           ]
         },
         {
-          "anyOf": [
-            {
-              "required": [
-                "tool_name"
-              ]
-            },
-            {
-              "required": [
-                "name"
-              ]
-            }
+          "required": [
+            "id"
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "call_capability",
+    "description": "调用某个工具的能力：把 arguments 交给 MCP 子工具 / 启动器动作 / 应用的 launch；默认只预览，execute=true 才产生副作用，destructive 能力还需 allowDestructive=true。必填：tool_id（可写 id）、capability_id",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "tool_id": {
+          "type": "string",
+          "description": "工具 ID（如 everything-search-mcp、quicker、steam）"
+        },
+        "capability_id": {
+          "type": "string",
+          "description": "能力 ID（取自 list_capabilities 的 capabilityId；应用的固定能力是 launch）"
+        },
+        "arguments": {
+          "type": "object",
+          "description": "能力自己的参数，结构见 list_capabilities 返回的 inputSchema；默认 {}",
+          "additionalProperties": true
+        },
+        "execute": {
+          "type": "boolean",
+          "description": "可选，是否真的执行；缺省时只读能力自动执行、写/破坏性能力只预览"
+        },
+        "allowDestructive": {
+          "type": "boolean",
+          "description": "能力被标记为 destructive 时，执行需显式传 true"
+        },
+        "wait": {
+          "type": "number",
+          "description": "可选，启动器动作/应用启动的观察窗口秒数（默认取条目配置）"
+        },
+        "id": {
+          "type": "string",
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID（如 everything-search-mcp、quicker、steam）"
+        }
+      },
+      "required": [
+        "capability_id"
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "tool_id"
+          ]
+        },
+        {
+          "required": [
+            "id"
           ]
         }
       ]
@@ -283,22 +336,18 @@
     }
   },
   {
-    "name": "list_backend_tools",
-    "description": "列出指定 MCP 工具的后端提供的所有子工具（含完整参数 schema）。必填：tool_id（可写 id）",
+    "name": "sync_capabilities",
+    "description": "同步某个工具的能力清单：MCP 会启动运行时并刷新子工具目录，启动器会重新扫描本地数据（应用没有可变清单）。必填：tool_id（可写 id）",
     "inputSchema": {
       "type": "object",
       "properties": {
         "tool_id": {
           "type": "string",
-          "description": "MCP 工具 ID"
-        },
-        "force_refresh": {
-          "type": "boolean",
-          "description": "是否强制刷新缓存"
+          "description": "工具 ID"
         },
         "id": {
           "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：工具 ID"
         }
       },
       "anyOf": [
@@ -315,8 +364,7 @@
       ]
     },
     "annotations": {
-      "readOnlyHint": true,
-      "destructiveHint": false
+      "idempotentHint": true
     },
     "outputSchema": {
       "type": "object",
@@ -332,8 +380,8 @@
     }
   },
   {
-    "name": "start_backend",
-    "description": "启动指定的后端 MCP Server 并建立连接。必填：tool_id（可写 id）",
+    "name": "start_runtime",
+    "description": "启动 MCP 提供者的运行时并建立连接（非 mcp 工具没有运行时）。必填：tool_id（可写 id）",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -376,8 +424,8 @@
     }
   },
   {
-    "name": "stop_backend",
-    "description": "停止指定的后端 MCP Server。必填：tool_id（可写 id）",
+    "name": "stop_runtime",
+    "description": "停止 MCP 提供者的运行时。必填：tool_id（可写 id）",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -420,18 +468,18 @@
     }
   },
   {
-    "name": "get_backend_status",
-    "description": "获取后端 MCP Server 的运行状态",
+    "name": "get_runtime_status",
+    "description": "获取 MCP 提供者的运行时状态",
     "inputSchema": {
       "type": "object",
       "properties": {
         "tool_id": {
           "type": "string",
-          "description": "MCP 工具 ID，不填则返回所有后端状态"
+          "description": "MCP 工具 ID，不填则返回所有运行时状态"
         },
         "id": {
           "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID，不填则返回所有后端状态"
+          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID，不填则返回所有运行时状态"
         }
       }
     },
@@ -453,8 +501,8 @@
     }
   },
   {
-    "name": "get_backend_logs",
-    "description": "获取后端 MCP Server 的运行日志。必填：tool_id（可写 id）",
+    "name": "get_runtime_logs",
+    "description": "获取 MCP 提供者的运行时日志。必填：tool_id（可写 id）",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -506,8 +554,8 @@
     }
   },
   {
-    "name": "set_backend_log_level",
-    "description": "设置后端 MCP Server 的日志级别。必填：tool_id（可写 id）、level",
+    "name": "set_runtime_log_level",
+    "description": "设置 MCP 提供者的运行时日志级别。必填：tool_id（可写 id）、level",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -541,214 +589,6 @@
       ]
     },
     "annotations": null,
-    "outputSchema": {
-      "type": "object",
-      "properties": {
-        "success": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "success"
-      ],
-      "additionalProperties": true
-    }
-  },
-  {
-    "name": "sync_backend_tools",
-    "description": "手动同步后端 MCP 的工具目录（自动获取所有工具的参数 schema 并保存）。必填：tool_id（可写 id）",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "tool_id": {
-          "type": "string",
-          "description": "MCP 工具 ID"
-        },
-        "id": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：MCP 工具 ID"
-        }
-      },
-      "anyOf": [
-        {
-          "required": [
-            "tool_id"
-          ]
-        },
-        {
-          "required": [
-            "id"
-          ]
-        }
-      ]
-    },
-    "annotations": {
-      "idempotentHint": true
-    },
-    "outputSchema": {
-      "type": "object",
-      "properties": {
-        "success": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "success"
-      ],
-      "additionalProperties": true
-    }
-  },
-  {
-    "name": "sync_launcher_actions",
-    "description": "手动同步启动器的动作清单（从启动器本地数据扫描，Quicker 的动作名依赖其缓存，可能只拿到 ID）。必填：tool_id（可写 id）",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "tool_id": {
-          "type": "string",
-          "description": "启动器工具 ID"
-        },
-        "id": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：启动器工具 ID"
-        }
-      },
-      "anyOf": [
-        {
-          "required": [
-            "tool_id"
-          ]
-        },
-        {
-          "required": [
-            "id"
-          ]
-        }
-      ]
-    },
-    "annotations": {
-      "idempotentHint": true
-    },
-    "outputSchema": {
-      "type": "object",
-      "properties": {
-        "success": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "success"
-      ],
-      "additionalProperties": true
-    }
-  },
-  {
-    "name": "list_launcher_actions",
-    "description": "列出/搜索启动器（如 Quicker）的动作：按名称、描述、所属程序或 ID 关键词过滤。必填：tool_id（可写 id）",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "tool_id": {
-          "type": "string",
-          "description": "启动器工具 ID"
-        },
-        "keyword": {
-          "type": "string",
-          "description": "可选，按名称/描述/所属程序/ID 过滤"
-        },
-        "limit": {
-          "type": "integer",
-          "description": "可选，最多返回多少条"
-        },
-        "refresh": {
-          "type": "boolean",
-          "description": "可选，强制重新扫描启动器本地数据（默认读缓存，缓存超过 5 分钟会自动重扫）"
-        },
-        "id": {
-          "type": "string",
-          "description": "`tool_id` 的别名（与 tool_id 二选一，两者都给以 tool_id 为准）：启动器工具 ID"
-        },
-        "query": {
-          "type": "string",
-          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：可选，按名称/描述/所属程序/ID 过滤"
-        }
-      },
-      "anyOf": [
-        {
-          "required": [
-            "tool_id"
-          ]
-        },
-        {
-          "required": [
-            "id"
-          ]
-        }
-      ]
-    },
-    "annotations": {
-      "readOnlyHint": true,
-      "destructiveHint": false
-    },
-    "outputSchema": {
-      "type": "object",
-      "properties": {
-        "success": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "success"
-      ],
-      "additionalProperties": true
-    }
-  },
-  {
-    "name": "run_launcher_action",
-    "description": "调用启动器的动作（如执行一个 Quicker 动作），可传参并等待返回结果。必填：tool_id",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "tool_id": {
-          "type": "string",
-          "description": "启动器工具 ID"
-        },
-        "action_id": {
-          "type": "string",
-          "description": "动作 ID（推荐：稳定不变；二选一，与 action_name 至少给一个）"
-        },
-        "action_name": {
-          "type": "string",
-          "description": "动作名称（Quicker 要求名称不重复且不含空格）"
-        },
-        "param": {
-          "type": "string",
-          "description": "可选，传给动作的参数（Quicker 用 ? 分隔符，不支持换行）"
-        },
-        "wait": {
-          "type": "number",
-          "description": "可选，最长等待秒数（默认取 launcher.timeout，缺省 20）"
-        },
-        "allowDestructive": {
-          "type": "boolean",
-          "description": "启动器被标记为 destructive 时，需显式传 true 才会执行"
-        },
-        "id": {
-          "type": "string",
-          "description": "`action_id` 的别名（与 action_id 二选一，两者都给以 action_id 为准）：动作 ID（推荐：稳定不变；二选一，与 action_name 至少给一个）"
-        },
-        "name": {
-          "type": "string",
-          "description": "`action_name` 的别名（与 action_name 二选一，两者都给以 action_name 为准）：动作名称（Quicker 要求名称不重复且不含空格）"
-        }
-      },
-      "required": [
-        "tool_id"
-      ]
-    },
-    "annotations": {
-      "openWorldHint": true
-    },
     "outputSchema": {
       "type": "object",
       "properties": {

@@ -203,7 +203,7 @@ def env_without_npm() -> dict[str, str]:
 
     为什么需要：`ensure_installed()` 在判定启动目标是否缺失**之前**会无条件
     跑一次 `npm prefix -g`（`backend_client.py:493`）。本机实测这条命令
-    **6.5s**，而服务启动预热（`server.py:369`）与 `start_backend` 会各跑一次
+    **6.5s**，而服务启动预热（`server.py:369`）与 `start_runtime` 会各跑一次
     ——`_npm_bin_dir` 是没有锁的进程级缓存，预热那次还没回来时 start 会再起
     一个 npm。场景③ 因此实测到 12s，远超 8s 预算。
 

@@ -118,9 +118,13 @@ class JsonStore:
     def get_backend_tools_path(self, parent_id: str) -> Path:
         return self.backend_tools_dir / f"{parent_id}.json"
 
+    def load_backend_catalog(self, parent_id: str) -> dict[str, Any] | None:
+        """读取某个 MCP 工具能力缓存的**完整条目**（含 lastSynced / source）。"""
+        return self.load_json(self.get_backend_tools_path(parent_id))
+
     def load_backend_tools(self, parent_id: str) -> list[dict[str, Any]]:
         """读取某个 MCP 工具的所有子工具"""
-        data = self.load_json(self.get_backend_tools_path(parent_id))
+        data = self.load_backend_catalog(parent_id)
         if data is None:
             return []
         return data.get("tools", [])

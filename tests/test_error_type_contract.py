@@ -18,7 +18,7 @@
 
 两个此前的覆盖缺口由本文件补上：`invalid_params` 在 A1 落地前是死值
 （`fail()` 默认参数从未被用上）；`launcher_error` 是当时 16 种里唯一没有
-触发用例的非 A 层值（`list_launcher_actions` 的 handler 把
+触发用例的非 A 层值（`list_capabilities` 的 handler 把
 `LauncherError` 转成带 errorType 的失败，而不是落进内部异常兜底）。
 """
 import asyncio
@@ -242,7 +242,7 @@ def test_launcher_error_is_reachable(monkeypatch):
     monkeypatch.setattr(server.launcher_manager, "list_actions", boom)
 
     with pytest.raises(ToolError) as exc:
-        run(server.dispatch_tool("list_launcher_actions", {"tool_id": "x"}))
+        run(server.dispatch_tool("list_capabilities", {"tool_id": "quicker"}))
 
     payload = json.loads(str(exc.value))
     assert payload["errorType"] == ErrorType.LAUNCHER_ERROR

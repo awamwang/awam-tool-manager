@@ -283,21 +283,28 @@ def test_registered_steam_entry_is_syncable():
     )
     assert entry["kind"] == "launcher"
     assert entry["launcher"]["type"] in launcher_client.SUPPORTED_ADAPTERS
-    # destructive=true：run_launcher_action 没有 dry-run，一次调用就是一次执行
+    # destructive=true：Steam 动作没有 dry-run，execute=true 就是一次真启动
     assert entry["destructive"] is True
 
 
 # ---- 门禁：执行启动需要显式授权 ----
 
 
-def test_run_steam_game_blocked_without_allow_destructive():
+def test_run_steam_game_blocked_without_allow_destructive(monkeypatch):
     """真条目 + 真策略：不给 allowDestructive 就走不到执行"""
     import server  # noqa: PLC0415
+
+    monkeypatch.setattr(
+        server.launcher_manager,
+        "list_actions",
+        lambda tool_id: [{"id": "app:400040", "name": "Steam 游戏", "type": "game"}],
+    )
 
     with pytest.raises(server.ToolError) as exc:
         asyncio.run(
             server.dispatch_tool(
-                "run_launcher_action", {"tool_id": "steam", "action_id": "app:400040"}
+                "call_capability",
+                {"tool_id": "steam", "capability_id": "app:400040", "execute": True},
             )
         )
     payload = json.loads(str(exc.value))

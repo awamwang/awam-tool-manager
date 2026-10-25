@@ -91,7 +91,7 @@ def entry_help(tool: dict) -> dict[str, Any]:
 def backend_summary(tools: list[dict]) -> list[dict[str, Any]]:
     """后端子工具缓存 → 帮助摘要（名字 / 描述 / 参数名 / 必填参数）。
 
-    不下发完整 `inputSchema`：那是 `list_backend_tools` 的职责，帮助视图只要
+    不下发完整 `inputSchema`：那是 `list_capabilities` 的职责，帮助视图只要
     「这个后端能干什么、每个能力要哪些参数」。
     """
     summary = []

@@ -1,6 +1,13 @@
 # awam-tool-manager 任务清单
 
-统一工具管理器 - 维护启动器工具集名单，提供统一的工具注册、搜索、启动、路由调用能力。
+统一工具管理器 - 维护启动器工具集名单，提供统一的工具注册、搜索、启动、能力路由调用能力。
+
+> 2026-10-25 起对外工具面改用 Provider / Capability / Runtime / Target 模型：
+> 旧名 `call_backend_tool` / `list_backend_tools` / `sync_backend_tools` /
+> `start_backend` / `stop_backend` / `get_backend_status` / `get_backend_logs` /
+> `set_backend_log_level` / `list_launcher_actions` / `run_launcher_action` /
+> `sync_launcher_actions` 已**硬切删除**（不再作为别名），调用会按 `unknown_tool` 拒绝。
+> 下文历史条目保留原名作为当时记录，当前对外工具名以本节清单为准。
 
 ---
 
@@ -25,7 +32,7 @@
 - [x] MCP Server 入口（server.py）：stdio 模式
 - [x] 日志系统（输出到 stderr，不污染协议通道）
 
-### 对外 MCP 工具（lazy 22 个；default 29 / full 34）
+### 对外 MCP 工具（lazy 19 个；default 26 / full 31）
 - [x] `search_tools` - 搜索工具（关键词 + `kind` / `status` / `publisher` 筛选）
 - [x] `list_tools` - 列出所有工具（同上三个筛选维度，见「筛选维度增强」）
 - [x] `get_tool_info` - 查看工具详情
@@ -34,13 +41,13 @@
 - [x] `get_usage_stats` - 调用使用统计：2026-10-18 新增（P3），只读 `<runtime>/usage.log` 并按窗口聚合，见「工具使用统计」小节
 - [x] `discover_tools` - 本机工具发现：2026-10-18 新增（P1），按 `data/discovery.json` 声明的候选清单做只读探测，见「工具自动发现」小节
 - [x] `list_packages` / `search_packages` / `launch_package` / `install_package` - 包管理面：2026-10-19 新增（P2-07），直接读安装器落盘清单（当前 `scoop`），列已装 / 搜可装**纯读盘**，启动与安装都要显式 `execute=true`（安装额外要 `allowDestructive=true`），见「包管理适配」小节
-- [x] `call_backend_tool` - 路由调用后端 MCP 的子工具
-- [x] `list_backend_tools` - 列出后端子工具（含完整参数 schema）
-- [x] `start_backend` / `stop_backend` / `get_backend_status` - 后端进程管理
-- [x] `get_backend_logs` / `set_backend_log_level` - 后端日志
-- [x] `sync_backend_tools` - 同步后端子工具目录到本地
-- [x] 7 个意图前门 + 4 个 full 补充工具 - 2026-10-20 新增（P1），三档暴露模式见
-      「暴露模式与意图级工具门面」；lazy 保持原 22 个契约不变
+- [x] `list_capabilities` - 列出提供者能力（MCP 子工具 / 启动器动作 / 应用 launch），带完整 `inputSchema`
+- [x] `call_capability` - 统一能力调用入口（嵌套 `arguments`；只读默认执行、写/破坏性默认预览）
+- [x] `sync_capabilities` - 同步能力清单（MCP 启动运行时并刷新，启动器重扫，应用无清单）
+- [x] `start_runtime` / `stop_runtime` / `get_runtime_status` - MCP 运行时管理
+- [x] `get_runtime_logs` / `set_runtime_log_level` - 运行时日志
+- [x] 7 个意图前门 + 5 个 full 补充工具 - 2026-10-20 新增（P1），三档暴露模式见
+      「暴露模式与意图级工具门面」；lazy 19 个契约随能力模型重构重新基线
 - [x] `check_package_updates` - 第 5 个 full 补充工具（2026-10-24），查「哪些包有可用更新」：
       默认零 spawn（scoop 已装版本 vs 本地 bucket 索引版本），`execute=true` 才问 UniGetUI，
       见「包升级查询与 UniGetUI 外部口径」小节
@@ -60,8 +67,8 @@
 ### 路由能力
 - [x] BackendClient - 单个后端 MCP 客户端（懒加载连接）
 - [x] BackendManager - 后端连接池管理
-- [x] `call_backend_tool` - 路由转发到后端 MCP 执行
-- [x] `list_backend_tools` - 列出后端 MCP 提供的工具
+- [x] `call_capability` - 路由转发到 MCP 子工具 / 启动器动作 / 应用 launch
+- [x] `list_capabilities` - 列出提供者能力（含参数 schema）
 
 ### 稳定性
 - [x] Tool 目录同步失败时不会用空结果覆盖已有缓存
@@ -115,7 +122,7 @@
       从 schema 生成，手写改动会被 `tests/test_docs_sync.py` 判为漂移
 - [x] `validate_backend_catalog()` - 第二层数据（后端子工具缓存）的结构校验
 - [x] Tool annotations：只读工具 `readOnlyHint`，启停类 `idempotentHint`，转发类 `openWorldHint`
-- [x] `call_backend_tool` 的 destructive 门禁（`allowDestructive`，默认拒绝）
+- [x] `call_capability` 的 destructive 门禁（`allowDestructive`，默认拒绝）
 - [x] **A12 子工具级破坏性门禁** - 破坏性实际属于「子工具」而非「整个后端」：
       新增 `destructiveTools` 字段（schema + `docs/format.md` 自动同步），配置后只拦截
       清单内的后端子工具，未配置则回退条目级 `destructive` 语义；拦截判定与
@@ -123,7 +130,7 @@
       避免免确认调用被误标
 - [x] **P1-05 Phase 1 动作级门禁**（2026-10-17）- 破坏性判定收敛到统一入口
       `policy.decide_destructive`（判定表 + 结构化审计行 decision/rule_hit/client_declared）：
-      `run_launcher_action` 支持 `destructiveActions`（glob，大小写不敏感，匹配动作
+      `call_capability` 调启动器动作支持 `destructiveActions`（glob，大小写不敏感，匹配动作
       id/name/type），命中才拦；未配置回退条目级全拦（现语义不回退）；未配置新字段时
       与旧行为逐字等价（`tests/test_policy_gate.py` 冻结旧逻辑对照锁定）；
       `data/tools/quicker.json` 不启用该字段（默认行为零变更）
@@ -1282,6 +1289,31 @@
   填 `latest` 不猜号——真版本号在 `appinfo.vdf` / `version.dll` 这类客户端内部文件里，
   超出本项目「只读解析库清单」的约定范围
 
+### 能力模型重构：Provider / Capability / Runtime / Target（2026-10-25）
+
+把「Backend」从对外词汇里拿掉：`kind` 即提供者类型（`mcp` / `launcher` / `app`），
+统一用 `tool_id` 找提供者、`capability_id` 找能力，MCP 才有运行时（Runtime）概念。
+
+- [x] **通用工具合并（11 → 8，硬切无兼容别名）**：
+      `list_backend_tools` + `list_launcher_actions` → `list_capabilities`；
+      `call_backend_tool` + `run_launcher_action` → `call_capability`；
+      `sync_backend_tools` + `sync_launcher_actions` → `sync_capabilities`；
+      `start_backend` / `stop_backend` / `get_backend_status` / `get_backend_logs` /
+      `set_backend_log_level` → `start_runtime` / `stop_runtime` / `get_runtime_status` /
+      `get_runtime_logs` / `set_runtime_log_level`。旧名在 dispatch 侧按 `unknown_tool` 拒绝
+- [x] **统一能力描述符**（`src/capabilities.py`）：`capabilityId` / `name` / `description` /
+      `domain` / `targetKind` / `risk`（read/write/destructive）/ `execution` /
+      `deliveryOnly` / `source` / `inputSchema` / `exposedAs` / `available` / `metadata`
+- [x] **调用语义**：`call_capability` 用嵌套 `arguments`（缺省 `{}`）；只读能力默认执行，
+      写/破坏性能力默认只预览，`execute=true` 才产生副作用，destructive 另需
+      `allowDestructive=true`；MCP 运行时未启动会自动拉起
+- [x] **错误自描述**：能力不存在 / 参数不合法时，载荷带 `toolId` / `capabilityId` / `inputSchema`
+- [x] **暴露模式重新基线**：31 个工具，lazy 19 / default 26 / full 31
+      （`check_package_updates` 保留在 full，因此不是原计划的 30）
+- [x] **统计口径**：usage 新增 `capabilities` 维度，按 `(toolId, capabilityId)` 聚合
+- [x] **测试与文档**：单测/e2e 全量迁移、golden 三档重采集、`SKILL.md` /
+      `docs/format.md` 同步
+
 ---
 
 ## 三、待完成 ⏳
@@ -1290,8 +1322,8 @@
 - [x] 接入 Steam — ✅ **已完成（2026-10-19，见「Steam 接入（P0，2026-10-19）」）**：
       形态定为**自研只读解析本地文件**，不接第三方 steam-local-mcp；条目登记为
       `kind=launcher` + `launcher.type=steam`（不是每个游戏一条 `kind=app`），
-      因此**没有新增对外 MCP 工具**，能力走现成的 `sync_launcher_actions` /
-      `list_launcher_actions` / `run_launcher_action` 三件套。
+      因此**没有新增对外 MCP 工具**，能力走现成的 `sync_capabilities` /
+      `list_capabilities` / `call_capability` 三件套。
       本机实测复核：位置 `S:\Program Files (x86)\Steam`（权威登记值
       `HKCU\Software\Valve\Steam` 的 `SteamPath` / `SteamExe`，值是正斜杠），
       `libraryfolders.vdf` 声明 3 个库 / 27 个 appid（`S:` 主库 5 份 acf、
@@ -1386,8 +1418,8 @@
 | 层级 | 文件位置 | 说明 |
 |---|---|---|
 | 工具条目 | `data/tools/{tool_id}.json`（仓库内） | 每个工具一个文件，文件名即 tool_id |
-| 后端子工具缓存 | `<runtime_dir>/backend-tools/{tool_id}.json` | 由 `sync_backend_tools` 自动生成（A14 起在 `%LOCALAPPDATA%\.awam-tool-manager`） |
-| 启动器动作清单 | `<runtime_dir>/launcher-actions/{tool_id}.json` | 由 `sync_launcher_actions` 自动生成 |
+| 后端子工具缓存 | `<runtime_dir>/backend-tools/{tool_id}.json` | 由 `sync_capabilities` 自动生成（A14 起在 `%LOCALAPPDATA%\.awam-tool-manager`） |
+| 启动器动作清单 | `<runtime_dir>/launcher-actions/{tool_id}.json` | 由 `sync_capabilities` 自动生成 |
 | 对外 MCP 工具 | `src/tool_specs.py`（P1-04 起为单一声明源；`server.py` 只做协议装配与分发） | 暴露给 AI 客户端的工具列表（**非磁盘数据层**） |
 
 > 早期设计中的「启动器配置层」`data/launchers/` 与「适配器层」`src/adapters/` 已废弃移除。
@@ -1441,11 +1473,11 @@
 - `connection`：仅 `kind=mcp` 有意义，`BackendClient` 据此拉起子进程；目前只支持 `stdio`
 - `install`：仅 `kind=mcp` 有意义，声明「启动命令缺失时怎么装」；**默认不执行**
   （P0 门禁）——需 `AWAM_AUTO_INSTALL=1` 或条目 `install.auto: true` 授权，且命令要
-  过白名单，否则 `start_backend` 只返回 `install_required`，服务预热退化为纯检测
+  过白名单，否则 `start_runtime` 只返回 `install_required`，服务预热退化为纯检测
 
 ### 4.3 后端子工具缓存（`<runtime_dir>/backend-tools/{tool_id}.json`）
 
-由 `sync_backend_tools` 写入运行时目录（A14 前在 `data/backend-tools/`），
+由 `sync_capabilities` 写入运行时目录（A14 前在 `data/backend-tools/`），
 `tools[]` 直接透传后端 MCP 的 `inputSchema`：
 
 ```json
@@ -1488,7 +1520,8 @@ awam-tool-manager/
 │   └── discovery.json          # 发现候选清单（discover_tools 的声明源，NE-10）
 ├── src/
 │   ├── server.py               # MCP Server 入口：协议装配 + 薄分发 + 生命周期
-│   ├── tool_specs.py           # 对外 MCP 工具声明式注册表（SSOT：22 条 spec + handlers）
+│   ├── tool_specs.py           # 对外 MCP 工具声明式注册表（SSOT：31 条 spec + handlers）
+│   ├── capabilities.py         # Provider / Capability / Runtime 路由层
 │   ├── policy.py               # 破坏性门禁统一判定 + 部署策略（data/policy.json）
 │   ├── errors.py               # 业务错误出口（ToolError / fail / ensure_success）
 │   ├── store.py                # JSON 存储层（tools 走仓库，缓存走 runtime dir）

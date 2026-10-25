@@ -88,19 +88,17 @@ def test_alias_call_survives_protocol_and_matches_canonical(tool_name, alias_arg
     )
 
 
-def test_two_required_params_fold_independently():
-    """两个必填各有一组任选名，折叠互不干扰（call_backend_tool 的 name 指后端子工具）"""
-    spec = get_spec("call_backend_tool")
+def test_call_capability_folds_tool_id_but_not_capability_id():
+    """`tool_id` 仍吃 `id`；`capability_id` 没有别名，必须显式给。"""
+    spec = get_spec("call_capability")
 
-    assert normalize_arguments(spec, {"id": "x", "name": "y"}) == {"tool_id": "x", "tool_name": "y"}
-    assert normalize_arguments(spec, {"tool_id": "x", "tool_name": "y"}) == {
+    assert normalize_arguments(spec, {"id": "x", "capability_id": "y"}) == {
         "tool_id": "x",
-        "tool_name": "y",
+        "capability_id": "y",
     }
-    # id 只喂给 tool_id 那一组，name 只喂给 tool_name 那一组，不会互相顶掉
     with pytest.raises(ToolError) as exc:
         normalize_arguments(spec, {"id": "x"})
-    assert payload_of(exc)["param"] == "tool_name"
+    assert payload_of(exc)["param"] == "capability_id"
 
 
 def test_canonical_only_call_still_works():
@@ -316,7 +314,7 @@ async def _noop_handler(arguments: dict, ctx) -> dict:
 
 
 def test_build_mcp_tools_still_covers_all_specs():
-    """别名改造没碰工具集本身：full 模式下 34 个工具一个不少、顺序不变"""
+    """别名改造没碰工具集本身：full 模式下 31 个工具一个不少、顺序不变"""
     assert [t.name for t in build_mcp_tools("full")] == [
         s.name for s in SERVER_TOOL_SPECS
     ]
@@ -340,7 +338,7 @@ def test_exported_description_names_every_required_param():
 def test_description_export_is_additive_pure_and_cheap():
     """描述只做追加：原文在前、声明表不改、单工具增量不超过实测上限。
 
-    上限 40 字符来自实测（最大 `call_backend_tool` +37，全表合计 +334），
+    上限 40 字符来自实测（当前最大的是 `call_capability`，全表合计见别名预算用例），
     写死是为了让「往描述里堆别名词表」这种膨胀当场可见。
     """
     before = {s.name: s.description for s in SERVER_TOOL_SPECS}
@@ -382,14 +380,14 @@ def test_default_alias_table_is_the_agreed_minimum():
 def test_alias_property_budget():
     """别名属性总数钉死。别名属性平均 111 字符/个，且全表 schema 要整体下发给调用方。
 
-    26 = 原 22 + 4 个意图级搜索工具的 `keyword ← query`（search_files /
-    search_games / search_actions / search_winget_packages）。新增别名必须
-    连同上下文成本一起过（见源码注释）。
+    21 = 12 个工具/能力/运行时工具的 `tool_id ← id` + 7 个搜索类工具的
+    `keyword ← query` + 2 个包操作的 `package ← name`。新增别名必须连同
+    上下文成本一起过（见源码注释）。
     """
     total = 0
     for spec in SERVER_TOOL_SPECS:
         total += sum(len(aliases) for aliases in tool_specs.aliases_for(spec).values())
-    assert total == 26
+    assert total == 21
 
 
 @pytest.mark.parametrize(
@@ -399,7 +397,7 @@ def test_alias_property_budget():
         ("get_tool_info", {"name": "everything"}),
         ("search_tools", {"q": "文件"}),
         ("search_tools", {"text": "文件"}),
-        ("run_launcher_action", {"actionId": "x"}),
+        ("call_capability", {"actionId": "x"}),
     ],
 )
 def test_dropped_aliases_are_rejected_at_protocol_layer(tool_name, alias_args):

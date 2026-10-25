@@ -153,7 +153,7 @@ def test_backend_summary_extracts_params_and_required():
 
 
 def test_launcher_summary_truncates_to_limit():
-    """launcher 动作清单摘要按 limit 截断（全量另有 list_launcher_actions）"""
+    """launcher 动作清单摘要按 limit 截断（全量另有 list_capabilities）"""
     actions = [{"id": str(i), "name": f"动作{i}", "type": "group"} for i in range(60)]
     summary = launcher_summary(actions, limit=50)
     assert len(summary) == 50
@@ -498,7 +498,7 @@ def test_handler_mcp_kind_summarises_backend_catalog(tmp_path):
     _write_entry(tmp_path, {"id": "mcp2", "name": "mcp2", "kind": "mcp"})
     res2 = _help(ctx, {"tool_id": "mcp2"})
     assert res2["backendTools"] == []
-    assert "sync_backend_tools" in res2["note"]
+    assert "sync_capabilities" in res2["note"]
 
 
 def test_handler_launcher_kind_summarises_actions(tmp_path):

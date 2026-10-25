@@ -599,7 +599,7 @@ class LauncherClient:
         if not separator or not plugin_name.strip() or not keyword.strip():
             raise LauncherError(
                 f"utools 动作 ID 必须为 <插件名>/<关键词> 格式（收到: {target!r}）；"
-                "可先 list_launcher_actions(tool_id='utools') 查可用动作"
+                "可先 list_capabilities(tool_id='utools') 查可用动作"
             )
         # 路径段全编码：uTools 主进程对整串 decodeURIComponent 后按第一个
         # "/" 拆 label，把名字里的 "/" 编码掉才能保证拆出正确的两组分；
@@ -678,7 +678,7 @@ class LauncherClient:
         if not matched:
             raise LauncherError(
                 f"steam 动作 ID 必须是 app:<appid> 或纯数字 appid（收到: {target!r}）；"
-                "可先 list_launcher_actions(tool_id='steam') 查本机已装游戏"
+                "可先 list_capabilities(tool_id='steam') 查本机已装游戏"
             )
         appid = matched.group(1)
         command = self.command

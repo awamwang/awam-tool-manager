@@ -9,6 +9,7 @@
 """
 import asyncio
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -99,12 +100,12 @@ def test_non_object_file_raises(tmp_path):
 # ---- 2. 三模式切片 ----
 
 
-def test_lazy_keeps_the_legacy_surface():
-    """lazy 是兼容基线：与改造前的 22 个管理工具逐名一致。"""
+def test_lazy_keeps_the_management_surface():
+    """lazy 是治理基线：目录、能力路由、运行时与包管理工具。"""
     from conftest import EXPECTED_TOOL_NAMES_LAZY
 
     assert {t.name for t in build_mcp_tools("lazy")} == EXPECTED_TOOL_NAMES_LAZY
-    assert len(build_mcp_tools("lazy")) == 22
+    assert len(build_mcp_tools("lazy")) == 19
 
 
 def test_default_adds_exactly_the_seven_intent_tools():
@@ -112,7 +113,7 @@ def test_default_adds_exactly_the_seven_intent_tools():
 
     names = [t.name for t in build_mcp_tools("default")]
     assert set(names) == EXPECTED_TOOL_NAMES_DEFAULT
-    assert len(names) == 29
+    assert len(names) == 26
     assert names[-7:] == [
         "search_files",
         "open_path",
@@ -129,7 +130,7 @@ def test_full_adds_the_five_low_frequency_tools():
 
     names = [t.name for t in build_mcp_tools("full")]
     assert set(names) == EXPECTED_TOOL_NAMES_FULL
-    assert len(names) == 34
+    assert len(names) == 31
     assert names[-5:] == [
         "get_file_info",
         "get_everything_status",
@@ -157,7 +158,13 @@ def test_instructions_only_list_visible_tools(mode):
         if spec.name in visible:
             assert f"- {spec.name}：" in text, f"{mode}: 可见工具 {spec.name} 没进 instructions"
         else:
-            assert spec.name not in text, f"{mode}: 不可见工具 {spec.name} 泄漏进 instructions"
+            # 能力 ID 与工具名可能同名（如 MCP 的 search_files）：它只允许以
+            # `capability_id='...'` 的**参数值**出现——那是教调用方怎么路由，
+            # 不是把隐藏工具重新列出来。
+            for match in re.finditer(re.escape(spec.name), text):
+                assert text[: match.start()].endswith("capability_id='"), (
+                    f"{mode}: 不可见工具 {spec.name} 泄漏进 instructions"
+                )
     assert "execute=true" in text
     assert "allowDestructive=true" in text
 

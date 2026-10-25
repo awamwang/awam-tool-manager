@@ -59,11 +59,8 @@ def test_unknown_tool_is_protocol_error():
 
 
 def test_config_error_surfaces_over_protocol():
-    """app 类型的工具没有后端连接 → config_error（此前这类失败会被当成成功）"""
-    result = run(_call(
-        "call_backend_tool",
-        {"tool_id": "everything", "tool_name": "anything"},
-    ))
+    """app 类型的工具没有运行时 → config_error（此前这类失败会被当成成功）"""
+    result = run(_call("get_runtime_status", {"tool_id": "everything"}))
 
     assert result.isError
     assert json.loads(result.content[0].text)["errorType"] == "config_error"
@@ -108,10 +105,10 @@ def test_tools_list_carries_annotations():
 
     assert set(tools) == EXPECTED_TOOL_NAMES
     assert tools["search_tools"].annotations.readOnlyHint is True
-    assert tools["call_backend_tool"].annotations.openWorldHint is True
-    # 启动器：列/同步只读或幂等，执行动作只标 openWorld（副作用运行时才可知）
-    assert tools["list_launcher_actions"].annotations.readOnlyHint is True
-    assert tools["run_launcher_action"].annotations.openWorldHint is True
+    assert tools["call_capability"].annotations.openWorldHint is True
+    # 能力面：列能力只读、同步幂等，调用只标 openWorld（副作用运行时才可知）
+    assert tools["list_capabilities"].annotations.readOnlyHint is True
+    assert tools["sync_capabilities"].annotations.idempotentHint is True
 
 
 def test_resource_read_over_protocol():
@@ -145,7 +142,7 @@ def test_prompt_over_protocol_teaches_real_params():
     async def go():
         async with create_connected_server_and_client_session(server.app) as session:
             listed = await session.list_prompts()
-            got = await session.get_prompt("how_to_call_backend")
+            got = await session.get_prompt("how_to_call_capability")
             return listed.prompts, got.messages
 
     prompts, messages = run(go())
@@ -153,7 +150,7 @@ def test_prompt_over_protocol_teaches_real_params():
     assert {p.name for p in prompts} == {
         "getting_started",
         "how_to_search",
-        "how_to_call_backend",
+        "how_to_call_capability",
     }
 
     text = messages[0].content.text
@@ -162,6 +159,7 @@ def test_prompt_over_protocol_teaches_real_params():
     assert "launcher_id=" not in text
     assert "mcp_tool_id=" not in text
     assert "tool_id=" in text
+    assert "capability_id=" in text
     assert "search_files" in text
 
 
@@ -204,7 +202,8 @@ def test_usage_stats_call_carries_boolean_success_over_wire():
     assert sc["success"] is True
     assert isinstance(sc["stats"]["success"], int)
     assert set(sc["stats"]) == {
-        "total", "success", "failed", "byName", "targets", "byDay", "errorTypes"
+        "total", "success", "failed", "byName", "targets", "capabilities",
+        "byDay", "errorTypes",
     }
     assert sc["window"]["days"] == 30
 

@@ -3,7 +3,7 @@
 **来源**：从 `tests/e2e/manual_install_gate.py`（原 `tests/test_e2e_install_gate.py`）
 拆出来的「未授权」那一半——它无副作用、秒级、断言确定，正适合做成回归护栏。
 另一半「已授权 → npm 真的被提交给 shell」依赖本机 npm，且 `errorType` 受
-「启动预热 vs start_backend」竞态影响不能断言，保留手工（两个脚本互相在
+「启动预热 vs start_runtime」竞态影响不能断言，保留手工（两个脚本互相在
 文件头指路）。
 
 **本场景要改正的一条**（设计 §3 隔离）：探针条目写进 **tmp 副本**
@@ -11,11 +11,11 @@
 `data/tools/` 再在 `finally` 里删，既污染仓库又可能因异常留下残留。
 
 为什么这条值得自动化：`install.command` 写在**进版本库**的 `data/tools/*.json`
-里，一旦门禁被绕过，任何一次 `start_backend` 都会在用户机器上执行一条来自
+里，一旦门禁被绕过，任何一次 `start_runtime` 都会在用户机器上执行一条来自
 数据文件的 shell 命令。这条断言是唯一能在真实进程里拦住它的护栏。
 
 断言点：
-1. `start_backend` 返回 `isError=true` 且 `errorType == "install_required"`；
+1. `start_runtime` 返回 `isError=true` 且 `errorType == "install_required"`；
 2. `status == "error"`（Q1 回归：status 是状态机值，不能误用 errorType 的取值）；
 3. stderr 出现「跳过自装」且**不出现**「执行安装」——门禁真的拦住了执行；
 4. 仓库 `data/tools/` 里**没有**探针文件（探针只活在 tmp 副本里）。
@@ -67,7 +67,7 @@ async def _run(repo, runtime):
     async with stdio_session(repo, runtime, env_without_npm()) as (session, log):
         # build_env 已清掉 AWAM_AUTO_INSTALL → 未授权路径
         is_error, payload = await call_tool(
-            session, "start_backend", {"tool_id": PROBE_ID}
+            session, "start_runtime", {"tool_id": PROBE_ID}
         )
 
     return is_error, payload, log, time.monotonic() - started
@@ -81,7 +81,7 @@ def test_e2e_install_gate_blocks_unauthorized(e2e_repo, e2e_runtime):
     print(f"\n[install gate] 未授权门禁耗时 {elapsed:.2f}s（预算 4s）")
 
     # 1) 门禁拦下：结构化失败 + errorType=install_required
-    assert is_error, f"未授权时 start_backend 竟然成功：{payload}\n{tail}"
+    assert is_error, f"未授权时 start_runtime 竟然成功：{payload}\n{tail}"
     assert payload.get("errorType") == "install_required", (
         f"errorType 应为 install_required，实为 {payload.get('errorType')!r}：{payload}"
     )

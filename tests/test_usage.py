@@ -56,8 +56,13 @@ def ts(days_ago: int) -> str:
     return stamp.astimezone().isoformat(timespec="seconds")
 
 
-def row(tool="list_tools", *, ok=True, target="", ms=1, days_ago=0, error_type=None):
+def row(
+    tool="list_tools", *, ok=True, target="", ms=1, days_ago=0,
+    error_type=None, capability=None,
+):
     data = {"tool": tool, "ok": ok, "ms": ms, "target": target, "ts": ts(days_ago)}
+    if capability:
+        data["capability"] = capability
     if error_type:
         data["errorType"] = error_type
     return data
@@ -69,11 +74,11 @@ def row(tool="list_tools", *, ok=True, target="", ms=1, days_ago=0, error_type=N
 def test_record_call_row_shape(log_path):
     usage.record_call("launch_tool", {"tool_id": "everything"}, ok=True, duration_ms=42)
     usage.record_call(
-        "stop_backend", {"tool_id": "vscode"}, ok=False, error_type="runtime_error", duration_ms=7
+        "stop_runtime", {"tool_id": "vscode"}, ok=False, error_type="runtime_error", duration_ms=7
     )
 
     rows = rows_of(log_path)
-    assert [r["tool"] for r in rows] == ["launch_tool", "stop_backend"]
+    assert [r["tool"] for r in rows] == ["launch_tool", "stop_runtime"]
     assert set(rows[0]) == {"ts", "tool", "target", "ok", "ms"}
     assert rows[0]["target"] == "everything" and rows[0]["ms"] == 42
     # errorType 只在失败行出现：成功行带 `"errorType": null` 会让「有没有错」
@@ -191,7 +196,7 @@ def test_aggregate_shapes():
             error_type="runtime_error"),
         row("launch_tool", target="vscode", ms=30),
         row("list_tools", ms=5),
-        row("stop_backend", ok=False, ms=3, error_type="runtime_error"),
+        row("stop_runtime", ok=False, ms=3, error_type="runtime_error"),
     ]
 
     stats = usage.aggregate(rows)
@@ -200,7 +205,7 @@ def test_aggregate_shapes():
     assert stats["byName"][0] == {
         "tool": "launch_tool", "count": 3, "failed": 1, "msMax": 100, "msAvg": 50.0,
     }
-    assert [b["tool"] for b in stats["byName"]] == ["launch_tool", "list_tools", "stop_backend"]
+    assert [b["tool"] for b in stats["byName"]] == ["launch_tool", "list_tools", "stop_runtime"]
     # targets 只收有 tool_id 的调用，按「哪个登记工具被动得多」排序
     assert stats["targets"] == [
         {"toolId": "everything", "count": 2, "failed": 1},
@@ -211,12 +216,35 @@ def test_aggregate_shapes():
         {"day": ts(0)[:10], "count": 3},
     ]
     assert stats["errorTypes"] == [{"errorType": "runtime_error", "count": 2}]
+    # 没有 capability 维度的行不编造条目：`call_capability` 才是这一维的来源
+    assert stats["capabilities"] == []
+
+
+def test_aggregate_groups_capability_under_target():
+    """call_capability 的统计按 (toolId, capabilityId) 聚合，且按次数排序"""
+    rows = [
+        row("call_capability", target="everything-search-mcp",
+            capability="search_files", days_ago=1),
+        row("call_capability", target="everything-search-mcp",
+            capability="search_files", days_ago=1),
+        row("call_capability", ok=False, target="everything-search-mcp",
+            capability="get_file_info", days_ago=1, error_type="not_found"),
+    ]
+
+    stats = usage.aggregate(rows)
+
+    assert stats["capabilities"] == [
+        {"toolId": "everything-search-mcp", "capabilityId": "search_files",
+         "count": 2, "failed": 0},
+        {"toolId": "everything-search-mcp", "capabilityId": "get_file_info",
+         "count": 1, "failed": 1},
+    ]
 
 
 def test_aggregate_empty_rows():
     assert usage.aggregate([]) == {
         "total": 0, "success": 0, "failed": 0,
-        "byName": [], "targets": [], "byDay": [], "errorTypes": [],
+        "byName": [], "targets": [], "capabilities": [], "byDay": [], "errorTypes": [],
     }
 
 

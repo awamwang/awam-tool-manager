@@ -1,6 +1,6 @@
 # awam-tool-manager
 
-统一工具管理器 —— 维护本机工具名单，提供统一的注册、搜索、启动与后端路由调用能力。
+统一工具管理器 —— 维护本机工具名单，提供统一的注册、搜索、启动与能力路由调用能力。
 
 ## 快速开始
 
@@ -55,12 +55,13 @@ src/
 ├── server.py          # MCP Server 入口
 ├── store.py           # JSON 存储层（tools 走仓库，缓存走运行时目录）
 ├── registry.py        # 工具注册中心
-├── backend_client.py  # 后端 MCP 客户端与连接池
+├── backend_client.py  # MCP 运行时客户端与连接池
+├── capabilities.py    # Provider / Capability / Runtime 路由层
 ├── launcher_client.py # 启动器适配器（Quicker / uTools）
 └── runtime_paths.py   # 运行时目录解析 + 旧路径迁移
 ```
 
-> 运行时数据（后端子工具缓存、启动器动作清单、后端启动意图）不在仓库，
+> 运行时数据（MCP 能力缓存、启动器动作清单、运行时启动意图）不在仓库，
 > 位于 `%LOCALAPPDATA%\.awam-tool-manager/`（`AWAM_RUNTIME_DIR` 可覆盖）。
 >
 > `data/launchers/` 与 `src/adapters/` 属于早期版本遗留，已在重构中移除，代码中不存在。
