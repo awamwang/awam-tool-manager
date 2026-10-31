@@ -75,6 +75,10 @@ EXPECTED_TOOL_NAMES_FULL = EXPECTED_TOOL_NAMES_DEFAULT | {
     "search_winget_packages",
     "install_winget_package",
     "check_package_updates",
+    "list_package_managers",
+    "search_uniget_packages",
+    "list_uniget_packages",
+    "get_package_details",
 }
 
 # 既有引用的口径：协议出口的默认模式是 lazy。新用例请直接用带模式后缀的常量。

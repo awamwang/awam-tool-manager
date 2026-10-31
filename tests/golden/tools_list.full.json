@@ -1490,5 +1490,198 @@
       ],
       "additionalProperties": true
     }
+  },
+  {
+    "name": "list_package_managers",
+    "description": "列出本机 UniGetUI 能驱动的安装器及其就绪状态（scoop / winget / pip 等），可选带软件源清单；需要 UniGetUI 正在运行，只读，不冷启动 GUI",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "include_sources": {
+          "type": "boolean",
+          "description": "可选，默认 false。true 时附带各安装器的软件源清单"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "可选，UniGetUI 命令的超时秒数（默认 120，上限 600）"
+        }
+      }
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "search_uniget_packages",
+    "description": "在指定安装器的远端索引里搜索可安装的包（只读）；manager 必填，需要 UniGetUI 正在运行。必填：keyword（可写 query）",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "manager": {
+          "type": "string",
+          "description": "必填，安装器稳定 id（如 scoop / winget / pip / npm / chocolatey / dotnet-tool）"
+        },
+        "keyword": {
+          "type": "string",
+          "description": "必填，包名或 id 关键词"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "可选，最多返回多少条（默认 20，上限 100）"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "可选，UniGetUI 命令的超时秒数（默认 120，上限 600）"
+        },
+        "query": {
+          "type": "string",
+          "description": "`keyword` 的别名（与 keyword 二选一，两者都给以 keyword 为准）：必填，包名或 id 关键词"
+        }
+      },
+      "required": [
+        "manager"
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "keyword"
+          ]
+        },
+        {
+          "required": [
+            "query"
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "list_uniget_packages",
+    "description": "列出指定安装器里已安装的包及其版本（只读）；manager 必填，需要 UniGetUI 正在运行",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "manager": {
+          "type": "string",
+          "description": "必填，安装器稳定 id（如 scoop / winget / pip / npm / chocolatey / dotnet-tool）"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "可选，最多返回多少条（默认 50，上限 100）"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "可选，UniGetUI 命令的超时秒数（默认 120，上限 600）"
+        }
+      },
+      "required": [
+        "manager"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "get_package_details",
+    "description": "查单个包的详情（描述、主页、许可、安装位置等），默认附带版本历史（只读）；manager 与 package 必填，需要 UniGetUI 正在运行",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "manager": {
+          "type": "string",
+          "description": "必填，安装器稳定 id（如 scoop / winget / pip / npm / chocolatey / dotnet-tool）"
+        },
+        "package": {
+          "type": "string",
+          "description": "必填，包 id（从 search_uniget_packages / list_uniget_packages 的 name 取）"
+        },
+        "include_versions": {
+          "type": "boolean",
+          "description": "可选，默认 true。false 时跳过版本历史查询"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "可选，UniGetUI 命令的超时秒数（默认 120，上限 600）"
+        },
+        "name": {
+          "type": "string",
+          "description": "`package` 的别名（与 package 二选一，两者都给以 package 为准）：必填，包 id（从 search_uniget_packages / list_uniget_packages 的 name 取）"
+        }
+      },
+      "required": [
+        "manager"
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "package"
+          ]
+        },
+        {
+          "required": [
+            "name"
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "additionalProperties": true
+    }
   }
 ]

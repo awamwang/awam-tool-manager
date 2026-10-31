@@ -21,6 +21,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import pkgman
+from errors import ErrorType
 from pkgman import PackageError, launch_target, list_installed
 
 
@@ -697,3 +698,302 @@ def test_parse_uniget_running_rejects_non_object_json(text):
     """status 输出的形状不对时按失败处理，而不是默认「会话在跑」"""
     with pytest.raises(PackageError):
         pkgman.parse_uniget_running(text)
+
+
+# ---- UniGetUI 只读面（2026-10-31）：取值校验 / 命令构造 / 载荷解析 ----
+
+
+@pytest.mark.parametrize("bad", ["-x", "--elevated"])
+def test_validate_name_rejects_leading_dash(bad):
+    """scoop 包名的字符集允许短横，但开头的短横会被 argv 当成选项位"""
+    with pytest.raises(PackageError) as exc:
+        pkgman.validate_name(bad)
+    assert exc.value.error_type == "invalid_params"
+    assert "不能以 - 开头" in str(exc.value)
+
+
+@pytest.mark.parametrize("good", [
+    "7zip.7zip", "Microsoft.VisualStudioCode", "requests",
+    "some package", "a+b_c-d.e",
+])
+def test_validate_package_id_accepts_real_world_ids(good):
+    assert pkgman.validate_package_id(good) == good
+    assert pkgman.validate_query(good) == good
+
+
+@pytest.mark.parametrize("bad", ["", "  ", "-x", "a\x00b", "a\nb", "x" * 201])
+def test_validate_package_id_and_query_reject_argv_hazards(bad):
+    for fn in (pkgman.validate_package_id, pkgman.validate_query):
+        with pytest.raises(PackageError) as exc:
+            fn(bad)
+        assert exc.value.error_type == "invalid_params"
+
+
+def test_uniget_readonly_argv_shapes():
+    exe = "uniget.exe"
+    assert pkgman.uniget_managers_argv(exe) == [exe, "manager", "list"]
+    assert pkgman.uniget_sources_argv(exe) == [exe, "source", "list"]
+    assert pkgman.uniget_sources_argv(exe, "Scoop") == [
+        exe, "source", "list", "--manager", "scoop",
+    ]
+    assert pkgman.uniget_installed_argv(exe, "scoop") == [
+        exe, "package", "installed", "--manager", "scoop",
+    ]
+    assert pkgman.uniget_search_argv(exe, "winget", "7zip") == [
+        exe, "package", "search", "--manager", "winget", "--query", "7zip",
+    ]
+    assert pkgman.uniget_details_argv(exe, "winget", "7zip.7zip") == [
+        exe, "package", "details", "--manager", "winget", "--id", "7zip.7zip",
+    ]
+    assert pkgman.uniget_versions_argv(exe, "winget", "7zip.7zip") == [
+        exe, "package", "versions", "--manager", "winget", "--id", "7zip.7zip",
+    ]
+
+
+def test_uniget_search_requires_a_whitelisted_manager_and_query():
+    with pytest.raises(PackageError) as exc:
+        pkgman.uniget_search_argv("uniget.exe", "--elevated", "7zip")
+    assert exc.value.error_type == "invalid_params"
+    with pytest.raises(PackageError) as exc:
+        pkgman.uniget_search_argv("uniget.exe", "scoop", "--query")
+    assert exc.value.error_type == "invalid_params"
+
+
+def test_parse_uniget_packages_keeps_cli_order_and_maps_id_to_name():
+    """`search` 的顺序是相关性，不能按字母重排；`name` 取 id，显示名不同才带"""
+    text = json.dumps({"status": "success", "packages": [
+        {"name": "7-Zip", "id": "7zip.7zip", "version": "26.05", "newVersion": "",
+         "source": "WinGet: winget", "manager": "winget", "isUpgradable": False},
+        {"name": "7-Zip Beta", "id": "7zip-beta", "version": "26.00", "newVersion": "",
+         "source": "Scoop: versions", "manager": "scoop", "isUpgradable": True},
+        {"name": "", "id": ""},
+    ]})
+    rows = pkgman.parse_uniget_packages(text, "uniget package search")["rows"]
+    assert [r["name"] for r in rows] == ["7zip.7zip", "7zip-beta"]
+    assert rows[0]["displayName"] == "7-Zip"
+    assert rows[1]["displayName"] == "7-Zip Beta"
+    assert rows[1]["upgradable"] is True
+    assert rows[0]["availableVersion"] is None
+
+
+def test_parse_uniget_packages_requires_packages_array():
+    with pytest.raises(PackageError) as exc:
+        pkgman.parse_uniget_packages(
+            json.dumps({"status": "success", "updates": []}),
+            "uniget package installed",
+        )
+    assert "packages 数组" in str(exc.value)
+
+
+def test_parse_uniget_packages_surfaces_error_status():
+    """错误应答退出码也是 0：只能靠 status 字段识别"""
+    with pytest.raises(PackageError) as exc:
+        pkgman.parse_uniget_packages(json.dumps({
+            "status": "error",
+            "message": 'No ready package manager matching "winget"',
+        }), "uniget package installed")
+    assert exc.value.error_type == "runtime_error"
+    assert "No ready package manager" in str(exc.value)
+
+
+def test_parse_uniget_managers_keeps_readiness():
+    text = json.dumps({"status": "success", "managers": [
+        {"name": "scoop", "displayName": "Scoop", "enabled": True, "ready": True,
+         "executablePath": "S:\\Libs\\Scoop\\shims\\scoop.cmd"},
+        {"name": "winget", "displayName": "WinGet", "enabled": True, "ready": False,
+         "executablePath": ""},
+        {"displayName": "缺 name"},
+    ]})
+    rows = pkgman.parse_uniget_managers(text)["rows"]
+    assert [r["name"] for r in rows] == ["scoop", "winget"]
+    assert rows[0]["ready"] is True and rows[0]["executablePath"].endswith("scoop.cmd")
+    assert rows[1]["ready"] is False and "executablePath" not in rows[1]
+
+
+def test_parse_uniget_managers_requires_managers_array():
+    with pytest.raises(PackageError):
+        pkgman.parse_uniget_managers('{"status": "success", "sources": []}')
+
+
+def test_parse_uniget_sources_keeps_configuration_state():
+    text = json.dumps({"status": "success", "sources": [
+        {"manager": "scoop", "name": "extras", "displayName": "Scoop: extras",
+         "url": "https://github.com/ScoopInstaller/Extras", "packageCount": 2449,
+         "updateDate": "2026-10-31 16:24:39", "isKnown": True, "isConfigured": True},
+        {"manager": "scoop", "name": "games", "displayName": "Scoop: games",
+         "url": "", "packageCount": 0, "updateDate": "", "isKnown": True,
+         "isConfigured": False},
+        {"manager": "", "name": "orphan"},
+    ]})
+    rows = pkgman.parse_uniget_sources(text)["rows"]
+    assert [r["name"] for r in rows] == ["extras", "games"]
+    assert rows[0]["packageCount"] == 2449 and rows[0]["isConfigured"] is True
+    assert rows[1]["url"] is None and rows[1]["updateDate"] is None
+    assert rows[1]["isConfigured"] is False
+
+
+def test_parse_uniget_details_allowlists_fields_and_keeps_lists():
+    text = json.dumps({"status": "success", "package": {
+        "name": "7zip", "id": "7zip", "version": "25.01", "newVersion": "",
+        "source": "Scoop: main", "manager": "scoop",
+        "description": "A multi-format file archiver", "publisher": "",
+        "author": "7-zip", "homepageUrl": "https://www.7-zip.org/",
+        "license": "LGPL-2.1-or-later", "installerType": "Scoop 软件包",
+        "installerSize": 1996800,
+        "installLocation": "S:\\Libs\\Scoop\\apps\\7zip\\current",
+        "tags": [], "screenshots": ["https://example.com/1.png"],
+        "dependencies": [], "versions": [], "unknownField": "should not leak",
+    }})
+    pkg = pkgman.parse_uniget_details(text)["package"]
+    assert pkg["name"] == "7zip"
+    assert pkg["installerSize"] == 1996800
+    assert pkg["screenshots"] == ["https://example.com/1.png"]
+    assert pkg["tags"] == []
+    assert "unknownField" not in pkg
+    assert pkg["publisher"] is None
+
+
+def test_parse_uniget_details_requires_package_object():
+    with pytest.raises(PackageError) as exc:
+        pkgman.parse_uniget_details('{"status": "success", "packages": []}')
+    assert "package 对象" in str(exc.value)
+
+
+def test_parse_uniget_versions_caps_and_counts(monkeypatch):
+    text = json.dumps({"status": "success", "versions": ["1.0", "1.1", "", "2.0"]})
+    res = pkgman.parse_uniget_versions(text)
+    assert res == {"versions": ["1.0", "1.1", "2.0"], "count": 3, "truncated": False}
+
+    monkeypatch.setattr(pkgman, "MAX_VERSION_ROWS", 1)
+    brief = pkgman.parse_uniget_versions(
+        json.dumps({"status": "success", "versions": ["1.0", "1.1"]})
+    )
+    assert brief == {"versions": ["1.0"], "count": 2, "truncated": True}
+
+
+def test_parse_uniget_versions_requires_versions_array():
+    with pytest.raises(PackageError) as exc:
+        pkgman.parse_uniget_versions('{"status": "success", "versions": "1.0"}')
+    assert "versions 数组" in str(exc.value)
+
+
+# ---- run_uniget_read：先探会话，再发数据命令 ----
+
+
+def _scripted_uniget(monkeypatch, *, exe="C:\\Fake\\uniget.exe", running=True,
+                     query_ok=True, exit_code=0, stdout='{"status": "success"}',
+                     truncated=False):
+    calls: list[dict] = []
+
+    async def _run(argv, timeout=None, max_output=pkgman.OUTPUT_MAX_CHARS):
+        calls.append({"argv": list(argv), "timeout": timeout, "maxOutput": max_output})
+        if argv[-1] == "status":
+            return {"ok": True, "exitCode": 0, "timedOut": False,
+                    "stdoutTruncated": False,
+                    "stdout": json.dumps({"running": running}), "stderr": ""}
+        return {"ok": query_ok, "exitCode": exit_code, "timedOut": False,
+                "stdoutTruncated": truncated, "stdout": stdout, "stderr": ""}
+
+    monkeypatch.setattr(pkgman, "run_argv", _run)
+    monkeypatch.setattr(pkgman, "locate_uniget_cli", lambda: (exe, "test: 单测入口"))
+    return calls
+
+
+def test_run_uniget_read_probes_status_then_uses_the_json_cap(monkeypatch):
+    calls = _scripted_uniget(
+        monkeypatch, stdout=json.dumps({"status": "success", "packages": []}),
+    )
+    res = run(pkgman.run_uniget_read(
+        lambda exe: pkgman.uniget_installed_argv(exe, "scoop"),
+        timeout=45,
+        parse=pkgman.parse_uniget_packages,
+    ))
+    assert res["available"] is True and res["phase"] is None
+    assert [c["argv"][-1] for c in calls] == ["status", "scoop"]
+    assert [c["timeout"] for c in calls] == [45, 45], "timeout 要传给两条命令"
+    assert calls[1]["maxOutput"] == pkgman.UNIGET_OUTPUT_MAX_CHARS
+    assert res["data"] == {"rows": []}
+
+
+def test_run_uniget_read_stops_after_status_when_no_session(monkeypatch):
+    calls = _scripted_uniget(monkeypatch, running=False)
+    res = run(pkgman.run_uniget_read(pkgman.uniget_managers_argv))
+    assert [c["argv"][-1] for c in calls] == ["status"], "无会话时不许再发第二条"
+    assert res["available"] is False and res["phase"] == "status"
+    assert "running=false" in res["reason"] and "不代为冷启动" in res["reason"]
+    assert res["exe"] == "C:\\Fake\\uniget.exe"
+
+
+def test_run_uniget_read_missing_cli_is_locate_phase(monkeypatch):
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("定位失败时不该 spawn")
+
+    monkeypatch.setattr(pkgman, "run_argv", _boom)
+    monkeypatch.setattr(pkgman, "locate_uniget_cli", lambda: (None, "没找到 uniget.exe"))
+    res = run(pkgman.run_uniget_read(pkgman.uniget_managers_argv))
+    assert res["available"] is False and res["phase"] == "locate"
+    assert "没找到 uniget.exe" in res["reason"] and res["exe"] is None
+
+
+def test_run_uniget_read_status_failure_reports_exit_code(monkeypatch):
+    async def _run(argv, timeout=None, max_output=pkgman.OUTPUT_MAX_CHARS):
+        return {"ok": False, "exitCode": 1, "timedOut": False,
+                "stdoutTruncated": False, "stdout": "", "stderr": "pipe unavailable"}
+
+    monkeypatch.setattr(pkgman, "run_argv", _run)
+    monkeypatch.setattr(pkgman, "locate_uniget_cli",
+                        lambda: ("C:\\Fake\\uniget.exe", "test"))
+    res = run(pkgman.run_uniget_read(pkgman.uniget_managers_argv))
+    assert res["phase"] == "status"
+    assert "退出码 1" in res["reason"] and "pipe unavailable" in res["reason"]
+
+
+def test_run_uniget_read_query_failure_keeps_the_message(monkeypatch):
+    _scripted_uniget(
+        monkeypatch, query_ok=False, exit_code=2,
+        stdout='{"status": "error", "message": "The IPC API token is not available."}',
+    )
+    res = run(pkgman.run_uniget_read(pkgman.uniget_managers_argv))
+    assert res["phase"] == "query"
+    assert "退出码 2" in res["reason"] and "IPC API token" in res["reason"]
+
+
+def test_run_uniget_read_nonzero_exit_still_classifies_json_errors(monkeypatch):
+    """真机 not-found：退出码 2 + `status=error` 正文，不能一律判 runtime_error"""
+    _scripted_uniget(
+        monkeypatch, query_ok=False, exit_code=2,
+        stdout=json.dumps({
+            "status": "error",
+            "message": 'No package matching id "nope" was found.',
+        }),
+    )
+    res = run(pkgman.run_uniget_read(
+        lambda exe: pkgman.uniget_details_argv(exe, "scoop", "nope"),
+        parse=pkgman.parse_uniget_details,
+    ))
+    assert res["phase"] == "query"
+    assert res["errorType"] == ErrorType.NOT_FOUND
+    assert "退出码 2" in res["reason"]
+
+
+def test_run_uniget_read_truncated_output_degrades_with_a_next_step(monkeypatch):
+    _scripted_uniget(
+        monkeypatch, truncated=True,
+        stdout='{"status": "success", "packages": [{"id": "x"',
+    )
+    res = run(pkgman.run_uniget_read(
+        lambda exe: pkgman.uniget_installed_argv(exe, "scoop"),
+        parse=pkgman.parse_uniget_packages,
+    ))
+    assert res["phase"] == "parse"
+    assert "被截断" in res["reason"] and "manager" in res["reason"]
+
+
+def test_run_uniget_read_parse_failure_is_its_own_phase(monkeypatch):
+    _scripted_uniget(monkeypatch, stdout="not json")
+    res = run(pkgman.run_uniget_read(
+        pkgman.uniget_managers_argv,
+        parse=pkgman.parse_uniget_managers,
+    ))
+    assert res["phase"] == "parse" and "不是 JSON" in res["reason"]
+    assert res["available"] is False and res["data"] is None

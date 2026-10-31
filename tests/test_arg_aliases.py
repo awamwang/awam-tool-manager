@@ -314,7 +314,7 @@ async def _noop_handler(arguments: dict, ctx) -> dict:
 
 
 def test_build_mcp_tools_still_covers_all_specs():
-    """别名改造没碰工具集本身：full 模式下 31 个工具一个不少、顺序不变"""
+    """别名改造没碰工具集本身：full 模式下全部声明工具一个不少、顺序不变"""
     assert [t.name for t in build_mcp_tools("full")] == [
         s.name for s in SERVER_TOOL_SPECS
     ]
@@ -380,14 +380,15 @@ def test_default_alias_table_is_the_agreed_minimum():
 def test_alias_property_budget():
     """别名属性总数钉死。别名属性平均 111 字符/个，且全表 schema 要整体下发给调用方。
 
-    21 = 12 个工具/能力/运行时工具的 `tool_id ← id` + 7 个搜索类工具的
-    `keyword ← query` + 2 个包操作的 `package ← name`。新增别名必须连同
-    上下文成本一起过（见源码注释）。
+    23 = 12 个工具/能力/运行时工具的 `tool_id ← id` + 8 个搜索类工具的
+    `keyword ← query`（含 search_uniget_packages）+ 3 个包操作的
+    `package ← name`（含 get_package_details）。新增别名必须连同上下文成本
+    一起过（见源码注释）。
     """
     total = 0
     for spec in SERVER_TOOL_SPECS:
         total += sum(len(aliases) for aliases in tool_specs.aliases_for(spec).values())
-    assert total == 21
+    assert total == 23
 
 
 @pytest.mark.parametrize(

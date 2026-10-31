@@ -915,60 +915,23 @@ async def _handle_install_package(arguments: dict, ctx: ToolContext) -> dict:
 
 
 async def _uniget_update_probe(manager: str, timeout: Any) -> dict:
-    """跑一遍 UniGetUI 的只读升级查询；任何一步不成就说清卡在哪。
+    """跑一遍 UniGetUI 的只读升级查询，载荷收敛成 `check_package_updates` 的形状。
 
-    先 `status` 再取数据不是冗余：`status` 是唯一不需要 token 的命令，而数据命令在
-    没有活会话时会把参数转给 `UniGetUI.exe` 去冷启动（实测无会话时退出码 2、
-    「Start UniGetUI and try again」）。先探一下，就不会替用户弹出一个 GUI。
+    会话探测、输出上限、截断与解析失败的处理都在 `pkgman.run_uniget_read`；
+    这里只做「可用→行 + truncated / 不可用→原因」的转手，不复制第二份协议。
     """
-    exe, exe_source = pkgman.locate_uniget_cli()
-    if exe is None:
-        return {"available": False, "exe": None, "reason": exe_source}
-
-    status = await pkgman.run_argv(pkgman.uniget_status_argv(exe), timeout)
-    if not status["ok"]:
-        return {
-            "available": False, "exe": exe,
-            "reason": f"uniget status 未成功（退出码 {status['exitCode']}"
-            + ("，已超时终止" if status["timedOut"] else "")
-            + f"）: {status['stderr'][:200]}",
-        }
-    try:
-        running = pkgman.parse_uniget_running(status["stdout"])
-    except pkgman.PackageError as exc:
-        return {"available": False, "exe": exe, "reason": str(exc)}
-    if not running:
-        return {
-            "available": False, "exe": exe,
-            "reason": "UniGetUI 会话未运行（status 返回 running=false）；"
-            "不代为冷启动它的窗口，需要外部口径请启动 UniGetUI 后重试",
-        }
-
-    run = await pkgman.run_argv(
-        pkgman.uniget_updates_argv(exe, manager or None),
+    probe = await pkgman.run_uniget_read(
+        lambda exe: pkgman.uniget_updates_argv(exe, manager or None),
         timeout,
-        max_output=pkgman.UNIGET_OUTPUT_MAX_CHARS,
+        parse=pkgman.parse_uniget_updates,
     )
-    if not run["ok"]:
-        return {
-            "available": False, "exe": exe,
-            "reason": f"uniget package updates 未成功（退出码 {run['exitCode']}"
-            + ("，已超时终止" if run["timedOut"] else "")
-            + f"）: {(run['stdout'] or run['stderr'])[:200]}",
-        }
-    try:
-        parsed = pkgman.parse_uniget_updates(run["stdout"])
-    except pkgman.PackageError as exc:
-        reason = str(exc)
-        if run.get("stdoutTruncated"):
-            reason += (
-                f"（输出超过 {pkgman.UNIGET_OUTPUT_MAX_CHARS} 字符被截断；"
-                "传 manager 限定单个安装器再试）"
-            )
-        return {"available": False, "exe": exe, "reason": reason}
+    if not probe["available"]:
+        return {"available": False, "exe": probe["exe"], "reason": probe["reason"]}
     return {
-        "available": True, "exe": exe, "rows": parsed["rows"],
-        "truncated": parsed["truncated"],
+        "available": True,
+        "exe": probe["exe"],
+        "rows": probe["data"]["rows"],
+        "truncated": probe["data"]["truncated"],
     }
 
 
@@ -1060,6 +1023,192 @@ async def _handle_check_package_updates(arguments: dict, ctx: ToolContext) -> di
             f"{len(diff['rows'])} 个更高）。索引本身的新旧取决于上次 `scoop update`，"
             "不等于上游最新发布；unknown 里的包没有可比基准，不代表它们已最新"
         )
+    return payload
+
+
+# ---- UniGetUI 只读意图工具（full）----
+# 这四个工具回答「装了什么 / 能装什么 / 这个包是什么 / 哪些安装器可用」，
+# 全部走 `run_uniget_read` 的同一条会话探测与输出上限纪律；安装/升级/卸载不在此列。
+
+def _uniget_manager_arg(arguments: dict) -> str:
+    raw = arguments.get("manager")
+    if not str(raw or "").strip():
+        fail(
+            "manager 必填：UniGetUI 的查询要明确问哪一个安装器（如 scoop / winget）",
+            error_type=ErrorType.INVALID_PARAMS,
+        )
+    try:
+        return pkgman.validate_uniget_manager(raw)
+    except pkgman.PackageError as exc:
+        fail(str(exc), error_type=exc.error_type, manager=str(raw))
+
+
+def _uniget_or_fail(probe: dict, what: str, **extra: Any) -> dict:
+    """把 `run_uniget_read` 的失败相位折算成客户端可行动的 errorType。
+
+    相位是「卡在哪」：locate 没装 CLI → install_required；status 没活会话 →
+    connection_error；query/parse 命令失败或形状不对 → runtime_error（解析器
+    若识别出「包不存在」会带 not_found）。reason 原样带上，不做文案再加工。
+    """
+    if probe["available"]:
+        return probe["data"]
+    fail(
+        f"{what}：{probe['reason']}",
+        error_type=probe.get("errorType") or ErrorType.RUNTIME_ERROR,
+        phase=probe["phase"],
+        cli=probe["exe"],
+        **extra,
+    )
+
+
+async def _handle_list_package_managers(arguments: dict, ctx: ToolContext) -> dict:
+    """列 UniGetUI 能驱动的安装器及其就绪状态（只读；需要活的 UniGetUI 会话）"""
+    timeout = arguments.get("timeout")
+    probe = await pkgman.run_uniget_read(
+        pkgman.uniget_managers_argv, timeout,
+        parse=pkgman.parse_uniget_managers,
+    )
+    rows = _uniget_or_fail(probe, "列 UniGetUI 安装器失败")["rows"]
+    payload: dict[str, Any] = {
+        "success": True,
+        "source": "uniget",
+        "cli": probe["exe"],
+        "count": len(rows),
+        "readyCount": sum(1 for r in rows if r["ready"]),
+        "managers": rows,
+    }
+    if arguments.get("include_sources"):
+        sources = await pkgman.run_uniget_read(
+            pkgman.uniget_sources_argv, timeout,
+            parse=pkgman.parse_uniget_sources,
+        )
+        if sources["available"]:
+            payload["sources"] = sources["data"]["rows"]
+            payload["sourceCount"] = len(sources["data"]["rows"])
+        else:
+            # 已经拿到安装器清单，软件源查不到不该把整次调用判失败
+            payload["sourcesUnavailable"] = sources["reason"]
+    payload["note"] = (
+        "ready=false 表示该安装器本次不可用（未安装/未配置/会话里没就绪）；"
+        "enabled 是 UniGetUI 设置里的开关，与本次查询能否成功不是一回事。"
+        "本工具需要 UniGetUI 正在运行，不会替你冷启动它的窗口"
+    )
+    return payload
+
+
+async def _handle_search_uniget_packages(arguments: dict, ctx: ToolContext) -> dict:
+    """在指定安装器的远端索引里搜包（只读）。manager 必填，见 pkgman 的实测说明"""
+    manager = _uniget_manager_arg(arguments)
+    try:
+        query = pkgman.validate_query(arguments.get("keyword"))
+    except pkgman.PackageError as exc:
+        fail(str(exc), error_type=exc.error_type, manager=manager)
+    limit = _clamp_int(
+        arguments.get("limit"),
+        default=pkgman.DEFAULT_SEARCH_LIMIT,
+        low=1,
+        high=pkgman.MAX_SEARCH_LIMIT,
+    )
+    probe = await pkgman.run_uniget_read(
+        lambda exe: pkgman.uniget_search_argv(exe, manager, query),
+        arguments.get("timeout"),
+        parse=lambda text: pkgman.parse_uniget_packages(text, "uniget package search"),
+    )
+    rows = _uniget_or_fail(
+        probe, f"在 {manager} 里搜 '{query}' 失败", manager=manager,
+    )["rows"]
+    kept = rows[:limit]
+    return {
+        "success": True,
+        "source": "uniget",
+        "manager": manager,
+        "keyword": query,
+        "count": len(rows),
+        "returned": len(kept),
+        "limit": limit,
+        "truncated": len(rows) > limit,
+        "cli": probe["exe"],
+        "packages": kept,
+        "note": (
+            "结果来自该安装器的远端索引，只说明**可安装**；"
+            "是否已装用 list_uniget_packages、包详情用 get_package_details"
+        ),
+    }
+
+
+async def _handle_list_uniget_packages(arguments: dict, ctx: ToolContext) -> dict:
+    """列指定安装器里已安装的包（只读）。manager 必填，结果按规范名排序"""
+    manager = _uniget_manager_arg(arguments)
+    limit = _clamp_int(arguments.get("limit"), default=50, low=1, high=100)
+    probe = await pkgman.run_uniget_read(
+        lambda exe: pkgman.uniget_installed_argv(exe, manager),
+        arguments.get("timeout"),
+        parse=pkgman.parse_uniget_packages,
+    )
+    rows = sorted(
+        _uniget_or_fail(probe, f"列 {manager} 已装包失败", manager=manager)["rows"],
+        key=lambda r: r["name"].lower(),
+    )
+    kept = rows[:limit]
+    return {
+        "success": True,
+        "source": "uniget",
+        "manager": manager,
+        "count": len(rows),
+        "returned": len(kept),
+        "limit": limit,
+        "truncated": len(rows) > limit,
+        "cli": probe["exe"],
+        "packages": kept,
+        "note": (
+            "这份清单来自 UniGetUI 的安装器适配层，与读盘口径（list_packages）"
+            "可能不等：直链安装、安装器本体等条目两侧处理方式不同"
+        ),
+    }
+
+
+async def _handle_get_package_details(arguments: dict, ctx: ToolContext) -> dict:
+    """查单个包的详情，可选带版本历史（只读）"""
+    manager = _uniget_manager_arg(arguments)
+    try:
+        package_id = pkgman.validate_package_id(arguments.get("package"))
+    except pkgman.PackageError as exc:
+        fail(str(exc), error_type=exc.error_type, manager=manager)
+    timeout = arguments.get("timeout")
+    probe = await pkgman.run_uniget_read(
+        lambda exe: pkgman.uniget_details_argv(exe, manager, package_id),
+        timeout,
+        parse=pkgman.parse_uniget_details,
+    )
+    details = _uniget_or_fail(
+        probe, f"查 '{package_id}' 的详情失败",
+        manager=manager, package=package_id,
+    )["package"]
+    payload: dict[str, Any] = {
+        "success": True,
+        "source": "uniget",
+        "manager": manager,
+        "package": package_id,
+        "cli": probe["exe"],
+        "details": details,
+    }
+    if arguments.get("include_versions") is not False:
+        versions = await pkgman.run_uniget_read(
+            lambda exe: pkgman.uniget_versions_argv(exe, manager, package_id),
+            timeout,
+            parse=pkgman.parse_uniget_versions,
+        )
+        if versions["available"]:
+            payload["versions"] = versions["data"]["versions"]
+            payload["versionCount"] = versions["data"]["count"]
+            payload["versionsTruncated"] = versions["data"]["truncated"]
+        else:
+            # 详情已经拿到了，版本历史查不到只降级，不把整次调用判失败
+            payload["versionsUnavailable"] = versions["reason"]
+    payload["note"] = (
+        "详情来自该安装器的远端索引；installLocation 等字段反映当前安装状态。"
+        "versions 为空通常表示该安装器不提供版本历史（scoop 实测如此），不是查询失败"
+    )
     return payload
 
 
@@ -2697,6 +2846,130 @@ SERVER_TOOL_SPECS: tuple[ServerToolSpec, ...] = (
             }
         },
         annotations={"readOnlyHint": True, "destructiveHint": False},
+        exposure=("full",),
+    ),
+    ServerToolSpec(
+        name="list_package_managers",
+        handler=_handle_list_package_managers,
+        description=(
+            "列出本机 UniGetUI 能驱动的安装器及其就绪状态（scoop / winget / pip 等），"
+            "可选带软件源清单；需要 UniGetUI 正在运行，只读，不冷启动 GUI"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "include_sources": {
+                    "type": "boolean",
+                    "description": "可选，默认 false。true 时附带各安装器的软件源清单"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "可选，UniGetUI 命令的超时秒数（默认 120，上限 600）"
+                },
+            }
+        },
+        annotations={"openWorldHint": True, "destructiveHint": False},
+        exposure=("full",),
+    ),
+    ServerToolSpec(
+        name="search_uniget_packages",
+        handler=_handle_search_uniget_packages,
+        description=(
+            "在指定安装器的远端索引里搜索可安装的包（只读）；manager 必填，"
+            "需要 UniGetUI 正在运行"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "manager": {
+                    "type": "string",
+                    "description": (
+                        "必填，安装器稳定 id（如 scoop / winget / pip / npm / "
+                        "chocolatey / dotnet-tool）"
+                    )
+                },
+                "keyword": {
+                    "type": "string",
+                    "description": "必填，包名或 id 关键词"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "可选，最多返回多少条（默认 20，上限 100）"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "可选，UniGetUI 命令的超时秒数（默认 120，上限 600）"
+                },
+            },
+            "required": ["manager", "keyword"],
+        },
+        annotations={"openWorldHint": True, "destructiveHint": False},
+        exposure=("full",),
+    ),
+    ServerToolSpec(
+        name="list_uniget_packages",
+        handler=_handle_list_uniget_packages,
+        description=(
+            "列出指定安装器里已安装的包及其版本（只读）；manager 必填，"
+            "需要 UniGetUI 正在运行"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "manager": {
+                    "type": "string",
+                    "description": (
+                        "必填，安装器稳定 id（如 scoop / winget / pip / npm / "
+                        "chocolatey / dotnet-tool）"
+                    )
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "可选，最多返回多少条（默认 50，上限 100）"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "可选，UniGetUI 命令的超时秒数（默认 120，上限 600）"
+                },
+            },
+            "required": ["manager"],
+        },
+        annotations={"openWorldHint": True, "destructiveHint": False},
+        exposure=("full",),
+    ),
+    ServerToolSpec(
+        name="get_package_details",
+        handler=_handle_get_package_details,
+        description=(
+            "查单个包的详情（描述、主页、许可、安装位置等），默认附带版本历史（只读）；"
+            "manager 与 package 必填，需要 UniGetUI 正在运行"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "manager": {
+                    "type": "string",
+                    "description": (
+                        "必填，安装器稳定 id（如 scoop / winget / pip / npm / "
+                        "chocolatey / dotnet-tool）"
+                    )
+                },
+                "package": {
+                    "type": "string",
+                    "description": "必填，包 id（从 search_uniget_packages / list_uniget_packages 的 name 取）"
+                },
+                "include_versions": {
+                    "type": "boolean",
+                    "description": "可选，默认 true。false 时跳过版本历史查询"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "可选，UniGetUI 命令的超时秒数（默认 120，上限 600）"
+                },
+            },
+            "required": ["manager", "package"],
+        },
+        annotations={"openWorldHint": True, "destructiveHint": False},
         exposure=("full",),
     ),
 )

@@ -125,18 +125,22 @@ def test_default_adds_exactly_the_seven_intent_tools():
     ]
 
 
-def test_full_adds_the_five_low_frequency_tools():
+def test_full_adds_the_nine_low_frequency_tools():
     from conftest import EXPECTED_TOOL_NAMES_FULL
 
     names = [t.name for t in build_mcp_tools("full")]
     assert set(names) == EXPECTED_TOOL_NAMES_FULL
-    assert len(names) == 31
-    assert names[-5:] == [
+    assert len(names) == 35
+    assert names[-9:] == [
         "get_file_info",
         "get_everything_status",
         "search_winget_packages",
         "install_winget_package",
         "check_package_updates",
+        "list_package_managers",
+        "search_uniget_packages",
+        "list_uniget_packages",
+        "get_package_details",
     ]
 
 

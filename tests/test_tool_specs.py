@@ -163,3 +163,24 @@ def test_validate_specs_rejects_illegal_annotation_key(monkeypatch):
 async def _noop_handler(arguments: dict, ctx) -> dict:
     """仅供坏 spec 占位的空 handler"""
     return {"success": True}
+
+
+UNIGET_READONLY_TOOLS = {
+    "list_package_managers",
+    "search_uniget_packages",
+    "list_uniget_packages",
+    "get_package_details",
+}
+
+
+def test_uniget_readonly_tools_are_full_and_honestly_annotated():
+    """四个 UniGetUI 只读工具只进 full；会 spawn 安装器并联网，所以标
+    openWorldHint=true，且**不声明 readOnlyHint**（那会把「起子进程、联网」说成纯读）。"""
+    by_name = {spec.name: spec for spec in SERVER_TOOL_SPECS}
+    for name in UNIGET_READONLY_TOOLS:
+        spec = by_name[name]
+        assert spec.exposure == ("full",), f"{name} 应只在 full 暴露"
+        assert spec.annotations.get("openWorldHint") is True, name
+        assert "readOnlyHint" not in spec.annotations, (
+            f"{name} 会 spawn UniGetUI 并联网查远端索引，不能声称只读"
+        )

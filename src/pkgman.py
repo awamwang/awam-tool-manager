@@ -11,10 +11,12 @@ r"""本机包管理器适配层（P2-07）：只读枚举已安装包 + 解析�
 遍再格式化）；升级差集就是这两个版本号相比。只有
 `install_package` / `launch_package` / 显式 `execute=true` 的 UniGetUI 升级查询才起子进程。
 
-UniGetUI（`uniget.exe`）在本模块里**不是包管理后端**，只是一层可选的只读升级查询：
+UniGetUI（`uniget.exe`）在本模块里**不是包管理后端**，而是一层可选的只读查询：
 它自己也要 spawn 底层安装器，且必须连上一个活的 UniGetUI 会话，所以走
-`locate_uniget_cli` + `uniget_*_argv` + 解析函数的显式路径，探不到就由调用方
-回落到上面的读盘差集。
+`locate_uniget_cli` + `uniget_*_argv` + 解析函数的显式路径。2026-10-31 起只读面扩到
+`status` / `manager list` / `source list` / `package search|installed|details|versions|updates`，
+全部是 `run_uniget_read` 一条通路：先 `status` 探会话，`running=false` 就收手，
+绝不把参数转给 `UniGetUI.exe` 去冷启动 GUI。安装 / 升级 / 卸载仍不在这里。
 
 真机勘察（2026-10-19，`S:\Libs\Scoop`）决定了这里几个不显眼但关键的取舍：
 
@@ -40,7 +42,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import anyio
 
@@ -56,16 +58,30 @@ __all__ = [
     "launch_target",
     "list_installed",
     "locate_uniget_cli",
+    "parse_uniget_details",
+    "parse_uniget_managers",
+    "parse_uniget_packages",
     "parse_uniget_running",
+    "parse_uniget_sources",
     "parse_uniget_updates",
+    "parse_uniget_versions",
     "read_disk_updates",
     "resolve_root",
     "run_argv",
+    "run_uniget_read",
     "search_packages",
     "shim_paths",
+    "uniget_details_argv",
+    "uniget_installed_argv",
+    "uniget_managers_argv",
+    "uniget_search_argv",
+    "uniget_sources_argv",
     "uniget_status_argv",
     "uniget_updates_argv",
+    "uniget_versions_argv",
     "validate_name",
+    "validate_package_id",
+    "validate_query",
     "validate_uniget_manager",
     "version_key",
 ]
@@ -161,6 +177,12 @@ def validate_name(name: Any, what: str = "包名") -> str:
     text = str(name or "").strip()
     if not text:
         raise PackageError(f"{what}不能为空", ErrorType.INVALID_PARAMS)
+    if text.startswith("-"):
+        # `_NAME_RE` 本身允许短横，但开头的短横会被 argv 当成选项位
+        raise PackageError(
+            f"{what}不能以 - 开头（会被当成命令行选项）: {text!r}",
+            ErrorType.INVALID_PARAMS,
+        )
     if not _NAME_RE.match(text):
         raise PackageError(
             f"{what}含非法字符: {text!r}（只允许字母/数字/点/下划线/短横/加号，"
@@ -168,6 +190,39 @@ def validate_name(name: Any, what: str = "包名") -> str:
             ErrorType.INVALID_PARAMS,
         )
     return text
+
+
+# UniGetUI 的 `--id` / `--query` 是自由文本（winget 的 id 可带点、部分安装器允许空格），
+# 不能拿 scoop 包名的字符集去卡。但这两个值会直接进 argv，所以仍要挡住开头的 `-`
+# 与控制字符——前者是选项走私，后者会把一条命令拆成两行日志。
+_UNIGET_TEXT_RE = re.compile(r"^[^\x00-\x1f\x7f]{1,200}$")
+
+
+def _validate_uniget_text(value: Any, what: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise PackageError(f"{what}不能为空", ErrorType.INVALID_PARAMS)
+    if text.startswith("-"):
+        raise PackageError(
+            f"{what}不能以 - 开头（会被当成命令行选项）: {text!r}",
+            ErrorType.INVALID_PARAMS,
+        )
+    if not _UNIGET_TEXT_RE.match(text):
+        raise PackageError(
+            f"{what}含非法字符（含控制字符或超过 200 字符）: {text[:80]!r}",
+            ErrorType.INVALID_PARAMS,
+        )
+    return text
+
+
+def validate_package_id(value: Any, what: str = "包 id") -> str:
+    """UniGetUI `package details|versions --id` 的取值校验（只收字符面，不猜格式）"""
+    return _validate_uniget_text(value, what)
+
+
+def validate_query(value: Any, what: str = "搜索关键词") -> str:
+    """UniGetUI `package search --query` 的取值校验"""
+    return _validate_uniget_text(value, what)
 
 
 def resolve_root(manager: str = "scoop") -> tuple[str | None, str]:
@@ -766,6 +821,59 @@ def uniget_updates_argv(exe: str, manager: str | None = None) -> list[str]:
     return argv
 
 
+def uniget_managers_argv(exe: str) -> list[str]:
+    """构造 `uniget manager list`：安装器及其就绪状态，不询问具体包"""
+    return [str(exe), "manager", "list"]
+
+
+def uniget_sources_argv(exe: str, manager: str | None = None) -> list[str]:
+    """构造 `uniget source list`（只读）。manager 可选，限定到单个安装器"""
+    argv = [str(exe), "source", "list"]
+    if manager:
+        argv += ["--manager", validate_uniget_manager(manager)]
+    return argv
+
+
+def uniget_search_argv(exe: str, manager: str, query: Any) -> list[str]:
+    """构造 `uniget package search --manager <id> --query <关键词>`。
+
+    实测不带 `--manager` 的搜索会以
+    `{"status":"error","message":"The operation was canceled."}` 收场（v2026.3.2），
+    所以这个入口把 manager 设成必填，由调用方明确问哪一个安装器。
+    """
+    return [
+        str(exe), "package", "search",
+        "--manager", validate_uniget_manager(manager),
+        "--query", validate_query(query),
+    ]
+
+
+def uniget_installed_argv(exe: str, manager: str) -> list[str]:
+    """构造 `uniget package installed --manager <id>`（只读）"""
+    return [
+        str(exe), "package", "installed",
+        "--manager", validate_uniget_manager(manager),
+    ]
+
+
+def uniget_details_argv(exe: str, manager: str, package_id: Any) -> list[str]:
+    """构造 `uniget package details --manager <id> --id <包 id>`（只读）"""
+    return [
+        str(exe), "package", "details",
+        "--manager", validate_uniget_manager(manager),
+        "--id", validate_package_id(package_id),
+    ]
+
+
+def uniget_versions_argv(exe: str, manager: str, package_id: Any) -> list[str]:
+    """构造 `uniget package versions --manager <id> --id <包 id>`（只读）"""
+    return [
+        str(exe), "package", "versions",
+        "--manager", validate_uniget_manager(manager),
+        "--id", validate_package_id(package_id),
+    ]
+
+
 def _parse_uniget_json(text: str, what: str) -> dict:
     data: Any
     try:
@@ -831,6 +939,288 @@ def parse_uniget_updates(text: str) -> dict:
         rows.append(row)
     rows.sort(key=lambda r: (r["manager"], r["name"].lower()))
     return {"rows": rows[:MAX_UPDATE_ROWS], "truncated": len(rows) > MAX_UPDATE_ROWS}
+
+
+def _uniget_ok(data: dict, what: str) -> dict:
+    """UniGetUI 的错误应答通常是退出码 0 的 JSON（`status=error` + `message`），
+    所以每条解析都必须先看 `status`，不能拿进程退出码当成功信号。极少数命令
+    （`package details` 的 not-found）退出码非 0，正文形状不变，失败分支会先把它
+    交给这里再决定错误类型。
+
+    `No package matching id ... was found.` 在测过的命令里是「包确实不存在」，
+    单独归到 `not_found`，让调用方知道换个 id 可能就行了。
+    """
+    if data.get("status") != "success":
+        message = str(data.get("message") or data.get("status") or "")
+        error_type = (
+            ErrorType.NOT_FOUND if "No package matching" in message
+            else ErrorType.RUNTIME_ERROR
+        )
+        raise PackageError(f"{what} 返回失败: {message}", error_type)
+    return data
+
+
+def _uniget_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _uniget_package_row(item: dict) -> dict | None:
+    """`search` / `installed` 共用的行形状：`name` 取 `id`，显示名不同才带。
+
+    与 `parse_uniget_updates` 同一约定——`id` 是能直接交给安装命令的规范标识。
+    """
+    pid = str(item.get("id") or item.get("name") or "").strip()
+    if not pid:
+        return None
+    display = str(item.get("name") or "").strip()
+    row = {
+        "manager": str(item.get("manager") or ""),
+        "name": pid,
+        "version": _uniget_text(item.get("version")),
+        "availableVersion": _uniget_text(item.get("newVersion")),
+        "source": _uniget_text(item.get("source")),
+        "upgradable": bool(item.get("isUpgradable")),
+    }
+    if display and display != pid:
+        row["displayName"] = display
+    return row
+
+
+def parse_uniget_packages(text: str, what: str = "uniget package installed") -> dict:
+    """`package search` / `package installed` 的 JSON → 行。
+
+    两条命令共用 `packages` 数组键（`updates` 用 `updates`，见
+    `parse_uniget_updates`）。成功但没有 `packages` 数组时抛错：那可能是命令
+    换了形状，读成空清单会让「装了什么」静默变成「什么都没装」。
+    """
+    data = _uniget_ok(_parse_uniget_json(text, what), what)
+    items = data.get("packages")
+    if not isinstance(items, list):
+        raise PackageError(
+            f"{what} 的成功响应里没有 packages 数组"
+            f"（顶层键: {', '.join(sorted(data)) or '无'}）",
+            ErrorType.RUNTIME_ERROR,
+        )
+    rows: list[dict] = []
+    for item in items:
+        if isinstance(item, dict):
+            row = _uniget_package_row(item)
+            if row is not None:
+                rows.append(row)
+    return {"rows": rows}
+
+
+def parse_uniget_managers(text: str) -> dict:
+    """`manager list` 的 JSON → 安装器就绪清单（不展开 capabilities 噪声）"""
+    data = _uniget_ok(_parse_uniget_json(text, "uniget manager list"),
+                      "uniget manager list")
+    items = data.get("managers")
+    if not isinstance(items, list):
+        raise PackageError(
+            "uniget manager list 的成功响应里没有 managers 数组",
+            ErrorType.RUNTIME_ERROR,
+        )
+    rows: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = _uniget_text(item.get("name"))
+        if not name:
+            continue
+        row = {
+            "name": name,
+            "displayName": _uniget_text(item.get("displayName")) or name,
+            "enabled": bool(item.get("enabled")),
+            "ready": bool(item.get("ready")),
+        }
+        executable = _uniget_text(item.get("executablePath"))
+        if executable:
+            row["executablePath"] = executable
+        rows.append(row)
+    return {"rows": rows}
+
+
+def parse_uniget_sources(text: str) -> dict:
+    """`source list` 的 JSON → 软件源清单（含是否配置/是否已知）"""
+    data = _uniget_ok(_parse_uniget_json(text, "uniget source list"),
+                      "uniget source list")
+    items = data.get("sources")
+    if not isinstance(items, list):
+        raise PackageError(
+            "uniget source list 的成功响应里没有 sources 数组",
+            ErrorType.RUNTIME_ERROR,
+        )
+    rows: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = _uniget_text(item.get("name"))
+        manager = _uniget_text(item.get("manager"))
+        if not name or not manager:
+            continue
+        count = item.get("packageCount")
+        rows.append({
+            "manager": manager,
+            "name": name,
+            "displayName": _uniget_text(item.get("displayName")) or name,
+            "url": _uniget_text(item.get("url")),
+            "packageCount": count if isinstance(count, int) else None,
+            "updateDate": _uniget_text(item.get("updateDate")),
+            "isKnown": bool(item.get("isKnown")),
+            "isConfigured": bool(item.get("isConfigured")),
+        })
+    return {"rows": rows}
+
+
+# `package details` 里返回的字段很多，这里只透传对「判断要不要装/查问题」有用的
+_UNIGET_DETAIL_TEXT_FIELDS = (
+    "description", "publisher", "author", "homepageUrl", "license", "licenseUrl",
+    "installerType", "installerUrl", "installerHash", "manifestUrl",
+    "installLocation", "releaseNotes", "releaseNotesUrl", "iconUrl", "updateDate",
+)
+_UNIGET_DETAIL_LIST_FIELDS = ("tags", "screenshots", "dependencies", "versions")
+
+
+def parse_uniget_details(text: str) -> dict:
+    """`package details` 的 JSON → 单包详情（字段白名单，不透传未知键）"""
+    data = _uniget_ok(_parse_uniget_json(text, "uniget package details"),
+                      "uniget package details")
+    item = data.get("package")
+    if not isinstance(item, dict):
+        raise PackageError(
+            "uniget package details 的成功响应里没有 package 对象",
+            ErrorType.RUNTIME_ERROR,
+        )
+    row = _uniget_package_row(item)
+    if row is None:
+        raise PackageError(
+            "uniget package details 的 package 没有 id/name",
+            ErrorType.RUNTIME_ERROR,
+        )
+    row["ignoredVersion"] = _uniget_text(item.get("ignoredVersion"))
+    size = item.get("installerSize")
+    row["installerSize"] = size if isinstance(size, int) else None
+    for key in _UNIGET_DETAIL_TEXT_FIELDS:
+        row[key] = _uniget_text(item.get(key))
+    for key in _UNIGET_DETAIL_LIST_FIELDS:
+        value = item.get(key)
+        row[key] = value if isinstance(value, list) else []
+    return {"package": row}
+
+
+# 单个包的版本历史不该无限回传（chocolatey 上有的包几十个版本）
+MAX_VERSION_ROWS = 200
+
+
+def parse_uniget_versions(text: str) -> dict:
+    """`package versions` 的 JSON → 版本字符串列表（scoop 实测返回空数组，合法）"""
+    data = _uniget_ok(_parse_uniget_json(text, "uniget package versions"),
+                      "uniget package versions")
+    items = data.get("versions")
+    if not isinstance(items, list):
+        raise PackageError(
+            "uniget package versions 的成功响应里没有 versions 数组",
+            ErrorType.RUNTIME_ERROR,
+        )
+    versions = [str(v).strip() for v in items if str(v).strip()]
+    return {
+        "versions": versions[:MAX_VERSION_ROWS],
+        "count": len(versions),
+        "truncated": len(versions) > MAX_VERSION_ROWS,
+    }
+
+
+async def run_uniget_read(
+    make_argv: Callable[[str], list[str]],
+    timeout: int = DEFAULT_TIMEOUT,
+    *,
+    parse: Any = None,
+) -> dict:
+    """跑一条 UniGetUI 只读命令：定位 → `status` 探会话 → 执行 → 解析。
+
+    四条约束来自真机（v2026.3.2，2026-10-31 复核）：
+
+    - 数据命令必须连一个活会话；没有 token 时它会把参数转给 `UniGetUI.exe`
+      冷启动 GUI。所以先发 `status`（唯一不需要 token 的命令），
+      `running=false` 就**不再发第二条**；
+    - 外部查询会 spawn 底层安装器并联网，`timeout` 要原样传给两条命令；
+    - 输出是 JSON，用 `UNIGET_OUTPUT_MAX_CHARS` 而不是默认 4000，仍被截时
+      要报「被截断」并给出缩小范围的下一步，不能把半个 JSON 读成空清单；
+    - 错误应答通常也是退出码 0 的 JSON，解析器负责看 `status`；个别命令
+      （`package details` 的 not-found 实测退出码 2）退出码非 0，但正文仍是
+      同形状 JSON，所以失败分支也先尝试解析再归类。
+
+    `parse` 失败同样收敛成 `{available: False, phase: "parse"}`，把
+    「命令跑通了但形状不对」与「命令根本没跑」分开，调用方才能给出对应错误类型。
+    """
+    exe, exe_source = locate_uniget_cli()
+    if exe is None:
+        return {"available": False, "exe": None, "phase": "locate",
+                "reason": exe_source, "data": None,
+                "errorType": ErrorType.INSTALL_REQUIRED}
+
+    argv = make_argv(exe)
+
+    status = await run_argv(uniget_status_argv(exe), timeout)
+    if not status["ok"]:
+        return {
+            "available": False, "exe": exe, "phase": "status", "data": None,
+            "errorType": ErrorType.CONNECTION_ERROR,
+            "reason": f"uniget status 未成功（退出码 {status['exitCode']}"
+            + ("，已超时终止" if status["timedOut"] else "")
+            + f"）: {status['stderr'][:200]}",
+        }
+    try:
+        running = parse_uniget_running(status["stdout"])
+    except PackageError as exc:
+        return {"available": False, "exe": exe, "phase": "status",
+                "reason": str(exc), "data": None, "errorType": exc.error_type}
+    if not running:
+        return {
+            "available": False, "exe": exe, "phase": "status", "data": None,
+            "errorType": ErrorType.CONNECTION_ERROR,
+            "reason": "UniGetUI 会话未运行（status 返回 running=false）；"
+            "不代为冷启动它的窗口，需要外部口径请启动 UniGetUI 后重试",
+        }
+
+    command = "uniget " + " ".join(argv[1:])
+    run = await run_argv(argv, timeout, max_output=UNIGET_OUTPUT_MAX_CHARS)
+    if not run["ok"]:
+        # 退出码不是可靠的成败信号：`package details` 的 not-found 实测退出码 2，
+        # 正文却仍是 `status=error` 的同形状 JSON。能解析就沿用解析器的分类
+        # （not_found / runtime_error），解析不了才按进程失败归类。
+        error_type = ErrorType.RUNTIME_ERROR
+        try:
+            _uniget_ok(_parse_uniget_json(run["stdout"], command), command)
+        except PackageError as exc:
+            error_type = exc.error_type
+        return {
+            "available": False, "exe": exe, "phase": "query", "data": None,
+            "errorType": error_type,
+            "reason": f"{command} 未成功（退出码 {run['exitCode']}"
+            + ("，已超时终止" if run["timedOut"] else "")
+            + f"）: {(run['stdout'] or run['stderr'])[:200]}",
+        }
+    if run.get("stdoutTruncated"):
+        return {
+            "available": False, "exe": exe, "phase": "parse", "data": None,
+            "errorType": ErrorType.RUNTIME_ERROR,
+            "reason": f"{command} 输出超过 {UNIGET_OUTPUT_MAX_CHARS} 字符被截断；"
+            "可用 manager 限定单个安装器后重试",
+        }
+    if parse is None:
+        return {"available": True, "exe": exe, "phase": None,
+                "reason": None, "data": run["stdout"], "errorType": None}
+    try:
+        data = parse(run["stdout"])
+    except PackageError as exc:
+        return {"available": False, "exe": exe, "phase": "parse",
+                "reason": str(exc), "data": None, "errorType": exc.error_type}
+    return {"available": True, "exe": exe, "phase": None, "reason": None,
+            "data": data, "errorType": None}
 
 
 def install_argv(root: str, name: str) -> list[str]:

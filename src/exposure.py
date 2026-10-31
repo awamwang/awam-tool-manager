@@ -6,8 +6,8 @@
   `list_tools → list_capabilities → call_capability`；
 - `default`：在 lazy 之上补 7 个意图级前门工具（文件搜索、打开路径、打开应用、
   Steam 游戏、启动器动作），模型看到工具名就知道能力存在；
-- `full`：再补 5 个低频/执行面工具（文件元信息、Everything 状态、winget 搜索与安装、
-  包升级查询）。
+- `full`：再补 9 个低频/执行面工具（文件元信息、Everything 状态、winget 搜索与安装、
+  包升级查询，以及 4 个 UniGetUI 只读查询工具）。
 
 模式在进程启动时解析一次（MCP 客户端需重连才会拿到新的 tools/list）。
 优先级：`EXPOSURE_MODE` 环境变量 > `data/exposure.json` 的 `mode` > `lazy`。
@@ -113,6 +113,10 @@ _FAMILIES: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("search_winget_packages", "用 winget 搜索可安装/可升级的包"),
             ("install_winget_package", "用 winget 安装或升级包；需 execute=true 且 allowDestructive=true"),
             ("check_package_updates", "查哪些包有可用更新；默认读 scoop 盘上的版本差集，execute=true 才问 UniGetUI"),
+            ("list_package_managers", "列出 UniGetUI 能驱动的安装器及就绪状态；需 UniGetUI 在运行"),
+            ("search_uniget_packages", "在指定安装器的远端索引里搜可安装包；manager 必填，需 UniGetUI 在运行"),
+            ("list_uniget_packages", "列出指定安装器里已安装的包；manager 必填，需 UniGetUI 在运行"),
+            ("get_package_details", "查单个包的详情与版本历史；manager + package 必填，需 UniGetUI 在运行"),
         ),
     ),
     (

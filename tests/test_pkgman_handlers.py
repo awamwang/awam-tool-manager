@@ -589,3 +589,256 @@ def test_check_updates_without_either_source_is_install_required(tmp_path, monke
     err = _err(exc)
     assert err["errorType"] == "install_required"
     assert "SCOOP" in err["error"] and "没找到 uniget.exe" in err["error"]
+
+
+# ---- UniGetUI 只读意图工具（2026-10-31）----
+
+_DEFAULT_UNIGET_RESPONSES = {
+    "manager list": {
+        "status": "success",
+        "managers": [
+            {"name": "scoop", "displayName": "Scoop", "enabled": True, "ready": True,
+             "executablePath": "S:\\Libs\\Scoop\\shims\\scoop.cmd"},
+            {"name": "winget", "displayName": "WinGet", "enabled": True, "ready": False,
+             "executablePath": ""},
+            {"name": "dotnet-tool", "displayName": ".NET Tool", "enabled": True,
+             "ready": False, "executablePath": ""},
+        ],
+    },
+    "source list": {
+        "status": "success",
+        "sources": [
+            {"manager": "scoop", "name": "extras", "displayName": "Scoop: extras",
+             "url": "https://github.com/ScoopInstaller/Extras", "packageCount": 2449,
+             "updateDate": "2026-10-31 16:24:39", "isKnown": True, "isConfigured": True},
+        ],
+    },
+    "package search": {
+        "status": "success",
+        "packages": [
+            {"name": "7-Zip", "id": "7zip.7zip", "version": "26.05", "newVersion": "",
+             "source": "WinGet: winget", "manager": "winget", "isUpgradable": False},
+            {"name": "7-Zip Beta", "id": "7zip-beta", "version": "26.00", "newVersion": "",
+             "source": "Scoop: versions", "manager": "winget", "isUpgradable": False},
+        ],
+    },
+    "package installed": {
+        "status": "success",
+        "packages": [
+            {"name": "7zip", "id": "7zip", "version": "25.01", "newVersion": "",
+             "source": "Scoop: main", "manager": "scoop", "isUpgradable": False},
+            {"name": "Age", "id": "age", "version": "1.3.2", "newVersion": "",
+             "source": "Scoop: extras", "manager": "scoop", "isUpgradable": False},
+        ],
+    },
+    "package details": {
+        "status": "success",
+        "package": {
+            "name": "7zip", "id": "7zip", "version": "25.01", "newVersion": "",
+            "source": "Scoop: main", "manager": "scoop",
+            "description": "A multi-format file archiver", "author": "7-zip",
+            "homepageUrl": "https://www.7-zip.org/", "license": "LGPL-2.1-or-later",
+            "installerType": "Scoop 软件包", "installerSize": 1996800,
+            "installLocation": "S:\\Libs\\Scoop\\apps\\7zip\\current",
+            "tags": [], "screenshots": [], "dependencies": [], "versions": [],
+        },
+    },
+    "package versions": {
+        "status": "success",
+        "versions": ["26.05", "25.01"],
+    },
+}
+
+
+def _fake_uniget_surface(monkeypatch, *, exe=FAKE_EXE, running=True,
+                         responses=None, error_commands=()):
+    """按子命令（`arg 1-2`）脚本化应答；`status` 永远先走会话探针。"""
+    calls: list[dict] = []
+    payloads = {**_DEFAULT_UNIGET_RESPONSES, **(responses or {})}
+
+    async def _run(argv, timeout=None, max_output=pkgman.OUTPUT_MAX_CHARS):
+        command = "status" if argv[-1] == "status" else " ".join(argv[1:3])
+        calls.append({"argv": list(argv), "timeout": timeout,
+                      "maxOutput": max_output, "command": command})
+        if command == "status":
+            stdout = json.dumps({"running": running})
+        elif command in error_commands:
+            stdout = json.dumps(
+                {"status": "error", "message": "The operation was canceled."}
+            )
+        else:
+            stdout = json.dumps(payloads[command])
+        return {"ok": True, "exitCode": 0, "timedOut": False,
+                "stdoutTruncated": False, "stdout": stdout, "stderr": ""}
+
+    monkeypatch.setattr(pkgman, "run_argv", _run)
+    monkeypatch.setattr(pkgman, "locate_uniget_cli", lambda: (exe, "test: 单测入口"))
+    return calls
+
+
+def test_list_package_managers_returns_readiness_and_optional_sources(tmp_path, monkeypatch):
+    calls = _fake_uniget_surface(monkeypatch)
+    res = run(tool_specs._handle_list_package_managers({}, _ctx(tmp_path)))
+    assert res["source"] == "uniget" and res["count"] == 3
+    assert res["readyCount"] == 1
+    assert [m["name"] for m in res["managers"]] == ["scoop", "winget", "dotnet-tool"]
+    assert "sources" not in res, "默认不要软件源"
+    assert [c["command"] for c in calls] == ["status", "manager list"]
+
+    res = run(tool_specs._handle_list_package_managers(
+        {"include_sources": True}, _ctx(tmp_path)
+    ))
+    assert res["sourceCount"] == 1
+    assert res["sources"][0]["name"] == "extras"
+
+
+def test_list_package_managers_sources_failure_does_not_fail_the_call(tmp_path, monkeypatch):
+    _fake_uniget_surface(monkeypatch, error_commands={"source list"})
+    res = run(tool_specs._handle_list_package_managers(
+        {"include_sources": True}, _ctx(tmp_path)
+    ))
+    assert res["count"] == 3, "安装器清单已经拿到了"
+    assert "The operation was canceled." in res["sourcesUnavailable"]
+    assert "sources" not in res
+
+
+@pytest.mark.parametrize("args", [
+    {"keyword": "7zip"},
+    {"manager": "--elevated", "keyword": "7zip"},
+    {"manager": "winget", "keyword": "--query"},
+])
+def test_search_uniget_rejects_bad_params_without_spawning(tmp_path, monkeypatch, args):
+    _spawn_forbidden(monkeypatch, pkgman, "run_argv")
+    with pytest.raises(ToolError) as exc:
+        run(tool_specs._handle_search_uniget_packages(args, _ctx(tmp_path)))
+    assert _err(exc)["errorType"] == "invalid_params"
+
+
+def test_search_uniget_passes_manager_query_and_limit(tmp_path, monkeypatch):
+    calls = _fake_uniget_surface(monkeypatch)
+    res = run(tool_specs._handle_search_uniget_packages(
+        {"manager": "Winget", "keyword": "7zip", "limit": 1}, _ctx(tmp_path)
+    ))
+    assert calls[1]["argv"] == [
+        FAKE_EXE, "package", "search", "--manager", "winget", "--query", "7zip",
+    ]
+    assert res["manager"] == "winget"
+    assert res["keyword"] == "7zip"
+    assert res["count"] == 2 and res["returned"] == 1 and res["truncated"] is True
+    assert res["packages"][0]["name"] == "7zip.7zip"
+    assert res["packages"][0]["displayName"] == "7-Zip"
+
+
+def test_list_uniget_packages_sorts_by_id_and_limits(tmp_path, monkeypatch):
+    _fake_uniget_surface(monkeypatch)
+    res = run(tool_specs._handle_list_uniget_packages(
+        {"manager": "scoop", "limit": 1}, _ctx(tmp_path)
+    ))
+    assert res["count"] == 2
+    assert [p["name"] for p in res["packages"]] == ["7zip"]
+    assert res["truncated"] is True
+
+
+def test_get_package_details_includes_versions_by_default(tmp_path, monkeypatch):
+    calls = _fake_uniget_surface(monkeypatch)
+    res = run(tool_specs._handle_get_package_details(
+        {"manager": "scoop", "package": "7zip"}, _ctx(tmp_path)
+    ))
+    assert res["package"] == "7zip"
+    assert res["details"]["installerSize"] == 1996800
+    assert res["versions"] == ["26.05", "25.01"]
+    assert res["versionCount"] == 2 and res["versionsTruncated"] is False
+    assert [c["command"] for c in calls] == [
+        "status", "package details", "status", "package versions",
+    ]
+
+
+def test_get_package_details_can_skip_versions(tmp_path, monkeypatch):
+    calls = _fake_uniget_surface(monkeypatch)
+    res = run(tool_specs._handle_get_package_details(
+        {"manager": "scoop", "package": "7zip", "include_versions": False},
+        _ctx(tmp_path),
+    ))
+    assert "versions" not in res and "versionCount" not in res
+    assert [c["command"] for c in calls] == ["status", "package details"]
+
+
+def test_get_package_details_versions_failure_is_nonfatal(tmp_path, monkeypatch):
+    _fake_uniget_surface(monkeypatch, error_commands={"package versions"})
+    res = run(tool_specs._handle_get_package_details(
+        {"manager": "scoop", "package": "7zip"}, _ctx(tmp_path)
+    ))
+    assert res["details"]["name"] == "7zip", "详情已拿到，版本历史失败只降级"
+    assert "The operation was canceled." in res["versionsUnavailable"]
+    assert "versions" not in res
+
+
+def test_get_package_details_unknown_id_maps_to_not_found(tmp_path, monkeypatch):
+    payload = {"package details": {
+        "status": "error",
+        "message": 'No package matching id "nope" was found.',
+    }}
+    _fake_uniget_surface(monkeypatch, responses=payload)
+    with pytest.raises(ToolError) as exc:
+        run(tool_specs._handle_get_package_details(
+            {"manager": "scoop", "package": "nope"}, _ctx(tmp_path)
+        ))
+    err = _err(exc)
+    assert err["errorType"] == "not_found"
+    assert err["phase"] == "parse"
+
+
+def test_uniget_readonly_tools_do_not_need_scoop_on_disk(tmp_path, monkeypatch):
+    """外部口径成立时不碰 scoop 根目录：本机没装 scoop 也能查 winget"""
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("UniGetUI 口径可用时不该走读盘层")
+
+    monkeypatch.setattr(pkgman, "resolve_root", _boom)
+    _fake_uniget_surface(monkeypatch)
+    ctx = _ctx(tmp_path)
+    for handler, args in (
+        (tool_specs._handle_list_package_managers, {}),
+        (tool_specs._handle_search_uniget_packages,
+         {"manager": "winget", "keyword": "7zip"}),
+        (tool_specs._handle_list_uniget_packages, {"manager": "scoop"}),
+        (tool_specs._handle_get_package_details,
+         {"manager": "scoop", "package": "7zip"}),
+    ):
+        res = run(handler(args, ctx))
+        assert res["success"] is True
+
+
+@pytest.mark.parametrize("handler, args", [
+    (tool_specs._handle_list_package_managers, {}),
+    (tool_specs._handle_search_uniget_packages,
+     {"manager": "winget", "keyword": "7zip"}),
+    (tool_specs._handle_list_uniget_packages, {"manager": "scoop"}),
+    (tool_specs._handle_get_package_details,
+     {"manager": "scoop", "package": "7zip"}),
+])
+def test_uniget_readonly_tools_require_a_live_session(tmp_path, monkeypatch, handler, args):
+    calls = _fake_uniget_surface(monkeypatch, running=False)
+    with pytest.raises(ToolError) as exc:
+        run(handler(args, _ctx(tmp_path)))
+    err = _err(exc)
+    assert err["errorType"] == "connection_error"
+    assert err["phase"] == "status"
+    assert "running=false" in err["error"]
+    assert [c["command"] for c in calls] == ["status"], "无会话时不许再发第二条"
+
+
+@pytest.mark.parametrize("handler, args", [
+    (tool_specs._handle_list_package_managers, {}),
+    (tool_specs._handle_list_uniget_packages, {"manager": "scoop"}),
+])
+def test_uniget_readonly_tools_missing_cli_is_install_required(tmp_path, monkeypatch,
+                                                               handler, args):
+    _spawn_forbidden(monkeypatch, pkgman, "run_argv")
+    monkeypatch.setattr(pkgman, "locate_uniget_cli", lambda: (None, "没找到 uniget.exe"))
+    with pytest.raises(ToolError) as exc:
+        run(handler(args, _ctx(tmp_path)))
+    err = _err(exc)
+    assert err["errorType"] == "install_required"
+    assert err["phase"] == "locate"
+    assert "没找到 uniget.exe" in err["error"]
