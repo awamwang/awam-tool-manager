@@ -3,6 +3,7 @@
 统一工具管理的 MCP 服务，提供工具搜索、列出、启动等能力。
 """
 
+import argparse
 import asyncio
 import contextlib
 import json
@@ -69,6 +70,10 @@ import exposure
 # P3 使用统计：dispatch 出口记一行。**按模块引用**（不是 import 函数名），
 # 单测才能 monkeypatch `usage.USAGE_LOG` 把统计写进 tmp。
 import usage
+# 可选 Streamable HTTP transport：默认 stdio，`--transport http` 才启用。
+# 模块本身不 import uvicorn/starlette（在 serve_http 内延迟导入），stdio
+# 路径不会因为少装 HTTP 依赖而启动失败。
+import http_transport
 
 # 数据目录：DATA_DIR 放人写的声明（进版本库），RUNTIME_DIR 放程序生成的
 # 运行时数据（本机应用数据目录）。两者此前混在 data/ 下，导致活实例改写
@@ -513,8 +518,19 @@ async def _restore_backends():
         log(f"状态恢复失败（不影响服务）: {type(e).__name__}: {e}")
 
 
-async def main():
-    """启动 MCP Server"""
+async def main(
+    transport: str | None = None,
+    host: str | None = None,
+    port: int | None = None,
+):
+    """启动 MCP Server（默认 stdio；可切 Streamable HTTP）"""
+    transport = http_transport.normalize_transport(transport)
+    http_config = None
+    if transport == "http":
+        # 配置在启动日志之前解析：非法 host/port/token 直接失败，不打印
+        # 一份「看起来要启动」的日志再崩。
+        http_config = http_transport.resolve_http_config(RUNTIME_DIR, host=host, port=port)
+
     log("=" * 50)
     log("awam-tool-manager MCP Server 启动中...")
     log(f"数据目录: {DATA_DIR}")
@@ -524,6 +540,14 @@ async def main():
         f"（本次下发 {len(exposure.exposed_tool_names(EXPOSURE_MODE))} 个工具；"
         f"可选: {', '.join(exposure.MODES)}）"
     )
+    if http_config:
+        log(
+            "传输方式: Streamable HTTP"
+            f"（{http_config.host}:{http_config.port}{http_transport.MCP_PATH}，"
+            f"token 来源: {http_config.token_source}）"
+        )
+    else:
+        log("传输方式: stdio")
 
     # 旧版本把运行时数据写在仓库里（data/backend-tools、data/launcher-actions、
     # 根目录的 backend_desired_state.json），这里搬到运行时目录。只搬目标不存在的，
@@ -549,12 +573,15 @@ async def main():
     restore_task = asyncio.create_task(_restore_backends())
 
     try:
-        async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
-            await app.run(
-                read_stream,
-                write_stream,
-                app.create_initialization_options()
-            )
+        if http_config:
+            await http_transport.serve_http(app, http_config, log=log)
+        else:
+            async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
+                await app.run(
+                    read_stream,
+                    write_stream,
+                    app.create_initialization_options()
+                )
     finally:
         for task in (prewarm_task, restore_task):
             task.cancel()
@@ -565,9 +592,59 @@ async def main():
         log("清理完成")
 
 
+def _parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="server.py",
+        description="awam-tool-manager MCP Server（默认 stdio，可选 Streamable HTTP）",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=http_transport.TRANSPORTS,
+        default=None,
+        help="传输方式；未指定时读 AWAM_TRANSPORT，再缺省为 stdio",
+    )
+    parser.add_argument(
+        "--host",
+        default=None,
+        help="HTTP 监听地址（默认读 AWAM_HTTP_HOST，再缺省 127.0.0.1）",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="HTTP 监听端口（默认读 AWAM_HTTP_PORT，再缺省 8766）",
+    )
+    parser.add_argument(
+        "--print-token",
+        action="store_true",
+        help="打印 HTTP transport 使用的 token 后退出（不启动服务）",
+    )
+    return parser.parse_args(argv)
+
+
 if __name__ == "__main__":
+    args = _parse_args()
     try:
-        asyncio.run(main())
+        if args.print_token:
+            transport = http_transport.normalize_transport(args.transport)
+            if transport != "http":
+                raise http_transport.HttpConfigError(
+                    "--print-token 只适用于 HTTP transport（加 --transport http）"
+                )
+            config = http_transport.resolve_http_config(
+                RUNTIME_DIR, host=args.host, port=args.port
+            )
+            print(config.token)
+        else:
+            asyncio.run(
+                main(transport=args.transport, host=args.host, port=args.port)
+            )
+    except http_transport.HttpConfigError as e:
+        log(f"配置错误: {e}")
+        sys.exit(2)
+    except http_transport.HttpTransportError as e:
+        log(f"启动失败: {e}")
+        sys.exit(1)
     except Exception as e:
         log(f"服务异常退出: {e}")
         raise

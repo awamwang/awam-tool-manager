@@ -17,10 +17,26 @@ pip install -r requirements.txt
 
 ```bash
 cd src
-python server.py
+python server.py                  # 默认 stdio
+python server.py --transport http # 单实例常驻 HTTP（127.0.0.1:8766/mcp）
 ```
 
+HTTP 模式默认只监听回环地址，并要求 Bearer token：
+
+```bash
+# token 来源优先级：--print-token 读取的文件 > AWAM_HTTP_TOKEN 环境变量
+python server.py --transport http --print-token
+# 默认 token 文件：%LOCALAPPDATA%\.awam-tool-manager\http-token
+```
+
+- 单实例：同一端口上第二个实例会启动失败并给出明确错误（端口预绑定，不靠锁文件）。
+- 非回环地址必须显式设 `AWAM_HTTP_ALLOW_REMOTE=1`；本服务能启动本机程序，不要随手暴露到局域网。
+- 暴露模式仍是进程级：一个实例只服务一种 `EXPOSURE_MODE`。
+- 其余配置：`AWAM_HTTP_HOST`、`AWAM_HTTP_PORT`、`AWAM_HTTP_TOKEN`；`/health` 免鉴权，供探活。
+
 ### 在 MCP 客户端中配置
+
+stdio：
 
 ```json
 {
@@ -28,6 +44,21 @@ python server.py
     "awam-tool-manager": {
       "command": "python",
       "args": ["G:\\Projects\\19AI\\skills\\awam-tool-manager\\src\\server.py"]
+    }
+  }
+}
+```
+
+Streamable HTTP（字段名以客户端为准）：
+
+```json
+{
+  "mcpServers": {
+    "awam-tool-manager": {
+      "url": "http://127.0.0.1:8766/mcp",
+      "headers": {
+        "Authorization": "Bearer <http-token>"
+      }
     }
   }
 }
@@ -53,6 +84,7 @@ data/                  # 仓库内只有人工维护的真相源（A14 起）
 └── tools/             # 工具条目，每个工具一个 JSON
 src/
 ├── server.py          # MCP Server 入口
+├── http_transport.py  # 可选 Streamable HTTP transport（stdio 仍是默认）
 ├── store.py           # JSON 存储层（tools 走仓库，缓存走运行时目录）
 ├── registry.py        # 工具注册中心
 ├── backend_client.py  # MCP 运行时客户端与连接池

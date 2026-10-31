@@ -17,7 +17,10 @@ description: 统一工具管理器，维护本机工具名单，提供统一的�
 - **筛选查询**：`list_tools` / `search_tools` 除 `kind` 外还可按 `status`（安装状态，
   精确匹配，条目未写时按 `installed` 计）与 `publisher`（发布者，子串、大小写不敏感）
   收窄，多个维度取交集
-- **MCP 服务**：作为 MCP Server 暴露给 AI 客户端（stdio 模式）
+- **MCP 服务**：作为 MCP Server 暴露给 AI 客户端。默认 stdio；传
+  `--transport http` 时改为单实例常驻的 Streamable HTTP（`/mcp` + Bearer token，
+  默认只监听 `127.0.0.1:8766`，`/health` 免鉴权）。同一端口只能有一个实例；
+  非回环地址需显式设 `AWAM_HTTP_ALLOW_REMOTE=1`
 - **暴露模式**：`EXPOSURE_MODE` 控制 `tools/list` 的切片与
   `initialize.instructions` 的能力清单——`lazy`（默认，19 个管理工具与能力路由工具，长尾走
   `list_capabilities → call_capability`）、`default`（26 个，补 7 个高频意图工具）、
@@ -90,7 +93,8 @@ awam-tool-manager/
 │   ├── tools/                # 工具条目（每个工具一个 JSON）
 │   └── discovery.json        # 发现候选清单（discover_tools 的声明源）
 ├── src/
-│   ├── server.py             # MCP Server 入口 + 对外工具定义 + 分发
+│   ├── server.py             # MCP Server 入口（stdio / Streamable HTTP）
+│   ├── http_transport.py     # 可选 HTTP transport：配置、鉴权、单实例端口绑定
 │   ├── store.py              # JSON 存储层（tools 走仓库，缓存走运行时目录）
 │   ├── registry.py           # 工具注册中心（查询语义）
 │   ├── backend_client.py     # MCP 运行时客户端与连接池
@@ -113,7 +117,8 @@ awam-tool-manager/
 %LOCALAPPDATA%/.awam-tool-manager/
 ├── backend-tools/        # MCP 能力缓存（自动生成）
 ├── launcher-actions/     # 启动器动作清单缓存（自动生成）
-└── desired/              # 运行时启动意图（每工具一个文件，A10 跨世代自愈用）
+├── desired/              # 运行时启动意图（每工具一个文件，A10 跨世代自愈用）
+└── http-token            # HTTP transport 的 Bearer token（首次 HTTP 启动时生成）
 ```
 
 > 早期版本曾有 `data/launchers/`（启动器配置）与 `src/adapters/`（启动器适配器），

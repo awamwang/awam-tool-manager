@@ -26,7 +26,10 @@
 > `BackendManager` 仅作为内部实现类名保留，错误类型 `backend_busy` /
 > `backend_installing` 也保留以兼容既有审计与测试。
 
-运行形态：**stdio 模式的 MCP Server**（`python src/server.py`），由 AI 客户端（如 WorkBuddy）拉起。
+运行形态：**默认 stdio 模式的 MCP Server**（`python src/server.py`），由 AI 客户端（如 WorkBuddy）拉起。
+同一入口可选 **Streamable HTTP**（`--transport http`），作为单实例常驻服务监听
+`127.0.0.1:8766/mcp`，用于多个宿主共用一份运行时；两种 transport 共用同一套
+工具声明、路由与存储层，见 §5.5。
 
 ---
 
@@ -91,7 +94,8 @@ awam-tool-manager/
 │       ├── quicker.json               (kind=launcher)
 │       └── utools.json                (kind=launcher)
 ├── src/
-│   ├── server.py             # MCP Server 入口：协议装配 + 薄分发 + 生命周期
+│   ├── server.py             # MCP Server 入口：协议装配 + 薄分发 + 生命周期（stdio / HTTP 分支）
+│   ├── http_transport.py     # 可选 Streamable HTTP：配置、token、单实例端口绑定、Bearer 鉴权
 │   ├── tool_specs.py         # 对外 MCP 工具声明式注册表（SSOT：31 条 spec + handlers）
 │   ├── capabilities.py       # Provider / Capability / Runtime 路由层
 │   ├── policy.py             # 破坏性门禁统一判定（decide_destructive + 结构化审计）
@@ -508,6 +512,26 @@ toolport 网关会**周期性整池回收**它拉起的 server 进程（2026-10-
   恢复时会再起一个（stdio 后端无端口冲突，可共存）；要「永不重启」需把后端
   生命周期移出网关控制的 server 进程（外部 supervisor），属于后续架构演进。
 
+### 5.5 传输层：stdio / Streamable HTTP
+
+默认 stdio，行为与历史版本一致；`--transport http`（或 `AWAM_TRANSPORT=http`）
+改走 `http_transport.py`：`StreamableHTTPSessionManager` + Starlette + uvicorn。
+
+| 项 | 取值 / 行为 |
+|---|---|
+| MCP 端点 | `POST/GET/DELETE /mcp` |
+| 探活 | `GET /health`，免鉴权 |
+| 监听地址 | 默认 `127.0.0.1:8766`；非回环地址必须显式设 `AWAM_HTTP_ALLOW_REMOTE=1` |
+| 鉴权 | `Authorization: Bearer <token>`；token 优先 `AWAM_HTTP_TOKEN`，否则运行时目录 `http-token`（首次生成） |
+| 单实例 | 启动前**预绑定端口**，不设 `SO_REUSEADDR`（Windows 上它会允许重复绑定）；第二个实例直接失败 |
+| 暴露模式 | 进程级，一个 HTTP 实例只服务一种 `EXPOSURE_MODE` |
+| 共享状态 | 两种 transport 共用 `registry` / `store` / `backend_manager` / `launcher_manager`；HTTP 常驻可消除多宿主各 spawn 一份 manager 的重复运行时 |
+| 生命周期 | uvicorn lifespan 内运行 session manager；退出时取消预热/恢复任务并 `backend_manager.close_all()` |
+
+> 单实例的边界：端口预绑定只约束「同一端口」。换端口仍可起第二个实例，
+> 且它会与第一个共享运行时目录里的期望状态与缓存；需要严格单实例时固定
+> 端口并只允许一个启动入口。
+
 ---
 
 ## 6. 对外 MCP 契约（实际实现）
@@ -580,7 +604,8 @@ toolport 网关会**周期性整池回收**它拉起的 server 进程（2026-10-
 ### 7.1 启动流程
 
 ```
-python src/server.py
+python src/server.py [--transport http] [--host 127.0.0.1] [--port 8766]
+  → 解析 transport（CLI > AWAM_TRANSPORT > stdio）；HTTP 模式先解析 host/port/token
   → 计算 DATA_DIR = <项目根>/data（仅工具条目）
   → 计算 RUNTIME_DIR = %LOCALAPPDATA%\.awam-tool-manager（AWAM_RUNTIME_DIR 可覆盖）
   → migrate_legacy_runtime()：旧路径的缓存/意图文件迁入运行时目录（一次性）
@@ -589,7 +614,8 @@ python src/server.py
   → 打印已加载工具数量到 stderr
   → 创建后台任务 _prewarm_backends()：为各后端装好缺失的依赖（只装不启，异常全吞）
   → 创建后台任务 _restore_backends()：按期望状态文件恢复上次运行过的后端（A10 跨世代自愈，异常全吞）
-  → stdio_server() → app.run() 事件循环
+  → stdio：stdio_server() → app.run()
+  → HTTP：预绑定端口 → uvicorn + StreamableHTTPSessionManager（lifespan 内 run）
   → finally: 取消预热/恢复任务 → backend_manager.close_all()
 ```
 
