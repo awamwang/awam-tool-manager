@@ -50,7 +50,7 @@
 - 手工往 `data/tools/` 增删 JSON
 
 后果：客户端缓存的 `tools/list` 结果过期。虽然本 Server 的**顶层工具集按暴露模式固定**
-（lazy 19 / default 26 / full 31），能力目录又是透过 `list_capabilities` 动态查询的，因此实际影响有限，
+（lazy 19 / default 26 / full 35），能力目录又是透过 `list_capabilities` 动态查询的，因此实际影响有限，
 但严格来说属于未履行的协议约定。
 
 建议：若未来顶层工具集变为动态，务必补 `app.request_context.session.send_notifications...`。

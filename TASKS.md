@@ -32,7 +32,7 @@
 - [x] MCP Server 入口（server.py）：stdio 模式
 - [x] 日志系统（输出到 stderr，不污染协议通道）
 
-### 对外 MCP 工具（lazy 19 个；default 26 / full 31）
+### 对外 MCP 工具（lazy 19 个；default 26 / full 35）
 - [x] `search_tools` - 搜索工具（关键词 + `kind` / `status` / `publisher` 筛选）
 - [x] `list_tools` - 列出所有工具（同上三个筛选维度，见「筛选维度增强」）
 - [x] `get_tool_info` - 查看工具详情
@@ -51,6 +51,9 @@
 - [x] `check_package_updates` - 第 5 个 full 补充工具（2026-10-24），查「哪些包有可用更新」：
       默认零 spawn（scoop 已装版本 vs 本地 bucket 索引版本），`execute=true` 才问 UniGetUI，
       见「包升级查询与 UniGetUI 外部口径」小节
+- [x] UniGetUI 只读查询 4 工具（2026-10-31，full）：`list_package_managers` /
+      `search_uniget_packages` / `list_uniget_packages` / `get_package_details`；
+      安装 / 升级 / 卸载 / 提权不在本期内，见「UniGetUI 只读查询面」小节
 
 ### 协议合规
 - [x] 后端工具参数名统一为 `tool_id`（移除历史遗留的 mcp_tool_id / launcher_id）
@@ -1126,6 +1129,46 @@
       本机 UniGetUI 常驻，为了测试去关掉用户的 GUI 不在授权范围内。
       真机第一跑意外验证过**另一条**降级（解析失败 → `engine=read_disk` + 理由原样带回）
 
+### UniGetUI 只读查询面（full，2026-10-31）
+- [x] **范围先划死**：只做只读查询——`status` / `manager list` / `source list` /
+      `package search|installed|details|versions|updates`。安装 / 升级 / 卸载 /
+      操作等待 / 提权一律不做；UniGetUI 仍是瘦客户端，不是包管理后端，
+      scoop 读盘口径的默认值不变
+- [x] **4 个意图工具**（全部 `exposure=("full",)`）：
+      `list_package_managers`（可选 `include_sources`）、`search_uniget_packages`
+      （`manager`+`keyword` 必填）、`list_uniget_packages`（`manager` 必填，默认 50 条）、
+      `get_package_details`（`manager`+`package` 必填，默认带版本历史）。
+      注解统一 `openWorldHint=true` + `destructiveHint=false`，**不声明
+      `readOnlyHint`**——查询会 spawn 底层安装器并联网，声称只读是不诚实的
+- [x] **一条通路 `run_uniget_read`**：定位 → `status` 探会话 → 数据命令 → 解析。
+      `running=false` 绝不发第二条（第二条会冷启动 GUI）；`timeout` 同时传给探针与
+      数据命令；JSON 输出抬到 `UNIGET_OUTPUT_MAX_CHARS`，仍被截时报「被截断」
+      并给缩小范围的下一步
+- [x] **失败相位可行动**：`locate` → `install_required`、`status` → `connection_error`、
+      `query`/`parse` → `runtime_error`；解析器识别 `No package matching` 归 `not_found`。
+      UniGetUI 的失败应答**多数**是退出码 0 的 `status=error` JSON，但 `package details`
+      的 not-found 实测退出码 2、正文形状不变——失败分支因此先尝试解析正文再归类，
+      不能拿退出码当判据（真机验收发现并修复，原实现把它误判成 `runtime_error`）
+- [x] **参数面**：`manager` 只认 17 个稳定 id；`package` / `keyword` 是自由文本但仍挡
+      开头 `-`（选项走私）、控制字符与超长；全部走 argv 直传，不过 shell。
+      `validate_name` 顺带补了开头 `-` 的拒绝（原字符集允许短横开头）
+- [x] **测试基线**：full 31 → 35；golden 重采（仅 full 变化）；别名属性 21 → 23
+      （`search_uniget_packages` 的 `keyword ← query`、`get_package_details` 的
+      `package ← name`）；新增 pkgman 解析/构造/`run_uniget_read` 与 4 个 handler 用例
+- [x] **真机只读验收（临时 stdio 会话 + `EXPOSURE_MODE=full` + 临时 runtime，
+      本机 UniGetUI 2026.3.2 在跑，全程未关闭用户 GUI）**：
+      `tools/list` 35 个；四个新工具 schema 必填项与注解符合约定
+      （`openWorldHint=true`、无 `readOnlyHint`）；
+      `list_package_managers` 返回 **11** 个安装器（其中 6 个 ready）与
+      `include_sources=true` 的软件源清单；
+      `search_uniget_packages`（manager=scoop, keyword=7zip）返回 5 条；
+      `list_uniget_packages`（scoop）返回 13 条；`get_package_details`（scoop/7zip）
+      返回真实详情与空版本历史（scoop 适配层不提供，非失败）；
+      拒绝面 `manager=--elevated` → `invalid_params`、未知包 id → `not_found`。
+      延迟实测：details 约 9s、versions 约 3s，默认带版本历史因此约 12s——
+      MCP 侧默认 120s 足够，客户端若把单次调用限制在 10s 内需显式
+      `include_versions=false`
+
 ### 工具接入
 - [x] Everything（`kind=app`，返回启动命令）
 - [x] Everything Search MCP（`kind=mcp`，已实测连接、调用、启停跑通）
@@ -1520,7 +1563,7 @@ awam-tool-manager/
 │   └── discovery.json          # 发现候选清单（discover_tools 的声明源，NE-10）
 ├── src/
 │   ├── server.py               # MCP Server 入口：协议装配 + 薄分发 + 生命周期
-│   ├── tool_specs.py           # 对外 MCP 工具声明式注册表（SSOT：31 条 spec + handlers）
+│   ├── tool_specs.py           # 对外 MCP 工具声明式注册表（SSOT：35 条 spec + handlers）
 │   ├── capabilities.py         # Provider / Capability / Runtime 路由层
 │   ├── policy.py               # 破坏性门禁统一判定 + 部署策略（data/policy.json）
 │   ├── errors.py               # 业务错误出口（ToolError / fail / ensure_success）

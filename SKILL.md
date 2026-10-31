@@ -24,7 +24,8 @@ description: 统一工具管理器，维护本机工具名单，提供统一的�
 - **暴露模式**：`EXPOSURE_MODE` 控制 `tools/list` 的切片与
   `initialize.instructions` 的能力清单——`lazy`（默认，19 个管理工具与能力路由工具，长尾走
   `list_capabilities → call_capability`）、`default`（26 个，补 7 个高频意图工具）、
-  `full`（31 个，再补文件元信息、Everything 状态、winget 搜索/安装与包升级查询）。
+  `full`（35 个，再补文件元信息、Everything 状态、winget 搜索/安装、包升级查询，
+  以及 4 个 UniGetUI 只读查询工具）。
   也可用 `EXPOSURE_FILE` 指向 JSON 配置文件
   （`{"mode": "default"}`），环境变量优先；模式在进程启动时解析一次，改完需重连客户端
 - **能力路由**：把调用转发给提供者（MCP 子工具 / 启动器动作 / 应用 launch）的能力
@@ -65,6 +66,15 @@ description: 统一工具管理器，维护本机工具名单，提供统一的�
   `status` 探一次，探不到就退回读盘口径而不是冷启动它的窗口。入口按
   `AWAM_UNIGET_CLI`（部署者覆盖）> `%LOCALAPPDATA%\Programs\UniGetUI` > `Program Files\UniGetUI`
   定位，**刻意不回退 PATH**——与 `install_argv` 同一条纪律：要跑外部入口，就得说清跑的是哪一个
+- **UniGetUI 只读查询面（full）**：`list_package_managers` / `search_uniget_packages` /
+  `list_uniget_packages` / `get_package_details` 复用同一条会话探测（`status` →
+  `running=true` 才发数据命令）与 JSON 输出上限。四个工具只读，**不提供安装 / 升级 /
+  卸载 / 提权**；`manager` 只认 17 个稳定 id，`package` / `keyword` 直接进 argv
+  （不过 shell），开头为 `-`、含控制字符或超长一律 `invalid_params`。
+  错误相位会带回 `phase`：`locate`（没装 CLI，`install_required`）、`status`
+  （没有活会话，`connection_error`）、`query`/`parse`（`runtime_error`，包不存在时
+  `not_found`）；失败识别靠正文的 `status` 字段，不能只看退出码——多数错误应答
+  退出码是 0，但 `package details` 的 not-found 实测退出码 2、正文形状不变
 - **两口径的实测对照**：本机 scoop 上两者给出**同样的 4 条**（age / clink / innounp /
   scrcpy，版本一致）；全量 `uniget package updates` 是多安装器汇总，本机整份 57652 字符 /
   238 条，远超 `run_argv` 为日志设计的 4000 字符留尾上限，所以这条命令单独抬到
@@ -100,7 +110,7 @@ awam-tool-manager/
 │   ├── backend_client.py     # MCP 运行时客户端与连接池
 │   ├── launcher_client.py    # 启动器适配器（非 MCP：Quicker / uTools / Steam）
 │   ├── discovery.py          # 本机工具发现（声明清单 + 只读探测，默认零 spawn）
-│   ├── pkgman.py             # 包管理器适配层（scoop：读盘列包 / 搜 bucket / 解析入口 / 构造安装命令 / 读盘查升级；UniGetUI CLI 只是可选的只读外部口径，不是包管理适配器）
+│   ├── pkgman.py             # 包管理器适配层（scoop：读盘列包 / 搜 bucket / 解析入口 / 构造安装命令 / 读盘查升级；UniGetUI CLI 是可选的只读查询口径，不是包管理适配器）
 │   ├── steam_library.py      # Steam 库只读解析（libraryfolders.vdf + appmanifest_*.acf，以 acf 为准）
 │   ├── runtime_paths.py      # 运行时目录解析 + 旧路径迁移
 │   └── schema.py             # 两层数据的 JSON Schema 校验 + 文档生成源
@@ -165,11 +175,11 @@ policy / usage / 生命周期仍走同一个 `dispatch_tool` 出口。模式只�
 | 规范名 | 可接受别名 | 生效范围 |
 |---|---|---|
 | **`tool_id`** | **`id`** | 12 个工具/能力/运行时工具（`get_tool_info`、`launch_tool`、`list_capabilities`、`call_capability`、`sync_capabilities`、`start_runtime`、`stop_runtime`、`get_runtime_status`、`get_runtime_logs`、`set_runtime_log_level`、`get_tool_help`、`get_usage_stats`） |
-| **`keyword`** | **`query`** | `search_tools`、`list_capabilities`、`search_packages`、`search_files`、`search_games`、`search_actions`、`search_winget_packages` |
-| **`package`** | **`name`** | `launch_package`、`install_package` |
+| **`keyword`** | **`query`** | `search_tools`、`list_capabilities`、`search_packages`、`search_files`、`search_games`、`search_actions`、`search_winget_packages`、`search_uniget_packages` |
+| **`package`** | **`name`** | `launch_package`、`install_package`、`get_package_details` |
 
-20/31 个工具带别名（合计 21 个别名属性；`list_capabilities` 同时带 `tool_id ← id`
-与 `keyword ← query`）。`list_tools`、`discover_tools`、`list_packages` 等 11 个无必填
+22/35 个工具带别名（合计 23 个别名属性；`list_capabilities` 同时带 `tool_id ← id`
+与 `keyword ← query`）。`list_tools`、`discover_tools`、`list_packages` 等 13 个无必填
 参数或无可别名参数，不带别名。`capability_id` **没有别名**：在 `call_capability` 上
 `id` 已归 `tool_id`，两个目标 ID 不共用写法。
 不再接受的写法：camelCase `toolId` / `capabilityId` / `actionId`（与全表 snake_case 自相
@@ -219,7 +229,7 @@ policy / usage / 生命周期仍走同一个 `dispatch_tool` 出口。模式只�
 | `search_actions` | `keyword`(必填)、`source`、`limit` | 跨 Quicker / uTools 搜索快捷动作（名称、描述、关键词、动作 ID），返回 `source/toolId/actionId/name`；`source` 可限定单个启动器 |
 | `run_action` | `action`(必填)、`source`、`param`、`execute`、`allowDestructive`、`wait` | 按动作 ID 或唯一名称执行 Quicker / uTools 动作；默认只预览解析结果；已知原始 ID 时可传 `source` 直调；三个启动器条目都标了 destructive |
 
-#### full 追加的补充工具（5 个）
+#### full 追加的补充工具（9 个）
 
 低频查询与执行面工具，默认模式下不占用工具名预算。
 
@@ -230,6 +240,10 @@ policy / usage / 生命周期仍走同一个 `dispatch_tool` 出口。模式只�
 | `search_winget_packages` | `keyword`、`upgradeable` | 用 winget 搜索可安装包；`keyword` 省略且 `upgradeable=true` 时列出可升级项；自动启动 `winget-mcp` 运行时 |
 | `install_winget_package` | `identifier`(必填)、`upgrade_only`、`source`、`execute`、`allowDestructive` | 用 winget 安装/升级；默认只回参数预览；执行需 `execute=true` + `allowDestructive=true`（`kind=mcp` 门禁，底层调用 `install-winget-package`） |
 | `check_package_updates` | `manager`、`execute`、`timeout` | 查哪些包有可用更新：**默认零 spawn**（scoop 已装版本 vs 本地 bucket 索引版本取差集；缺比较基准的包进 `unknown` 并给原因，不代表「已最新」；索引新旧取决于上次 `scoop update`）；`execute=true` 才先 `uniget status` 探一次、再 `uniget package updates` 拿外部口径（可带 `manager` 查 winget / pip 等），探不到会话就**如实退回读盘**（`engine` + `uniget.reason` 说明为什么退），不冷启动 UniGetUI 的窗口；`manager` 只认白名单，非 scoop 且 UniGetUI 不可用时报 `install_required`，不给空清单 |
+| `list_package_managers` | `include_sources`、`timeout` | 列出 UniGetUI 能驱动的安装器及 `enabled/ready`，`include_sources=true` 附带软件源清单；需要 UniGetUI 正在运行，**只读，不冷启动 GUI** |
+| `search_uniget_packages` | `manager`(必填)、`keyword`(必填)、`limit`、`timeout` | 在指定安装器的远端索引里搜可安装包；结果只说明可安装，是否已装看 `list_uniget_packages`；`manager` 只认 17 个稳定 id |
+| `list_uniget_packages` | `manager`(必填)、`limit`、`timeout` | 列出指定安装器里已安装的包（按包 id 排序，默认 50 条）；与读盘口径的 `list_packages` 可能数量不同（直链安装、安装器本体处理方式不同） |
+| `get_package_details` | `manager`(必填)、`package`(必填)、`include_versions`、`timeout` | 查单个包的详情（描述、主页、许可、安装位置等），默认附带版本历史；`versions` 为空通常表示该安装器不提供版本历史（scoop 实测如此），不是查询失败 |
 
 > `kind=launcher`（启动器，如 Quicker / uTools / Steam）不是 MCP：没有长连接，调用是一次性的。
 > - **Quicker**：`QuickerStarter.exe -c<秒> "runaction:<ID或名称>?参数"`，stdout 回传动作
