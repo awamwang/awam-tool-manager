@@ -163,3 +163,32 @@ def test_health_is_exempt_from_auth():
     app = ht.BearerAuthMiddleware(_ok_app, "secret")
     sent = _run_asgi(app, {"type": "http", "path": "/health", "headers": []})
     assert sent[0]["status"] == 200
+
+
+def test_health_includes_gateway_version_not_mcp_sdk():
+    """/health.version 必须是 Server(version=...)，不能回落到 mcp 包版本。"""
+    from mcp.server import Server
+
+    server = Server("awam-tool-manager", version="0.1.0")
+    app = ht.build_asgi_app(server, token="secret")
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/health",
+        "raw_path": b"/health",
+        "query_string": b"",
+        "headers": [],
+        "client": ("127.0.0.1", 12345),
+        "server": ("127.0.0.1", 80),
+    }
+    sent = _run_asgi(app, scope)
+    assert sent[0]["status"] == 200
+    body = next(m["body"] for m in sent if m["type"] == "http.response.body")
+    payload = __import__("json").loads(body.decode("utf-8"))
+    assert payload["status"] == "ok"
+    assert payload["transport"] == "http"
+    assert payload["version"] == "0.1.0"
+    assert payload["version"] != __import__("importlib.metadata", fromlist=["version"]).version("mcp")

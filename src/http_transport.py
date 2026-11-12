@@ -259,9 +259,18 @@ def build_asgi_app(server, *, token: str):
     from starlette.routing import Mount, Route
 
     manager = StreamableHTTPSessionManager(server)
+    # 与 MCP serverInfo.version 对齐，供 a-file-manager gatewayCompat 使用
+    gateway_version = getattr(server, "version", None)
+    if isinstance(gateway_version, str):
+        gateway_version = gateway_version.strip() or None
+    else:
+        gateway_version = None
 
     async def health(_request):
-        return JSONResponse({"status": "ok", "transport": "http"})
+        body = {"status": "ok", "transport": "http"}
+        if gateway_version:
+            body["version"] = gateway_version
+        return JSONResponse(body)
 
     @contextlib.asynccontextmanager
     async def lifespan(_app):

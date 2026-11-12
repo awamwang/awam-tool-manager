@@ -90,9 +90,15 @@ launcher_manager = LauncherManager(registry, store)
 # 暴露模式：环境变量 > data/exposure.json > lazy（非法配置在 import 期快速失败）
 EXPOSURE_MODE = exposure.resolve_exposure_mode()
 
+# 网关自身版本：写入 MCP serverInfo 与 HTTP /health。
+# mcp 1.x 在未传 version 时会回落到 SDK 包版本（如 1.30.0），
+# 会让下游 gatewayCompat 误把 SDK 版本当成网关版本。
+GATEWAY_VERSION = "0.1.0"
+
 # 创建 MCP Server（instructions 按模式生成：能力清单是「主动告知」的唯一通道）
 app = Server(
     "awam-tool-manager",
+    version=GATEWAY_VERSION,
     instructions=exposure.build_instructions(EXPOSURE_MODE),
 )
 
