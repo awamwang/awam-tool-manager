@@ -1,5 +1,7 @@
 # awam-tool-manager
 
+> 语言：[中文](README.md) · [English](README_EN.md)
+
 统一工具管理器 —— 维护本机工具名单，提供统一的注册、搜索、启动与能力路由调用能力。
 
 ## 快速开始
@@ -43,11 +45,12 @@ stdio：
   "mcpServers": {
     "awam-tool-manager": {
       "command": "python",
-      "args": ["G:\\Projects\\19AI\\skills\\awam-tool-manager\\src\\server.py"]
+      "args": ["<项目根>/src/server.py"]
     }
   }
 }
 ```
+（`<项目根>` 换成你 clone 后的实际路径；`args` 里要写绝对路径。）
 
 Streamable HTTP（字段名以客户端为准）：
 
