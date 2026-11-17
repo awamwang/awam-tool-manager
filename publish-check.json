@@ -1,0 +1,9 @@
+{
+  "_note": "发布前体检例外清单。仅对已人工复核、改动会破坏功能的路径放行；不要用它掩盖真实泄漏。身份邮箱按作者决定保留，不加入 self_terms。",
+  "allow": [
+    "data/tools/quicker.json:win_home",
+    "data/tools/winget-mcp.json:win_home",
+    "tests/test_http_transport.py:rfc1918"
+  ],
+  "max_file_mb": 5
+}
