@@ -1,5 +1,7 @@
 # awam-tool-manager
 
+[![发布体检](https://github.com/awamwang/awam-tool-manager/actions/workflows/publish-check.yml/badge.svg)](https://github.com/awamwang/awam-tool-manager/actions/workflows/publish-check.yml)
+
 > 语言：[中文](README.md) · [English](README_EN.md)
 
 统一工具管理器 —— 维护本机工具名单，提供统一的注册、搜索、启动与能力路由调用能力。

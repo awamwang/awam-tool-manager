@@ -1,5 +1,7 @@
 # awam-tool-manager
 
+[![Publish preflight](https://github.com/awamwang/awam-tool-manager/actions/workflows/publish-check.yml/badge.svg)](https://github.com/awamwang/awam-tool-manager/actions/workflows/publish-check.yml)
+
 > Language: [中文](README.md) · [English](README_EN.md)
 
 Unified tool manager — maintains an inventory of tools installed on your machine and provides a single entry point for registration, search, launching, and capability-routed invocation.
