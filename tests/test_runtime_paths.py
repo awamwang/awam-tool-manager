@@ -39,8 +39,8 @@ def test_os_default_uses_localappdata_on_windows(monkeypatch):
     monkeypatch.delenv(ENV_VAR, raising=False)
     if os.name != "nt":
         pytest.skip("只在 Windows 上验证 LOCALAPPDATA 分支")
-    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\someone\AppData\Local")
-    assert default_runtime_dir() == Path(r"C:\Users\someone\AppData\Local") / APP_DIR_NAME
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\fakehome\AppData\Local")
+    assert default_runtime_dir() == Path(r"C:\fakehome\AppData\Local") / APP_DIR_NAME
 
 
 def test_os_default_falls_back_to_home(monkeypatch):

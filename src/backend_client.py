@@ -123,7 +123,7 @@ async def ensure_npm_bin_on_path() -> str | None:
 
     背景：本服务可能被上游以裁剪过的环境启动（网关白名单继承、CI、
     systemd 等场景都可能发生）。若 PATH 缺 npm 全局 bin（如
-    C:\\Users\\...\\.local\\npm-global），shutil.which 找不到早已全局
+    C:\\Users\\<user>\\.local\\npm-global），shutil.which 找不到早已全局
     安装的 CLI，ensure_installed 会误判「未安装」并触发一次数十秒的
     npm i -g：包明明装着，这既慢又多余，还会把调用方的 tools/call
     预算（toolport 网关为 30s）整个耗光。

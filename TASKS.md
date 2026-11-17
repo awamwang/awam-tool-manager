@@ -215,7 +215,7 @@
 **发布 / CI 前必须显式跑一次**：
 
 ```
-"C:\Users\Administrator\.pyenv\pyenv-win\versions\3.12.0\python.exe" -m pytest -m e2e -q
+"<用户目录>\.pyenv\pyenv-win\versions\3.12.0\python.exe" -m pytest -m e2e -q
 ```
 
 - **为什么默认不跑**：这一层起**真实子进程 + 真实 MCP 会话**（起服、拉后端、
@@ -672,7 +672,7 @@
       `WindowsApps\python.exe` 这个商店占位符、退出码 9009，本轮实测踩过并已由
       `test_path_order_beats_suffix_order` 钉住）（`98e3486`）。真机复跑取证：
       `command.path` = `S:\Libs\Scoop\shims\scoop.cmd`、
-      `C:\Users\Administrator\.pyenv\pyenv-win\shims\python.bat`（都是带后缀的真身），
+      `<用户目录>\.pyenv\pyenv-win\shims\python.bat`（都是带后缀的真身），
       版本号 0.5.3 / 3.12.0 正常取回
 - [x] **缺陷② 子进程继承 server 的 stdio 管道 → 整个网关被打死** - `run_commands=true`
       第一次真跑时：客户端 `anyio.BrokenResourceError`，server 日志「工具 discover_tools
@@ -1405,7 +1405,7 @@
 - [x] 接入 WeGame（腾讯平台）— ⛔ **本机确实没装主程序，无法实测**（2026-10-19 只读勘察，
       结论与本轮 Steam 那次相反，这次是真的没有）：
       ① 全盘限深扫描 `wegame*.exe` 只命中 1 个残留
-      `C:\Users\Administrator\AppData\Local\WeGame\WeGameMiniLoader(2001918)\WeGameMiniLoader.exe`
+      `<用户目录>\AppData\Local\WeGame\WeGameMiniLoader(2001918)\WeGameMiniLoader.exe`
       （5.8 MB，是迷你加载器不是客户端）；
       ② `HKLM\SOFTWARE\Tencent\WeGame`（32 位视图）键**存在但零值**，仅一个空子键 `Apps`；
       ③ HKLM/HKCU × 32/64 四路卸载表里 WeGame、WeGame1 全无条目（只有 腾讯应用宝 / 腾讯会议）；

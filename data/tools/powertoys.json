@@ -26,7 +26,7 @@
   "destructive": false,
   "metadata": {
     "installPath": "C:\\Program Files\\PowerToys",
-    "settingsDir": "C:\\Users\\Administrator\\AppData\\Local\\Microsoft\\PowerToys",
+    "settingsDir": "%LOCALAPPDATA%\\Microsoft\\PowerToys",
     "detectionNote": "2026-10-18 真机 discover_tools 实测：主程序 path_exists 命中 C:\\Program Files\\PowerToys\\PowerToys.exe（installed / 高信心），模块设置目录 dir_count = 48 项；{ProgramFiles} 靠注册表 ProgramFilesDir 回退才解析出来",
     "moduleToggles": "模块开关在 settingsDir\\settings.json 的 enabled 段（本机实测启用：CmdPal / EnvironmentVariables / File Explorer / Measure Tool / MousePointerCrosshairs / NewPlus / PowerRename / Shortcut Guide / Workspaces），本条目不代管配置",
     "notes": "以托盘常驻方式运行，launch 只是确保进程起来；单个模块的动作（ FancyZones 编辑、PowerToys Run 唤起）由全局快捷键触发，不经本条目"

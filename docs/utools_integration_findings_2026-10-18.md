@@ -1,6 +1,6 @@
 # uTools 接入勘察报告（2026-10-18）
 
-> 任务：uTools 已装于本机（`C:\Users\Administrator\AppData\Local\Programs\utools\uTools.exe`，v7.8.0），
+> 任务：uTools 已装于本机（`<用户目录>\AppData\Local\Programs\utools\uTools.exe`，v7.8.0），
 > 目标「找到它所有的工具、获取参数并调用」，并评估走 Quicker 式的命令行调用路径。
 > 本报告为**勘察结论 + 适配方案设计**，不含实现代码。配套数据：`utools_plugins_catalog_2026-10-18.json`。
 
@@ -167,9 +167,9 @@ U4 的 asar fixture 用本报告验证过的 Pickle 格式构造即可，不引�
 
 ## 7. 本机连接信息（复用备查）
 
-- MCP：`http://127.0.0.1:3501/mcp`，头 `x-mcp-key: c8f735380f88e46a701e441388fb3a46`（2026-10-18 时值）
-- 插件目录：`C:\Users\Administrator\AppData\Roaming\uTools\plugins\`（44 个 asar）
-- uTools 数据根：`C:\Users\Administrator\AppData\Roaming\uTools\`（settings / LevelDB `database/<hash>/`）
+- MCP：`http://127.0.0.1:3501/mcp`，头 `x-mcp-key: <当前 key>`（key 存于本机 uTools 加密设置，2026-10-18 勘察时值已脱敏）
+- 插件目录：`<用户目录>\AppData\Roaming\uTools\plugins\`（44 个 asar）
+- uTools 数据根：`<用户目录>\AppData\Roaming\uTools\`（settings / LevelDB `database/<hash>/`）
 - 协议样例：`utools://%E4%BB%BB%E5%8A%A1%E6%B8%85%E5%8D%95/%E4%BB%BB%E5%8A%A1%E6%B8%85%E5%8D%95`（任务清单）
 
 ## 8. 勘察过程留痕（可复现命令）

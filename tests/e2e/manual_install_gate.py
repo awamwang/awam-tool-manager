@@ -4,7 +4,7 @@
 
 - 自动化 e2e 框架在 `tests/e2e/`（`helpers.py` 提供 stdio 会话 / tmp 仓库副本
   / stderr 采集）。跑法：
-  `"C:\\Users\\Administrator\\.pyenv\\pyenv-win\\versions\\3.12.0\\python.exe" -m pytest -m e2e -q`
+  `python -m pytest -m e2e -q`
 - **未授权 → `install_required`** 这条已自动化，见 `tests/e2e/test_e2e_install_gate.py`
   （无副作用、秒级、断言确定，正适合做回归护栏）。
 - **已授权（`AWAM_AUTO_INSTALL=1`）→ npm 真的被提交给 shell** 这条**保留手工**，
@@ -14,7 +14,7 @@
   做成自动用例只会引入 flaky 与本机依赖。
 
 运行（在仓库根）：
-  "C:\\Users\\Administrator\\.pyenv\\pyenv-win\\versions\\3.12.0\\python.exe" tests/e2e/manual_install_gate.py
+  python tests/e2e/manual_install_gate.py
 预期输出末尾：`MANUAL SCENARIO OK`
 
 **文件名没有 `test_` 前缀是刻意的**：带前缀会被 pytest 收集时 import 一次

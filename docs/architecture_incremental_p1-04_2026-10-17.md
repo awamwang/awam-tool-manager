@@ -416,7 +416,7 @@ P1-04 **不得顺手**给那 23 处补 `errorType`——即使它「明显是 bu
 ## 5. 迁移步骤（有序，每步独立可回滚）
 
 > 每步一个 commit；每步结束必须跑
-> `C:/Users/Administrator/.pyenv/pyenv-win/versions/3.12.0/python.exe -m pytest -q`
+> `<用户目录>/.pyenv/pyenv-win/versions/3.12.0/python.exe -m pytest -q`
 > 且 **passed 数不低于 183、无 skipped**。
 
 | 步骤 | 内容 | 完成的判据 |
@@ -549,7 +549,7 @@ M03 中途失败则回滚到 M02 状态，不影响任何功能。
   跑测试。`conftest.EXPECTED_TOOL_NAMES` 与 `SKILL.md` 表由守卫测试校验，忘了改会红。
 - **新增数据条目**：只加 `data/tools/{tool_id}.json`，0 代码改动（这一层已经是声明式的）。
 - **新增 kind**：按 §1.3 的 11 点清单逐项来，一项都省不了——这是当前约束下的权威手册。
-- **测试解释器**：`C:/Users/Administrator/.pyenv/pyenv-win/versions/3.12.0/python.exe`
+- **测试解释器**：`<用户目录>/.pyenv/pyenv-win/versions/3.12.0/python.exe`
   （PATH 里的 `python` 是 3.14，没装 `mcp`，跑不了测试）。
 - **运行时隔离**：`tests/conftest.py:22-23` 在 import 任何 src 模块前设 `AWAM_RUNTIME_DIR`，
   测试不会碰真实 `%LOCALAPPDATA%\.awam-tool-manager`。
