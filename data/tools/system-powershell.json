@@ -1,0 +1,24 @@
+{
+  "id": "system-powershell",
+  "name": "PowerShell",
+  "displayName": "Windows PowerShell",
+  "kind": "app",
+  "description": "Windows 自带的命令行外壳 powershell.exe（System32，PATH 可达）。作为托管工具库的最小可见且可启动样例：列表恒可见、launch 真能拉起。",
+  "version": "1.0",
+  "status": "installed",
+  "publisher": "Microsoft",
+  "website": "https://learn.microsoft.com/powershell/",
+  "icon": "powershell.exe",
+  "launch": {
+    "type": "executable",
+    "command": "powershell.exe",
+    "args": []
+  },
+  "actions": ["launch"],
+  "tags": ["系统工具", "终端", "shell"],
+  "readOnly": false,
+  "destructive": false,
+  "metadata": {
+    "notes": "AFM 托管产物内嵌 data/tools 的验证条目；powershell.exe 在 %SystemRoot%\\System32，Windows 11 默认可用。"
+  }
+}

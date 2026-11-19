@@ -79,7 +79,13 @@ import http_transport
 # 数据目录：DATA_DIR 放人写的声明（进版本库），RUNTIME_DIR 放程序生成的
 # 运行时数据（本机应用数据目录）。两者此前混在 data/ 下，导致活实例改写
 # lastSynced 时工作区永远脏。见 runtime_paths.py。
-DATA_DIR = Path(__file__).parent.parent / "data"
+# 冻结产物（PyInstaller）下 __file__ 指向临时解压目录，源码相对路径会失效；
+# 此时 data/ 由构建 `--add-data "data;data"` 打进 _MEIPASS，据此定位。
+if getattr(sys, "frozen", False):
+    _bundle_dir = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    DATA_DIR = _bundle_dir / "data"
+else:
+    DATA_DIR = Path(__file__).parent.parent / "data"
 RUNTIME_DIR = get_runtime_dir()
 
 # 初始化
