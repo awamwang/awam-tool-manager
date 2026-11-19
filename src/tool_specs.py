@@ -337,6 +337,25 @@ def normalize_arguments(spec: ServerToolSpec, arguments: dict) -> dict:
                 acceptedParams=accepted,
                 example=example,
             )
+    # mcp 1.x 的 lowlevel Server 会在 handler 前自动按 inputSchema 做
+    # JSON-Schema 校验；v2 明确「schema 只下发、不 enforce」。这里补回 enum 这一
+    # 维度：拼错的枚举值在协议面就拒，不会退化成「筛选类接口最坏的失败——把
+    # 参数打错读成本机没装」。错误正文含 "is not one of"，与 SDK 原话术对齐。
+    for key, prop in spec.input_schema.get("properties", {}).items():
+        if not isinstance(prop, dict):
+            continue
+        allowed = prop.get("enum")
+        if allowed is None or key not in out:
+            continue
+        value = out[key]
+        if _blank(value):
+            continue
+        if value not in allowed:
+            fail(
+                f"参数 {key} 的值 {value!r} is not one of {list(allowed)}",
+                param=key,
+                acceptedValues=list(allowed),
+            )
     return out
 
 
@@ -3010,7 +3029,7 @@ def build_mcp_tools(mode: str = "lazy") -> list[Tool]:
         )
         if ToolAnnotations is not None and spec.annotations:
             tool.annotations = ToolAnnotations(**spec.annotations)
-        tool.outputSchema = spec.output_schema or SHARED_OUTPUT_SCHEMA
+        tool.output_schema = spec.output_schema or SHARED_OUTPUT_SCHEMA
         tools.append(tool)
     return tools
 

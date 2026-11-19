@@ -43,9 +43,7 @@ from tool_specs import (  # noqa: E402
     normalize_arguments,
 )
 
-from mcp.shared.memory import (  # noqa: E402
-    create_connected_server_and_client_session,
-)
+from mcp import Client  # noqa: E402
 
 
 def run(coro):
@@ -57,9 +55,14 @@ def payload_of(exc_info) -> dict:
 
 
 async def _call(name: str, arguments: dict):
-    """走真实内存会话调用（含 SDK 的入站 schema 校验）"""
-    async with create_connected_server_and_client_session(server.app) as session:
-        return await session.call_tool(name, arguments)
+    """走 v2 真实内存会话调用。
+
+    v2 移除了 SDK 的入站 JSON-Schema 校验（schema 只下发不 enforce），入参一律
+    到达 handler，由 `normalize_arguments` 统一把关——错误是本服务自描述的
+    invalid_params（含 acceptedParams / example），不再是上游 SDK 的无自救拒绝。
+    """
+    async with Client(server.app) as client:
+        return await client.call_tool(name, arguments)
 
 
 def _result_payload(result) -> dict:
@@ -82,7 +85,7 @@ def test_alias_call_survives_protocol_and_matches_canonical(tool_name, alias_arg
     alias_result = run(_call(tool_name, alias_args))
     canon_result = run(_call(tool_name, canon_args))
 
-    assert not alias_result.isError, f"别名调用被当成错误: {alias_result.content}"
+    assert not alias_result.is_error, f"别名调用被当成错误: {alias_result.content}"
     assert _result_payload(alias_result) == _result_payload(canon_result), (
         f"{tool_name} 的别名 {list(alias_args)} 与规范名结果不等价"
     )
@@ -104,7 +107,7 @@ def test_call_capability_folds_tool_id_but_not_capability_id():
 def test_canonical_only_call_still_works():
     """规范名路径零回归：别名只是加法，不是替换"""
     result = run(_call("get_tool_info", {"tool_id": "everything"}))
-    assert not result.isError
+    assert not result.is_error
     assert _result_payload(result)["success"] is True
 
 
@@ -154,27 +157,28 @@ def test_conflicting_canonical_and_alias_is_rejected():
     assert "取值不同" in payload["error"]
 
 
-def test_empty_arguments_is_caught_upstream_of_our_handler():
-    """一个参数都不给时，**校验型客户端**看到的是 SDK 的入站拒绝，不是我们的文案。
+def test_empty_arguments_is_handled_by_our_normalizer():
+    """一个参数都不给：v2 移除 SDK 入站校验后，由 normalize_arguments 接管，
+    给出自描述的 invalid_params（含可接受参数名 + 示例），Agent 能据此自救。
 
-    这是 anyOf 的代价，也是有意的取舍：保留 `required` 语义（守不写别名的客户端
-    也知道这个参数必填），代价是 `{}` 这种「什么都没传」的请求到不了 handler。
-    真实会话里的失败形态是**参数名猜错**（`{"query": ...}` / `{"id": ...}`），
-    那类别名面已经接管；本用例只钉住「谁在拦」这个边界不漂移。
+    mcp 1.x 时代 `{}` 被 SDK 的入站 required 校验先拦，Agent 只能看到
+    `params must have required property` 这种无法自救的拒绝；v2 把把关权交回
+    本服务，错误更可读——这条断言随之从「谁在拦=SDK」翻成「拦的方式=我们」。
     """
     result = run(_call("get_tool_info", {}))
 
-    assert result.isError
-    text = result.content[0].text
-    assert "not valid" in text, f"预期是 SDK 的入站校验拒绝，实际: {text}"
-    assert '"acceptedParams"' not in text
+    assert result.is_error
+    payload = _result_payload(result)
+    assert payload["errorType"] == ErrorType.INVALID_PARAMS
+    assert payload["acceptedParams"] == ["tool_id", "id"]
+    assert payload["example"] == {"tool_id": "everything"}
 
 
 def test_blank_alias_reaches_our_self_describing_error():
     """`{"id": ""}` 过得了 schema（键在、类型对），此时由我们接管并给出自救信息"""
     result = run(_call("get_tool_info", {"id": ""}))
 
-    assert result.isError
+    assert result.is_error
     payload = _result_payload(result)
     assert payload["errorType"] == ErrorType.INVALID_PARAMS
     assert payload["acceptedParams"] == ["tool_id", "id"]
@@ -363,7 +367,7 @@ def test_wire_tools_carry_both_description_hint_and_alias_props():
         spec = by_name[tool.name]
         for name in spec.input_schema.get("required", []):
             assert name in tool.description, f"{tool.name}: 上线描述没提必填 {name}"
-        props = set(tool.inputSchema.get("properties", {}))
+        props = set(tool.input_schema.get("properties", {}))
         accepted = {a for aliases in tool_specs.aliases_for(spec).values() for a in aliases}
         assert accepted <= props, f"{tool.name}: 别名 {accepted - props} 没进上线 schema"
 
@@ -401,14 +405,16 @@ def test_alias_property_budget():
         ("call_capability", {"actionId": "x"}),
     ],
 )
-def test_dropped_aliases_are_rejected_at_protocol_layer(tool_name, alias_args):
+def test_dropped_aliases_are_rejected(tool_name, alias_args):
     """砍掉的名字（camelCase、`q`/`text`、`tool_id ← name`）口子真的关了：
-    只给它们会被入站校验拦下，而不是悄悄折成规范名跑通。
+    只给它们 → 规范名缺失，由 normalize_arguments 拒为 invalid_params，绝不
+    悄悄折成规范名跑通。（v2 无 SDK 入站校验，把关全在 handler，故现在能看到
+    我们自描述的 acceptedParams。）
     """
     result = run(_call(tool_name, alias_args))
 
-    assert result.isError, f"{tool_name} 仍接受已退役写法 {alias_args}"
-    assert '"acceptedParams"' not in result.content[0].text
+    assert result.is_error, f"{tool_name} 仍接受已退役写法 {alias_args}"
+    assert '"acceptedParams"' in result.content[0].text
 
 
 def test_dropped_names_absent_from_every_exported_schema():

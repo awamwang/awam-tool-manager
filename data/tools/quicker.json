@@ -13,6 +13,10 @@
     "type": "quicker",
     "command": "C:\\Program Files\\Quicker\\QuickerStarter.exe",
     "dataDir": "C:\\Users\\Administrator\\AppData\\Local\\Quicker",
+    "nameSources": [
+      "G:\\Data\\Tools\\Quicker\\QuickerActions.csv",
+      "G:\\Data\\Tools\\Quicker\\export"
+    ],
     "timeout": 20
   },
   "actions": ["list", "search", "run"],
@@ -22,9 +26,9 @@
   "metadata": {
     "notes": "调用走 `QuickerStarter.exe -c<秒> \"runaction:<动作ID或名称>?参数\"`；-c 表示从控制台回传动作结果（1.30.12+）",
     "caveatExitCode": "QuickerStarter 失败时退出码仍是 0，因此按输出文本判定失败（见 launcher_client.QUICKER_FAILURE_MARKERS）",
-    "caveatNames": "动作正文存在加密的 quicker.db（非 SQLite 魔数，读不了）；动作 ID 来自 states/state_<uuid>.json 文件名，名称来自其 state 缓存的动作列表，属尽力而为——缓存没覆盖的动作只有 ID（source=partial）",
+    "caveatNames": "动作正文存在加密的 quicker.db（非 SQLite 魔数，读不了）；动作 ID 来自 states/state_<uuid>.json 文件名，名称来自其 state 缓存的动作列表 + 运行日志，属尽力而为。2026-11-17 起接入 launcher.nameSources 快照源（动作列表 CSV + 维护工具备份目录）：补全 states 没枚举到的动作 ID 与缺失名称，只补空不覆盖 state 缓存；快照过期时已删动作会残留，调用按 QuickerStarter 失败文本如实报错",
     "requiresRunning": "Quicker 需在运行中（否则 runaction 会拉起它，响应更慢）"
   },
   "createdAt": "2026-10-16T13:45:09Z",
-  "updatedAt": "2026-10-16T13:45:09Z"
+  "updatedAt": "2026-11-17T15:00:00Z"
 }

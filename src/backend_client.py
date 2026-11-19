@@ -1028,13 +1028,11 @@ class BackendClient:
                     # anyio 原生限时：wait_for 会从外部任务取消协程，撕裂
                     # anyio 取消作用域栈并带崩整个 Server 进程（详见 start()）
                     with anyio.fail_after(self.HEARTBEAT_TIMEOUT):
-                        # 探测用 send_ping：mcp 1.x 的 ClientSession 只有
-                        # send_ping()，没有 ping()（TS SDK 才叫 ping）。
-                        # 曾误用 ping()：生产环境（pyenv 3.12 + mcp 1.29.0）
-                        # 每次启动后端后心跳必败 → 状态 error → 连接被清 →
-                        # 后端永远留不住（2026-10-16 网关实测复现）。
-                        # 测试环境装 1.30 且心跳 fake 自带 ping，双重掩盖。
-                        await self.session.send_ping()
+                        # 探活用轻量 list_tools：v2 已从协议移除 ping，而第三方
+                        # 子后端（Everything / winget）多半仍停在 mcp 1.x，用
+                        # list_tools 探活对 1.x/2.x 都兼容，不再赌 send_ping 的
+                        # 跨版本行为。
+                        await self.session.list_tools()
                     self._last_heartbeat = time.time()
                     self._log("debug", "心跳正常")
             except asyncio.CancelledError:
@@ -1060,7 +1058,9 @@ class BackendClient:
                 {
                     "name": t.name,
                     "description": t.description,
-                    "inputSchema": t.inputSchema
+                    # v2：Tool.input_schema（snake_case）；保留 dict 键名 inputSchema
+                    # 作为对外契约，不影响其它消费方
+                    "inputSchema": t.input_schema,
                 }
                 for t in tools.tools
             ]
@@ -1120,7 +1120,9 @@ class BackendClient:
                 ) from e
 
             # 检查后端返回是否有错误
-            if hasattr(result, "isError") and result.isError:
+            # v2 字段名 is_error（snake_case）；用 getattr 双读兼容，避免 v2 下
+            # hasattr(isError) 恒 False 把后端错误静默吞成成功文本。
+            if getattr(result, "is_error", None) or getattr(result, "isError", False):
                 error_texts = []
                 for content in result.content:
                     if hasattr(content, "text"):

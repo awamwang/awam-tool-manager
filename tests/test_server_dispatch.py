@@ -1,10 +1,16 @@
 """测试 server.py 的工具分发与资源读取（D19）
 
-server.py 之前只有一次性脚本验证过。这里把 12 条分发路径、错误载荷、
-资源返回结构固化成用例 —— 尤其要钉住「失败必须抛异常」这条约定：
-mcp 1.x 会把正常返回值恒包装成 isError=False，只有抛异常客户端才能看到失败。
+固化 12 条分发路径、错误载荷、资源返回结构。
 
-所有异步函数都用 asyncio.run 驱动，避免为了跑测试再引入 pytest-asyncio。
+mcp 2.x 迁移要点：lowlevel Server 的 handler 不再是「无参装饰器函数」，而是
+`async (ctx, params) -> 完整 Result`；且 handler 抛出的异常不再被 SDK 自动转成
+isError 结果。因此：
+- 业务失败在 call_tool 入口被重包成 CallToolResult(is_error=True)，正文仍是给
+  客户端解析的 JSON —— 对外 wire 与 1.x 完全一致（见 server.py 的 call_tool）。
+- 资源 / 模板不存在走协议错误 MCPError(-32602)，不再是裸 ToolError。
+
+dispatch_tool（分发层，返回 JSON 文本、业务失败抛 ToolError）签名不变，所以
+基于它的用例与迁移前逐字一致。所有异步函数都用 asyncio.run 驱动。
 """
 import asyncio
 import json
@@ -12,6 +18,13 @@ import sys
 from pathlib import Path
 
 import pytest
+from mcp import MCPError
+from mcp.types import (
+    CallToolRequestParams,
+    CallToolResult,
+    GetPromptRequestParams,
+    ReadResourceRequestParams,
+)
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
@@ -21,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 #   directive，报 "Invalid noqa directive" 警告。）
 import backend_client
 import server  # noqa: E402
-from server import ToolError, dispatch_tool, list_tools, read_resource  # noqa: E402
+from server import ToolError, dispatch_tool  # noqa: E402
 
 
 def run(coro):
@@ -32,6 +45,39 @@ def run(coro):
 def payload_of(exc_info) -> dict:
     """取出 ToolError 携带的 JSON 载荷"""
     return json.loads(str(exc_info.value))
+
+
+# ---- v2 handler 调用薄封装（构造协议 params，省去每处样板）----
+
+
+def call_tool(name: str, arguments: dict | None = None) -> CallToolResult:
+    return run(
+        server.call_tool(
+            None, CallToolRequestParams(name=name, arguments=arguments or {})
+        )
+    )
+
+
+def list_tools():
+    return run(server.list_tools(None, None)).tools
+
+
+def read_resource(uri: str):
+    return run(server.read_resource(None, ReadResourceRequestParams(uri=uri))).contents
+
+
+def list_resources():
+    return run(server.list_resources(None, None)).resources
+
+
+def list_prompts():
+    return run(server.list_prompts(None, None)).prompts
+
+
+def get_prompt(name: str):
+    return run(
+        server.get_prompt(None, GetPromptRequestParams(name=name, arguments=None))
+    )
 
 
 def test_dispatch_read_only_paths():
@@ -164,10 +210,10 @@ def _fake_mcp_capability(monkeypatch, name: str = "x") -> None:
 
 
 def test_internal_exception_becomes_typed_error(monkeypatch):
-    """后端抛出非业务异常时，MCP 入口要把它转成 internal_error
+    """后端抛非业务异常时，协议入口 call_tool 把它转成 internal_error 的 is_error 结果
 
-    注意转换发生在 call_tool（协议入口）而不是 dispatch_tool：
-    分发层保持「抛什么是什么」，统一包装交给入口，便于单测定位真实原因。
+    转换发生在 call_tool（协议入口）而不是 dispatch_tool：分发层保持「抛什么是什么」，
+    统一包装交给入口。v2 起异常不再是 isError，call_tool 显式接管这条转换。
     """
     _fake_mcp_capability(monkeypatch)
 
@@ -176,28 +222,22 @@ def test_internal_exception_becomes_typed_error(monkeypatch):
 
     monkeypatch.setattr(server.backend_manager, "call_backend_tool", boom)
 
-    with pytest.raises(ToolError) as exc:
-        run(server.call_tool(
-            "call_capability",
-            {
-                "tool_id": "everything-search-mcp",
-                "capability_id": "x",
-                "execute": True,
-            },
-        ))
-
-    payload = payload_of(exc)
+    result = call_tool(
+        "call_capability",
+        {"tool_id": "everything-search-mcp", "capability_id": "x", "execute": True},
+    )
+    assert result.is_error is True
+    payload = json.loads(result.content[0].text)
     assert payload["errorType"] == "internal_error"
     assert "模拟后端崩了" in payload["error"]
 
 
 def test_backend_busy_maps_to_typed_error(monkeypatch):
-    """A3：后端正在处理其他调用时，调用层应透传 backend_busy 类型化错误
+    """A3：后端并发被拒时，协议入口返回 backend_busy 的 is_error 结果
 
     后端并发被拒绝（BackendBusyError）→ manager 返回 errorType=backend_busy
-    → server 经 ensure_success 抛 ToolError → 协议层 isError。
+    → server 经 ensure_success 抛 ToolError → call_tool 转 is_error=True。
     """
-
     _fake_mcp_capability(monkeypatch)
 
     async def busy(tool_id, tool_name, arguments):
@@ -209,51 +249,46 @@ def test_backend_busy_maps_to_typed_error(monkeypatch):
 
     monkeypatch.setattr(server.backend_manager, "call_backend_tool", busy)
 
-    with pytest.raises(ToolError) as exc:
-        run(server.call_tool(
-            "call_capability",
-            {
-                "tool_id": "everything-search-mcp",
-                "capability_id": "x",
-                "execute": True,
-            },
-        ))
-
-    payload = payload_of(exc)
+    result = call_tool(
+        "call_capability",
+        {"tool_id": "everything-search-mcp", "capability_id": "x", "execute": True},
+    )
+    assert result.is_error is True
+    payload = json.loads(result.content[0].text)
     assert payload["errorType"] == "backend_busy"
     assert payload["success"] is False
 
 
 def test_call_tool_wrapper_returns_text_content():
-    """MCP 入口：成功回包是 CallToolResult，content 为单条 TextContent，且带 structuredContent
+    """MCP 入口：成功回包是 CallToolResult，content 为单条 TextContent，且带 structured_content
 
-    此测试锁定「call_tool 的返回契约」：1.30 起直接返回 CallToolResult，
-    文本通道保留（向后兼容），同时附带结构化结果。
+    文本通道保留（向后兼容），同时附带结构化结果（1.30 起的 structuredContent 能力，
+    v2 字段名 structured_content，wire 仍 structuredContent）。
     """
-    from mcp.types import CallToolResult
-
-    result = run(server.call_tool("list_tools", {}))
+    result = call_tool("list_tools", {})
     assert isinstance(result, CallToolResult)
-    assert result.isError is False
+    assert result.is_error is False
     assert len(result.content) == 1
     assert result.content[0].type == "text"
     assert json.loads(result.content[0].text)["success"] is True
-    # 1.30 的 structuredContent 能力：客户端无需再 json.loads 文本
-    assert isinstance(result.structuredContent, dict)
-    assert result.structuredContent["success"] is True
+    assert isinstance(result.structured_content, dict)
+    assert result.structured_content["success"] is True
 
 
 def test_call_tool_wrapper_propagates_tool_error():
-    """失败必须冒泡给 SDK，由它转成 CallToolResult(isError=True)"""
-    with pytest.raises(ToolError):
-        run(server.call_tool("ghost_tool", {}))
+    """失败转成 is_error=True 的结果，正文是可解析的 JSON（v1 由 SDK 转，v2 由 call_tool 自己转）"""
+    result = call_tool("ghost_tool", {})
+    assert result.is_error is True
+    payload = json.loads(result.content[0].text)
+    assert payload["success"] is False
+    assert payload["errorType"] == "unknown_tool"
 
 
 def test_tool_definitions():
     """对外工具定义齐全（清单见 conftest.EXPECTED_TOOL_NAMES），且参数名统一为 tool_id"""
     from conftest import EXPECTED_TOOL_NAMES
 
-    tools = run(list_tools())
+    tools = list_tools()
     names = {t.name for t in tools}
     assert names == EXPECTED_TOOL_NAMES, (
         f"工具集与预期不一致：多出 {names - EXPECTED_TOOL_NAMES}，"
@@ -267,101 +302,81 @@ def test_tool_definitions():
     by_name = {t.name: t for t in tools}
     for name in ("search_tools", "list_capabilities", "start_runtime", "stop_runtime"):
         assert name in by_name
-        assert by_name[name].inputSchema["type"] == "object"
+        assert by_name[name].input_schema["type"] == "object"
 
 
 def test_read_resource_returns_contents_objects():
-    """资源必须返回带 .content/.mime_type 的条目
+    """资源返回带 .text/.mime_type 的 TextResourceContents 条目"""
 
-    返回 TextContent 会让 SDK 在读 .content 时抛 AttributeError。
-    """
-
-    async def go():
-        results = []
-        for uri in ("awam://tools", "awam://mcp-servers", "awam://backends/status"):
-            results.append(list(await read_resource(uri)))
-        return results
-
-    for items in run(go()):
+    for uri in ("awam://tools", "awam://mcp-servers", "awam://backends/status"):
+        items = read_resource(uri)
         assert len(items) == 1
         item = items[0]
-        assert isinstance(item.content, str), "content 不是字符串"
+        assert isinstance(item.text, str), "text 不是字符串"
         assert item.mime_type == "application/json"
-        json.loads(item.content)  # 必须是可解析的 JSON
+        json.loads(item.text)  # 必须是可解析的 JSON
 
 
 def test_read_unknown_resource_raises():
-    with pytest.raises(ToolError) as exc:
-        run(read_resource("awam://nope"))
+    with pytest.raises(MCPError) as exc:
+        read_resource("awam://nope")
 
-    assert payload_of(exc)["errorType"] == "unknown_resource"
+    payload = json.loads(exc.value.message)
+    assert payload["errorType"] == "unknown_resource"
 
 
-def test_read_resource_accepts_anyurl():
-    """SDK 传进来的是 pydantic AnyUrl，不是 str
-
-    `AnyUrl("awam://tools") == "awam://tools"` 恒为 False，不归一化会让
-    三个资源全部落到「未知资源」分支 —— 这个坑只有真实会话调用才会暴露。
-    """
-    from mcp.types import AnyUrl
-
-    items = list(run(read_resource(AnyUrl("awam://tools"))))
-    assert json.loads(items[0].content)
+def test_read_resource_uri_is_str():
+    """v2：params.uri 已是 str（v1 的 AnyUrl 归一化坑不复存在），直接传 str 即可命中"""
+    items = read_resource("awam://tools")
+    assert json.loads(items[0].text)
 
 
 def test_list_resources_definitions():
-    resources = run(server.list_resources())
+    resources = list_resources()
     uris = {str(r.uri) for r in resources}
 
     assert uris == {"awam://tools", "awam://mcp-servers", "awam://backends/status"}
-    assert all(r.mimeType == "application/json" for r in resources)
+    assert all(r.mime_type == "application/json" for r in resources)
 
 
 def test_prompts_do_not_teach_legacy_params():
     """D16 回归：prompt 里不能把已废弃的参数名当用法教给 AI"""
-    prompts = {p.name for p in run(server.list_prompts())}
+    prompts = {p.name for p in list_prompts()}
     assert prompts == {"getting_started", "how_to_search", "how_to_call_capability"}
 
     for name in prompts:
-        messages = run(server.get_prompt(name))
-        # 新版 SDK 返回 GetPromptResult，老版本返回裸列表，两种都要能取到文本
-        text = (
-            messages.messages[0].content.text
-            if hasattr(messages, "messages")
-            else messages[0].content.text
-        )
+        result = get_prompt(name)
+        text = result.messages[0].content.text
         assert "launcher_id=" not in text
         assert "mcp_tool_id=" not in text
 
-    how_to = run(server.get_prompt("how_to_call_capability"))
-    messages = how_to.messages if hasattr(how_to, "messages") else how_to
-    body = messages[0].content.text
+    how_to = get_prompt("how_to_call_capability")
+    body = how_to.messages[0].content.text
     assert "tool_id=" in body
     assert "capability_id=" in body
     assert "search_files" in body
 
 
 def test_get_unknown_prompt_raises():
-    with pytest.raises(ToolError) as exc:
-        run(server.get_prompt("nope"))
+    with pytest.raises(MCPError) as exc:
+        get_prompt("nope")
 
-    assert payload_of(exc)["errorType"] == "unknown_prompt"
+    payload = json.loads(exc.value.message)
+    assert payload["errorType"] == "unknown_prompt"
 
 
 def test_call_tool_returns_structured_result():
-    """call_tool 现在直接返回 CallToolResult，并附带 structuredContent（mcp 1.30 能力）
+    """call_tool 返回 CallToolResult，并附带 structured_content
 
     dispatch_tool 仍返回 JSON 文本（单测依赖它），call_tool 在其上包一层
     CallToolResult：文本通道保留，同时给出结构化结果。
     """
-    from mcp.types import CallToolResult
-
-    res = run(server.call_tool("list_tools", {}))
+    res = call_tool("list_tools", {})
 
     assert isinstance(res, CallToolResult), f"call_tool 未返回 CallToolResult: {type(res)}"
-    assert res.isError is False
-    assert isinstance(res.structuredContent, dict)
-    assert res.structuredContent["success"] is True
+    assert res.is_error is False
+    assert isinstance(res.structured_content, dict)
+    assert res.structured_content["success"] is True
     # 文本通道保留（向后兼容）
     assert "tools" in json.loads(res.content[0].text)
 

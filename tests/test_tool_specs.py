@@ -51,13 +51,15 @@ def _fields(tool):
     """
     annotations = None
     if tool.annotations is not None:
-        annotations = tool.annotations.model_dump(exclude_none=True)
+        # v2 字段是 snake_case；by_alias=True 还原成线上 camelCase（readOnlyHint…），
+        # 与 M00 采集的 golden 保持同一序列化口径，golden 无需重生成。
+        annotations = tool.annotations.model_dump(exclude_none=True, by_alias=True)
     return {
         "name": tool.name,
         "description": tool.description,
-        "inputSchema": tool.inputSchema,
+        "inputSchema": tool.input_schema,
         "annotations": annotations,
-        "outputSchema": tool.outputSchema,
+        "outputSchema": tool.output_schema,
     }
 
 
@@ -94,7 +96,7 @@ def test_spec_names_three_way_consistency(monkeypatch):
         ("full", EXPECTED_TOOL_NAMES_FULL),
     ):
         monkeypatch.setattr(server, "EXPOSURE_MODE", mode)
-        listed_names = {t.name for t in asyncio.run(server.list_tools())}
+        listed_names = {t.name for t in asyncio.run(server.list_tools(None, None)).tools}
         assert listed_names == expected, (
             f"list_tools() 在 {mode} 模式下与手写清单不一致："
             f"多出 {listed_names - expected}，缺少 {expected - listed_names}"

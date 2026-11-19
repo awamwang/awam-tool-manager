@@ -266,14 +266,14 @@ def test_destructive_without_sub_tool_list_still_blocks_everything(monkeypatch):
 
 def test_read_only_tools_are_annotated():
     """只读工具必须带 readOnlyHint，转发类只标 openWorldHint"""
-    tools = {t.name: t for t in run(server.list_tools())}
+    tools = {t.name: t for t in run(server.list_tools(None, None)).tools}
 
     for name in ("search_tools", "list_tools", "get_tool_info", "get_runtime_status"):
         annotations = tools[name].annotations
         assert annotations is not None, f"{name} 缺少 annotations"
-        assert annotations.readOnlyHint is True
+        assert annotations.read_only_hint is True
 
     forwarded = tools["call_capability"].annotations
     assert forwarded is not None
-    assert forwarded.openWorldHint is True
-    assert forwarded.readOnlyHint is None, "副作用静态不可知，不应断言只读"
+    assert forwarded.open_world_hint is True
+    assert forwarded.read_only_hint is None, "副作用静态不可知，不应断言只读"

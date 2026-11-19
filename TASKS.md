@@ -1357,6 +1357,33 @@
 - [x] **测试与文档**：单测/e2e 全量迁移、golden 三档重采集、`SKILL.md` /
       `docs/format.md` 同步
 
+### Quicker 动作清单快照补全：launcher.nameSources（2026-11-17）
+
+**问题**（真机实测）：Quicker 动作正文存在加密的 quicker.db（文件头非 SQLite 魔数），
+清单只能从 `states/`（ID + 缓存的动作列表变量）与运行日志尽力解析——本机只枚举出
+212/357 个动作、56 个只剩 ID，「EVER重命名」因此完全搜不到（两个来源都没覆盖它：
+state 缓存没有、从未运行过所以日志也没有）。
+
+- [x] **接入两份用户导出的完整快照**（`launcher.nameSources`，适配器展开
+      `%USERPROFILE%` 等环境变量，按配置顺序先到先得）：
+      ① Quicker「工具→导出动作列表」的 CSV（中文表头，GBK/UTF-8 自适应，含
+      名称/说明/类型/EXE/动作页）；② 维护工具「备份数据」导出目录（`actions/
+      action_<ID>_<名>.json`，ID 取文件名、名称/描述取 JSON 正文 Title/Description，
+      同时接受备份根目录与 `actions/` 两种写法）
+- [x] **合并规则：只补空不覆盖**——state 缓存里的完整信息（带 type/app/description）
+      是权威；快照里有而 states 没有的动作 ID 也并入清单（本机 212 → 357 全量、
+      56 个只剩 ID 的动作全部回名）；`panel`（动作页）并入动作条目并参与关键词搜索
+- [x] **诚实边界**：快照会过期（已删动作残留），调用按 QuickerStarter 失败文本
+      如实报错；单个源读不了只告警跳过，绝不拖垮同步
+- [x] **接线**：`src/launcher_client.py`（`_scan_quicker_name_sources` /
+      `_read_quicker_csv` / `_read_quicker_backup_dir`）、`src/schema.py`
+      （launcher.nameSources 字段）、`data/tools/quicker.json`（接本机
+      `G:\Data\Tools\Quicker\QuickerActions.csv` + `export` 目录）、
+      `docs/format.md` 重新生成、`SKILL.md` 快照补全说明
+- [x] **测试**：`tests/test_launcher_client.py` 新增 9 用例（CSV GBK/UTF-8 双编码、
+      备份目录两种写法、多源顺序、state 缓存优先、缺源跳过告警、partial→auto
+      升级、panel 可搜、环境变量展开），全套 818 用例绿
+
 ---
 
 ## 三、待完成 ⏳

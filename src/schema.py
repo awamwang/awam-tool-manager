@@ -168,6 +168,19 @@ TOOL_ENTRY_SCHEMA: dict[str, Any] = {
                         "省略则回退 `HKCU\\Software\\Valve\\Steam` 的 SteamPath）"
                     ),
                 },
+                "nameSources": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "补充动作名称/清单的快照数据源（Quicker 专用，按序合并、先到先得，"
+                        "适配器会展开 %USERPROFILE% 等环境变量）：`.csv` 为 Quicker「工具→"
+                        "导出动作列表」文件；目录为维护工具「备份数据」的导出目录（含 "
+                        "`actions/action_<ID>_<名>.json`，也支持其上级根目录）。加密的 "
+                        "quicker.db 读不了、states/日志只覆盖部分动作（名称只剩 ID、搜索"
+                        "漏动作）；快照可补全缺失的动作 ID 与名称，只补空不覆盖 state 缓存。"
+                        "快照会过期（已删动作残留），调用按 QuickerStarter 失败文本如实报错"
+                    ),
+                },
                 "timeout": {
                     "type": "number",
                     "exclusiveMinimum": 0,

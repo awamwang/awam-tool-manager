@@ -545,6 +545,7 @@ class _SdkSurfaceSession:
 
     def __init__(self):
         self.ping_calls = 0
+        self.list_tools_calls = 0
 
     async def initialize(self):
         return None
@@ -554,6 +555,8 @@ class _SdkSurfaceSession:
         return None
 
     async def list_tools(self):
+        self.list_tools_calls += 1
+
         class _Result:
             tools = []
 
@@ -567,17 +570,16 @@ def test_heartbeat_probe_matches_real_sdk():
     """A9：心跳探测必须落在真实 ClientSession 存在的方法上
 
     曾经的 bug：`await session.ping()` —— mcp 1.x 只有 send_ping()。
-    生产环境（mcp 1.29.0）每次启动后端后心跳必败、连接被清、状态 error，
-    后端永远留不住；而开发环境（mcp 1.30）的心跳 fake 自带 ping 方法，
-    测试全绿也发现不了。本用例从两头堵死：
-    1. 契约断言：探测方法必须真实存在于 mcp.ClientSession；
+    mcp 2.x 进一步把 ping 从协议移除，_heartbeat_loop 改用轻量 list_tools()
+    探活（对 1.x/2.x 第三方子后端都兼容）。本用例从两头堵死：
+    1. 契约断言：探测方法（list_tools）必须真实存在于 mcp.ClientSession；
     2. 行为断言：心跳跑完一轮后状态仍为 running（假 session 表面即真实
        SDK 白名单，调错方法会 AttributeError → 状态 error → 断言失败）。
     """
     import mcp
 
-    assert hasattr(mcp.ClientSession, "send_ping"), (
-        "mcp.ClientSession 没有 send_ping()——SDK API 变了，"
+    assert hasattr(mcp.ClientSession, "list_tools"), (
+        "mcp.ClientSession 没有 list_tools()——SDK API 变了，"
         "请同步更新 _heartbeat_loop 的探测方式"
     )
 
@@ -590,23 +592,23 @@ def test_heartbeat_probe_matches_real_sdk():
         client.HEARTBEAT_INTERVAL = 0.01
         client._heartbeat_task = asyncio.create_task(client._heartbeat_loop())
         for _ in range(100):
-            if session.ping_calls >= 2:
+            if session.list_tools_calls >= 2:
                 break
             await asyncio.sleep(0.02)
         await client.stop()
         return client, session
 
     client, session = asyncio.run(run())
-    assert session.ping_calls >= 2, "心跳应周期调用 send_ping"
+    assert session.list_tools_calls >= 2, "心跳应周期用 list_tools 探活"
     assert client.status == BackendClient.STATUS_STOPPED  # stop 后的正常状态
     assert "exit:stdio" in client.tracker
 
 
 class _FakeCallResult:
-    """call_tool 成功返回的最小结果对象（isError=False + 文本 content）"""
+    """call_tool 成功返回的最小结果对象（is_error=False + 文本 content）"""
 
     def __init__(self, text: str):
-        self.isError = False
+        self.is_error = False
         self.content = [type("C", (), {"text": text})()]
 
 

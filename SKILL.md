@@ -249,6 +249,11 @@ policy / usage / 生命周期仍走同一个 `dispatch_tool` 出口。模式只�
 > - **Quicker**：`QuickerStarter.exe -c<秒> "runaction:<ID或名称>?参数"`，stdout 回传动作
 >   结果（失败时退出码仍是 0，按输出文本判定）。`source=partial` 表示部分动作只拿到 ID
 >   （`quicker.db` 是加密的，名称只能从 state 缓存 + 运行日志尽力解析）。
+>   **快照补全（2026-11-17）**：`launcher.nameSources` 可接两份用户导出的完整快照——
+>   「工具→导出动作列表」的 CSV、维护工具「备份数据」目录（`actions/action_<ID>_<名>.json`），
+>   按配置顺序**只补空不覆盖** state 缓存：补上 states 没枚举到的动作 ID（本机 212→357）
+>   与缺失名称（56 个只剩 ID 的动作全部回名，如「EVER重命名」）。快照会过期，
+>   已删动作会残留（调用按 QuickerStarter 失败文本如实报错），重新导出即可刷新。
 > - **uTools**：`cmd start "utools://<URL编码插件名>/<URL编码关键词>[?<URL编码文本>]"`
 >   协议唤起，**fire-and-forget 无结果回传**（结果只在 uTools UI，返回体带
 >   `fireAndForget: true` 明示此事；payload 仅文本，文件类功能经 URL 不可达）。
@@ -375,10 +380,11 @@ CallToolResult 透传；生产环境 pyenv 3.12 即 1.29.0）。
 2. 普通应用写 `kind=app` + `launch`；MCP 工具写 `kind=mcp` + `connection`。
    帮助命令与默认 `--help` 不同的应用（GUI 程序常为 `/?`）再补可选 `help`
    （`command` / `args` / `timeout`），`get_tool_help` 会优先按它取
-3. 启动器写 `kind=launcher` + `launcher` 配置（`type=quicker`/`utools`/`steam`、数据目录、
-   超时；uTools 的 `dataDir` 可写 `%APPDATA%` 等环境变量，由适配器展开；Steam 的
-   `dataDir` / `command` 可留空，适配器会回退查注册表 `SteamPath` / `SteamExe`），
-   动作清单由 `sync_capabilities` 从启动器本地数据自动生成
+ 3. 启动器写 `kind=launcher` + `launcher` 配置（`type=quicker`/`utools`/`steam`、数据目录、
+    超时；uTools 的 `dataDir` 可写 `%APPDATA%` 等环境变量，由适配器展开；Steam 的
+    `dataDir` / `command` 可留空，适配器会回退查注册表 `SteamPath` / `SteamExe`；
+    Quicker 可加 `nameSources` 接动作列表 CSV / 维护工具备份目录两类快照补全名称与清单），
+    动作清单由 `sync_capabilities` 从启动器本地数据自动生成
 4. MCP 工具调用 `start_runtime(tool_id=...)` 建立连接并自动同步能力清单；
    启动命令不在 PATH 时**默认不安装**，返回 `install_required`——需要自动安装
    就设 `AWAM_AUTO_INSTALL=1` 或给条目配 `install.auto: true`（见「安全约定」）

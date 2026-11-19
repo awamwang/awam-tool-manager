@@ -17,6 +17,14 @@
 只有 ID 也能调用（`runaction:<uuid>` 是官方支持的标识），只是搜不到——
 所以同步绝不因为缺名称而失败。
 
+名称/清单还有两个**快照来源**（`launcher.nameSources`，2026-11-17 接入）：
+Quicker「工具→导出动作列表」的 CSV、维护工具「备份数据」导出目录里的
+`actions/action_<ID>_<名>.json`。states 只覆盖本机 212/357 个动作、56 个只剩
+ID（EVER重命名搜不到的直接原因）；两份快照合计能把清单补到全量、名称补齐。
+快照是手动导出的会过期——已删动作会残留在清单里，但调用只会收到 QuickerStarter
+的失败文本，与「搜索不到」相比是更好的失败方向。合并规则：**只补空，不覆盖**
+state 缓存里的完整信息（那边带 type/app/description），多个源按配置顺序先到先得。
+
 第二个实现是 uTools。数据来源完全不同：插件目录 `plugins/*.asar`
 （Chromium Pickle 封包的归档）里的 `plugin.json.features[].cmds`。
 asar 里的声明是**完整**的（有 explain、有全部触发词），不存在 Quicker
@@ -35,7 +43,9 @@ appmanifest_*.acf` 声明装了哪个游戏。解析规则都在 `steam_library.
 from __future__ import annotations
 
 import asyncio
+import csv
 import datetime
+import io
 import json
 import os
 import re
@@ -65,6 +75,19 @@ QUICKER_ACTION_RE = re.compile(
 
 # 动作 ID 也体现在状态文件名上：states/state_<uuid>.json
 QUICKER_STATE_FILE_RE = re.compile(r"^state_([0-9a-fA-F-]{36})\.json$", re.IGNORECASE)
+
+# 标准 UUID 形态（小写比较前的格式校验；CSV/备份文件名里都应是它）
+QUICKER_ACTION_ID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
+)
+
+# 名称/清单的快照来源之一：维护工具备份导出的动作文件
+# `actions/action_<ID>_<名>.json`。ID 从文件名取（稳定），
+# 名称/描述从 JSON 正文取（Title/Description——文件名里的名称可能被清洗/截断）
+QUICKER_BACKUP_FILE_RE = re.compile(
+    r"^action_([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})_.+\.json$"
+)
 
 # 动作名称的**第二个来源**：Quicker 每次执行动作都会往日志里写一行
 #   2026-10-16 22:11:06 [action:识别二维码] ... 执行动作：识别二维码 id=9f530d6e-...
@@ -190,6 +213,13 @@ class LauncherClient:
             # 路径）不展开，行为与接入前逐字一致
             data_dir = os.path.expandvars(data_dir)
         self.data_dir = Path(data_dir) if data_dir else None
+        # 补充名称/清单的快照数据源（Quicker 专用）。路径允许写
+        # %USERPROFILE% 等环境变量——快照位置属于本机事实，不该硬编码进仓库
+        self.name_sources = [
+            Path(os.path.expandvars(str(source).strip()))
+            for source in (cfg.get("nameSources") or [])
+            if str(source).strip()
+        ]
         self.timeout = float(cfg.get("timeout") or DEFAULT_TIMEOUT)
 
     # ---- 动作清单同步 ----
@@ -260,7 +290,19 @@ class LauncherClient:
                         "description": matched.group("desc").strip(),
                     }
 
-        # 3) 名称补漏：从 Quicker 运行日志里捞（只补空，不覆盖上面拿到的）
+        # 3) 名称/清单补全（快照来源）：用户导出的动作列表 CSV、维护工具备份
+        #    目录（launcher.nameSources，按序先到先得）。只补空不覆盖 state
+        #    缓存里的完整信息；快照里有而 states 没有的动作 ID 也并入清单
+        for action_id, row in self._scan_quicker_name_sources().items():
+            entry = found.get(action_id)
+            if entry is None:
+                found[action_id] = row
+                continue
+            for field in ("name", "type", "app", "description", "panel"):
+                if not entry.get(field) and row.get(field):
+                    entry[field] = row[field]
+
+        # 4) 名称补漏：从 Quicker 运行日志里捞（只补空，不覆盖上面拿到的）
         log_names = self._scan_quicker_log_names()
         for action_id, name in log_names.items():
             entry = found.get(action_id)
@@ -273,6 +315,105 @@ class LauncherClient:
         # 这样调用方知道「搜索可能漏结果」。
         source = "auto" if actions and named == len(actions) else "partial"
         return actions, source
+
+    def _scan_quicker_name_sources(self) -> dict[str, dict[str, Any]]:
+        """扫描快照数据源（launcher.nameSources），返回 动作ID → 动作条目。
+
+        states 缓存 + 运行日志只覆盖部分动作（本机实测 212/357，56 个只剩 ID，
+        「EVER重命名」搜不到的直接原因）。用户导出的快照是完整清单：CSV 导出
+        357 个全带名称、维护工具备份 349 个——把它们并进来补全缺的动作 ID 与
+        名称。快照会过期（已删动作残留），调用时按 QuickerStarter 失败文本
+        如实报错即可，不值得为过期放弃补全。
+
+        单个源读不了只告警跳过，绝不拖垮整个同步（与 asar/日志同一纪律）。
+        """
+        merged: dict[str, dict[str, Any]] = {}
+        for source_path in self.name_sources:
+            try:
+                if source_path.suffix.lower() == ".csv":
+                    rows = self._read_quicker_csv(source_path)
+                elif source_path.is_dir():
+                    rows = self._read_quicker_backup_dir(source_path)
+                else:
+                    _log(
+                        self.tool_id,
+                        "warning",
+                        f"跳过不存在的 nameSource: {source_path}",
+                    )
+                    continue
+            except OSError as exc:
+                _log(
+                    self.tool_id,
+                    "warning",
+                    f"读取 nameSource 失败，跳过 {source_path}: {exc}",
+                )
+                continue
+            for row in rows:
+                action_id = row.pop("id")
+                # 同一动作出现在多个源里：先配置的先得（fill-empty 语义在调用方）
+                if action_id not in merged:
+                    merged[action_id] = {"id": action_id, **row}
+        return merged
+
+    def _read_quicker_csv(self, path: Path) -> list[dict[str, Any]]:
+        """Quicker「工具→导出动作列表」的 CSV（中文表头，GBK 或 UTF-8 编码）"""
+        raw = path.read_bytes()
+        text = ""
+        for encoding in ("utf-8-sig", "gbk"):
+            try:
+                text = raw.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        else:
+            text = raw.decode("gbk", errors="replace")
+        # 残留 BOM 会粘住表头首列（"\ufeffId"），查列名就永远查不到 Id
+        text = text.lstrip("\ufeff")
+        actions: list[dict[str, Any]] = []
+        for row in csv.DictReader(io.StringIO(text)):
+            action_id = str(row.get("Id") or "").strip().lower()
+            if not QUICKER_ACTION_ID_RE.match(action_id):
+                continue
+            actions.append({
+                "id": action_id,
+                "name": str(row.get("名称") or "").strip(),
+                "type": str(row.get("类型") or "").strip(),
+                "app": str(row.get("EXE") or "").strip(),
+                "description": str(row.get("说明") or "").strip(),
+                "panel": str(row.get("动作页") or "").strip(),
+            })
+        return actions
+
+    def _read_quicker_backup_dir(self, path: Path) -> list[dict[str, Any]]:
+        """维护工具「备份数据」导出目录里的动作文件。
+
+        接受备份根目录（含 `actions/` 子目录）或 `actions/` 目录本身；
+        ID 取文件名，名称/描述取 JSON 正文（`Title` / `Description`）。
+        """
+        candidates = set(path.glob("action_*.json")) | set(
+            path.glob("actions/action_*.json")
+        )
+        actions: list[dict[str, Any]] = []
+        for file_path in sorted(candidates):
+            matched = QUICKER_BACKUP_FILE_RE.match(file_path.name)
+            if not matched:
+                continue
+            try:
+                payload = json.loads(
+                    file_path.read_text(encoding="utf-8", errors="replace")
+                )
+            except (OSError, ValueError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            actions.append({
+                "id": matched.group(1).lower(),
+                "name": str(payload.get("Title") or "").strip(),
+                "type": "",
+                "app": "",
+                "description": str(payload.get("Description") or "").strip(),
+            })
+        return actions
 
     def _scan_utools(self) -> tuple[list[dict[str, Any]], str]:
         """扫描 uTools 插件目录（dataDir/*.asar），返回 (动作列表, source)。
@@ -457,7 +598,7 @@ class LauncherClient:
             def haystack(action: dict[str, Any]) -> str:
                 parts = [
                     str(action.get(field) or "")
-                    for field in ("name", "id", "description", "app", "type")
+                    for field in ("name", "id", "description", "app", "type", "panel")
                 ]
                 # uTools 动作带 keywords 列表（该功能的全部触发词）：
                 # 非首个关键词（如 "全部站点"）也要能搜到

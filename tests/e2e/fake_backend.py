@@ -18,7 +18,8 @@ R2）。本文件就是那条链路的被测方。
 3. **不依赖 argv 传参**（由父进程 `launch_detached.py` 注入环境变量），避免
    与 FastMCP 自身的命令行处理抢 `sys.argv`。
 
-零新依赖：`FastMCP` 是 mcp 1.29 自带的。
+零新依赖：`MCPServer`（原 FastMCP）由 mcp 2.x 自带，`@mcp.tool()` 高层装饰器在
+v2 沿用（按类型注解自动生成 inputSchema）。
 """
 
 from __future__ import annotations
@@ -27,12 +28,12 @@ import json
 import os
 import time
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 # 调用计数文件的路径，由 launch_detached.py 注入
 CALLS_ENV_VAR = "FAKE_BACKEND_CALLS"
 
-mcp = FastMCP("awam-e2e-fake-backend")
+mcp = MCPServer("awam-e2e-fake-backend")
 
 
 def _record(tool_name: str, arguments: dict) -> None:

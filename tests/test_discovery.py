@@ -1196,4 +1196,4 @@ def test_discover_tools_spec_is_open_world_not_read_only():
     ]
     assert "required" not in spec.input_schema
     built = {t.name: t for t in build_mcp_tools()}["discover_tools"]
-    assert built.annotations.model_dump(exclude_none=True)["openWorldHint"] is True
+    assert built.annotations.model_dump(exclude_none=True, by_alias=True)["openWorldHint"] is True

@@ -1016,6 +1016,158 @@ def test_scan_supplements_names_from_run_log(tmp_path):
     assert rich["app"] == "_global"
 
 
+# ---- Quicker：快照名称源（nameSources：动作列表 CSV / 维护工具备份目录） ----
+#
+# 背景（2026-11-17 真机实测）：states 只枚举出 212/357 个动作、56 个只剩 ID，
+# 「EVER重命名」因此搜不到。用户导出的两份快照（CSV 全量 357、备份目录 349）
+# 是完整清单——接入后按「只补空不覆盖、多源按配置顺序先到先得」合并。
+
+SNAPSHOT_ONLY_ID = "44444444-4444-4444-4444-444444444444"
+
+# 真实 Quicker 导出 CSV 的形状：中文表头、GBK（中文 Windows 默认）或 UTF-8
+CSV_TEXT = (
+    "Id,名称,说明,图标,类型,Uri,动作页,EXE,关联Exe,位置,大小,创建或安装时间,最后更新,来源动作\r\n"
+    "22222222-2222-2222-2222-222222222222,快照补全的动作,来自CSV的说明,,XAction,"
+    "quicker:runaction:22222222-2222-2222-2222-222222222222,默认页,,,0,0,2026-1-1 0:00,2026-1-1 0:00,\r\n"
+    f"{SNAPSHOT_ONLY_ID},只在快照里的动作,CSV独有,,XAction,"
+    f"quicker:runaction:{SNAPSHOT_ONLY_ID},工具页,,,0,0,2026-1-1 0:00,2026-1-1 0:00,\r\n"
+    "not-a-guid,非法ID要跳过,,,,,,,0,0,,,\r\n"
+    "92c14d1b-0479-40f0-8952-1359a8a765fb,状态缓存优先,CSV里的旧名,,XAction,"
+    "quicker:runaction:92c14d1b-0479-40f0-8952-1359a8a765fb,默认页,,,0,0,,,\r\n"
+)
+
+
+def make_client_with_sources(tmp_path: Path, sources: list[str]) -> LauncherClient:
+    data_dir = build_fake_quicker(tmp_path)
+    tool = json.loads(json.dumps(QUICKER_TOOL))
+    tool["launcher"]["dataDir"] = str(data_dir)
+    tool["launcher"]["nameSources"] = sources
+    return LauncherClient(tool, JsonStore(tmp_path / "data"))
+
+
+@pytest.mark.parametrize("encoding", ["gbk", "utf-8-sig"])
+def test_scan_merges_csv_name_source(tmp_path, encoding):
+    """CSV 快照：补上缺名动作的名称、并入快照独有的动作 ID、非法 ID 跳过"""
+    csv_path = tmp_path / "QuickerActions.csv"
+    # utf-8-sig 编码自身就会写入 BOM，无需手动加前缀
+    csv_path.write_bytes(CSV_TEXT.encode(encoding))
+    client = make_client_with_sources(tmp_path, [str(csv_path)])
+
+    by_id = {a["id"]: a for a in client._scan_quicker()[0]}
+    # 缺名称的动作被 CSV 补全（name/description/type/panel 都来自 CSV）
+    filled = by_id["22222222-2222-2222-2222-222222222222"]
+    assert filled["name"] == "快照补全的动作"
+    assert filled["description"] == "来自CSV的说明"
+    assert filled["type"] == "XAction"
+    assert filled["panel"] == "默认页"
+    # CSV 里有、states 没有的动作也并进清单
+    assert by_id[SNAPSHOT_ONLY_ID]["name"] == "只在快照里的动作"
+    # 非法 ID 行被跳过
+    assert "not-a-guid" not in by_id
+
+
+def test_snapshot_never_overrides_state_cache(tmp_path):
+    """state 缓存里的完整信息是权威，快照只补空（名称/描述都不覆盖）"""
+    csv_path = tmp_path / "QuickerActions.csv"
+    csv_path.write_bytes(CSV_TEXT.encode("gbk"))
+    client = make_client_with_sources(tmp_path, [str(csv_path)])
+
+    by_id = {a["id"]: a for a in client._scan_quicker()[0]}
+    rich = by_id["92c14d1b-0479-40f0-8952-1359a8a765fb"]
+    assert rich["name"] == "文件/全文搜索", "不该被 CSV 里的旧名覆盖"
+    assert rich["app"] == "_global"
+
+
+def test_scan_merges_backup_export_dir(tmp_path):
+    """维护工具备份目录：支持备份根（含 actions/）与 actions/ 两种写法，
+    ID 取文件名、名称/描述取 JSON 正文（Title/Description）"""
+    export_root = tmp_path / "export"
+    actions_dir = export_root / "actions"
+    actions_dir.mkdir(parents=True)
+
+    def write_action(target: Path, action_id: str, title: str, desc: str) -> None:
+        (target / f"action_{action_id}_{title}.json").write_text(
+            json.dumps({"Id": action_id, "Title": title, "Description": desc},
+                       ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    write_action(actions_dir, "22222222-2222-2222-2222-222222222222",
+                 "EVER重命名", "批量重命名文件（夹），带后悔药功能")
+    write_action(actions_dir, SNAPSHOT_ONLY_ID, "备份独有", "备份目录才有")
+    # 文件名不符合 action_<uuid>_*.json 的杂项文件要跳过
+    (actions_dir / "action_readme.json").write_text("{}", encoding="utf-8")
+
+    client = make_client_with_sources(tmp_path, [str(export_root)])
+    by_id = {a["id"]: a for a in client._scan_quicker()[0]}
+    assert by_id["22222222-2222-2222-2222-222222222222"]["name"] == "EVER重命名"
+    assert "后悔药" in by_id["22222222-2222-2222-2222-222222222222"]["description"]
+    assert by_id[SNAPSHOT_ONLY_ID]["name"] == "备份独有"
+    assert "action_readme" not in {a["id"] for a in by_id.values()}
+
+    # 直接给 actions/ 目录本身也能解析
+    client2 = make_client_with_sources(tmp_path, [str(actions_dir)])
+    by_id2 = {a["id"]: a for a in client2._scan_quicker()[0]}
+    assert by_id2["22222222-2222-2222-2222-222222222222"]["name"] == "EVER重命名"
+
+
+def test_name_sources_merged_in_config_order(tmp_path):
+    """多个快照源按配置顺序先到先得：前一个源给过的字段后一个不抢"""
+    first = tmp_path / "one.csv"
+    second = tmp_path / "two.csv"
+    first.write_bytes(CSV_TEXT.encode("gbk"))
+    second.write_text(
+        "Id,名称,说明\r\n"
+        "22222222-2222-2222-2222-222222222222,第二个源的名字,第二源说明\r\n",
+        encoding="utf-8",
+    )
+    client = make_client_with_sources(tmp_path, [str(first), str(second)])
+
+    by_id = {a["id"]: a for a in client._scan_quicker()[0]}
+    assert by_id["22222222-2222-2222-2222-222222222222"]["name"] == "快照补全的动作"
+
+
+def test_missing_name_source_skipped_with_warning(tmp_path, capsys):
+    """不存在的快照路径只告警跳过，不拖垮同步（尽力而为原则）"""
+    client = make_client_with_sources(tmp_path, [str(tmp_path / "nope.csv")])
+    actions, source = client._scan_quicker()
+    # 回落到纯 states 行为：4 个动作、partial
+    assert len(actions) == 4
+    assert source == "partial"
+    assert "nameSource" in capsys.readouterr().err
+
+
+def test_snapshot_completes_names_to_auto(tmp_path):
+    """快照把最后一个缺名动作补全后，source 从 partial 升为 auto"""
+    csv_path = tmp_path / "QuickerActions.csv"
+    csv_path.write_bytes(CSV_TEXT.encode("gbk"))
+    client = make_client_with_sources(tmp_path, [str(csv_path)])
+
+    actions, source = client._scan_quicker()
+    assert all(a["name"] for a in actions)
+    assert source == "auto"
+
+
+def test_panel_is_searchable(tmp_path):
+    """CSV 的动作页（panel）并入动作条目后要参与关键词搜索"""
+    csv_path = tmp_path / "QuickerActions.csv"
+    csv_path.write_bytes(CSV_TEXT.encode("gbk"))
+    client = make_client_with_sources(tmp_path, [str(csv_path)])
+    client.sync_actions()
+
+    hits = client.list_actions(keyword="工具页")
+    assert [a["id"] for a in hits] == [SNAPSHOT_ONLY_ID]
+
+
+def test_name_sources_expand_env_vars(tmp_path, monkeypatch):
+    """快照路径可写 %USERPROFILE% 等环境变量（快照位置属于本机事实）"""
+    monkeypatch.setenv("QUICKER_EXPORT", str(tmp_path))
+    tool = json.loads(json.dumps(QUICKER_TOOL))
+    tool["launcher"]["nameSources"] = ["%QUICKER_EXPORT%\\QuickerActions.csv"]
+    client = LauncherClient(tool, JsonStore(tmp_path / "data"))
+    assert client.name_sources == [tmp_path / "QuickerActions.csv"]
+
+
 def test_list_actions_uses_cache_when_fresh(tmp_path):
     """缓存新鲜 → 直接读盘，不重新扫描（省一次全量扫盘）"""
     client = make_client(tmp_path)

@@ -11,26 +11,27 @@ import sys
 import time
 from pathlib import Path
 
+from mcp import MCPError
 from mcp.server import Server
 from mcp.types import (
-    Resource,
+    INVALID_PARAMS,
+    CallToolRequestParams,
+    CallToolResult,
+    GetPromptRequestParams,
+    GetPromptResult,
+    ListPromptsResult,
+    ListResourcesResult,
+    ListToolsResult,
     Prompt,
     PromptMessage,
+    ReadResourceRequestParams,
+    ReadResourceResult,
+    Resource,
     TextContent,
+    TextResourceContents,
     Tool,
-    CallToolResult,
 )
 import mcp.server.stdio
-
-try:  # mcp >=1.9 起才有 ReadResourceContents，老版本退回纯文本返回形式
-    from mcp.server.lowlevel.helper_types import ReadResourceContents
-except ImportError:  # pragma: no cover
-    ReadResourceContents = None
-
-try:  # prompts/get 的返回类型：2025-06-18 之后要求 GetPromptResult
-    from mcp.types import GetPromptResult
-except ImportError:  # pragma: no cover
-    GetPromptResult = None
 
 # 添加 src 目录到路径
 sys.path.insert(0, str(Path(__file__).parent))
@@ -95,12 +96,8 @@ EXPOSURE_MODE = exposure.resolve_exposure_mode()
 # 会让下游 gatewayCompat 误把 SDK 版本当成网关版本。
 GATEWAY_VERSION = "0.1.0"
 
-# 创建 MCP Server（instructions 按模式生成：能力清单是「主动告知」的唯一通道）
-app = Server(
-    "awam-tool-manager",
-    version=GATEWAY_VERSION,
-    instructions=exposure.build_instructions(EXPOSURE_MODE),
-)
+# v2 起 lowlevel Server 的 handler 通过构造参数 on_* 注册，server 实例须在
+# 所有 handler 定义之后统一构造（见本文件 _on_get_prompt 之后）。
 
 
 def log(msg: str):
@@ -120,16 +117,15 @@ _TOOL_CONTEXT = ToolContext(
 )
 
 
-@app.list_tools()
-async def list_tools() -> list[Tool]:
+async def list_tools(_ctx, _params) -> ListToolsResult:
     """列出所有可用工具"""
     log("收到 list_tools 请求")
-    # P1-04：定义由 tool_specs 声明表统一产出（annotations / outputSchema 在
+    # 定义由 tool_specs 声明表统一产出（annotations / output_schema 在
     # build_mcp_tools() 内挂载），此处只保留两行日志。
     tools = build_mcp_tools(EXPOSURE_MODE)
 
     log(f"返回 {len(tools)} 个工具定义")
-    return tools
+    return ListToolsResult(tools=tools)
 
 
 def _result_to_structured(result: str) -> dict | None:
@@ -148,37 +144,58 @@ def _result_to_structured(result: str) -> dict | None:
     return {"value": parsed}
 
 
-@app.call_tool()
-async def call_tool(name: str, arguments: dict) -> CallToolResult:
-    """MCP tools/call 入口：包成 CallToolResult 并附带结构化结果。
+async def call_tool(_ctx, params: CallToolRequestParams) -> CallToolResult:
+    """MCP tools/call 入口（v2）：成功与失败都返回完整 CallToolResult。
 
-    dispatch_tool 始终返回 JSON 文本；这里在不破坏既有文本输出的前提下，
-    额外附带 structuredContent（dict），让 MCP 客户端能可靠地按结构解析，
-    而不必抓取文本。成功路径直接返回 CallToolResult，由 SDK 原样透传；
-    失败路径仍抛 ToolError，由 SDK 转成 isError=True。
+    v2 不再把 handler 抛出的异常自动转成 isError 结果——未捕获异常会变成
+    协议层 JSON-RPC error，模型读不到 message。因此这里显式接管 v1 的语义：
+    业务错误（ToolError）与其他异常都在此转成 CallToolResult(is_error=True)，
+    正文仍是给客户端解析的 JSON，保持对外 wire 与 mcp 1.x 完全一致
+    （AFM 的 mcp_client.rs 读 isError / structuredContent 不受影响）。
     """
+    name = params.name
+    arguments = params.arguments or {}
     log(f"收到工具调用: {name} | 参数: {arguments}")
 
     try:
-        result = await dispatch_tool(name, arguments or {})
-    except ToolError:
-        # 业务错误：交给 SDK 转成 CallToolResult(isError=True)
-        raise
+        result = await dispatch_tool(name, arguments)
+    except ToolError as e:
+        # 业务错误：转成 is_error 结果，正文为 handler 产出的 JSON 载荷
+        log(f"工具 {name} 业务失败: {e}")
+        structured = _result_to_structured(str(e))
+        content = [TextContent(type="text", text=str(e))]
+        if structured is None:
+            return CallToolResult(content=content, is_error=True)
+        return CallToolResult(
+            content=content, structured_content=structured, is_error=True
+        )
     except Exception as e:
         log(f"工具 {name} 执行异常: {type(e).__name__}: {e}")
-        fail(f"内部错误: {type(e).__name__}: {e}", error_type=ErrorType.INTERNAL_ERROR)
+        payload = json.dumps(
+            {
+                "success": False,
+                "errorType": ErrorType.INTERNAL_ERROR,
+                "error": f"内部错误: {type(e).__name__}: {e}",
+            },
+            ensure_ascii=False,
+        )
+        return CallToolResult(
+            content=[TextContent(type="text", text=payload)], is_error=True
+        )
 
     structured = _result_to_structured(result)
     if structured is None:
-        # 兜底：极少数情况下解析失败，退化为纯文本（不挂结构化，避免触发 outputSchema 校验失败）
+        # 兜底：极少数情况下解析失败，退化为纯文本（不挂结构化，避免触发 output_schema 校验失败）
         log(f"⚠️ 工具 {name} 的返回无法解析为 JSON，仅返回文本")
-        return CallToolResult(content=[TextContent(type="text", text=result)], isError=False)
+        return CallToolResult(
+            content=[TextContent(type="text", text=result)], is_error=False
+        )
 
     log(f"工具 {name} 执行完成，返回 {len(result)} 字符")
     return CallToolResult(
         content=[TextContent(type="text", text=result)],
-        structuredContent=structured,
-        isError=False,
+        structured_content=structured,
+        is_error=False,
     )
 
 
@@ -256,93 +273,87 @@ async def dispatch_tool(name: str, arguments: dict) -> str:
 # ============ Resources（资源） ============
 
 
-@app.list_resources()
-async def list_resources() -> list[Resource]:
+async def list_resources(_ctx, _params) -> ListResourcesResult:
     """列出所有可用资源"""
     log("收到 list_resources 请求")
-    return [
-        Resource(
-            uri="awam://mcp-servers",
-            name="MCP 服务器列表",
-            description="所有已接入的 MCP 服务器",
-            mimeType="application/json"
-        ),
-        Resource(
-            uri="awam://tools",
-            name="工具列表",
-            description="所有已注册的工具",
-            mimeType="application/json"
-        ),
-        Resource(
-            uri="awam://backends/status",
-            name="后端状态",
-            description="所有后端 MCP Server 的运行状态",
-            mimeType="application/json"
-        ),
-    ]
+    return ListResourcesResult(
+        resources=[
+            Resource(
+                uri="awam://mcp-servers",
+                name="MCP 服务器列表",
+                description="所有已接入的 MCP 服务器",
+                mime_type="application/json",
+            ),
+            Resource(
+                uri="awam://tools",
+                name="工具列表",
+                description="所有已注册的工具",
+                mime_type="application/json",
+            ),
+            Resource(
+                uri="awam://backends/status",
+                name="后端状态",
+                description="所有后端 MCP Server 的运行状态",
+                mime_type="application/json",
+            ),
+        ]
+    )
 
 
-@app.read_resource()
-async def read_resource(uri: str):
-    """读取资源内容
+async def read_resource(_ctx, params: ReadResourceRequestParams) -> ReadResourceResult:
+    """读取资源内容（v2）
 
-    MCP 规范要求返回 str / bytes / Iterable[ReadResourceContents]，
-    而不是 TextContent —— SDK 会读取每个条目的 .content 与 .mime_type 字段，
-    返回 TextContent 会因为没有 .content 属性而报 AttributeError。
-
-    另外 `req.params.uri` 是 pydantic 的 `AnyUrl`，**不是 str**：
-    `AnyUrl("awam://tools") == "awam://tools"` 恒为 False（不会隐式比较），
-    直接拿它和字符串比会导致三个资源全部落到"未知资源"分支。必须先 str() 归一化。
+    v2 里 `params.uri` 已是 str，无需再 str() 归一化（v1 的 `AnyUrl` 比较陷阱
+    不复存在）。资源不存在时抛业务错误（ToolError），统一转成 JSON-RPC 协议
+    错误（-32602 INVALID_PARAMS），正文保留可读原因。AFM 不消费 resources，
+    仅 MCP agent 客户端可见。
     """
-    uri = str(uri)
+    uri = params.uri
     log(f"收到 read_resource 请求: {uri}")
 
-    if uri == "awam://mcp-servers":
-        payload = registry.list_all_tools(kind="mcp")
-
-    elif uri == "awam://tools":
-        payload = registry.list_all_tools()
-
-    elif uri == "awam://backends/status":
-        payload = backend_manager.get_backend_status()
-
-    else:
-        fail(f"未知资源: {uri}", error_type=ErrorType.UNKNOWN_RESOURCE, uri=str(uri))
+    try:
+        if uri == "awam://mcp-servers":
+            payload = registry.list_all_tools(kind="mcp")
+        elif uri == "awam://tools":
+            payload = registry.list_all_tools()
+        elif uri == "awam://backends/status":
+            payload = backend_manager.get_backend_status()
+        else:
+            fail(
+                f"未知资源: {uri}",
+                error_type=ErrorType.UNKNOWN_RESOURCE,
+                uri=uri,
+            )
+    except ToolError as e:
+        raise MCPError(INVALID_PARAMS, str(e)) from e
 
     text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
-
-    if ReadResourceContents is None:  # mcp <1.9，退回已废弃的 str 返回形式
-        return text
-    return [ReadResourceContents(content=text, mime_type="application/json")]
+    return ReadResourceResult(
+        contents=[
+            TextResourceContents(uri=uri, mime_type="application/json", text=text)
+        ]
+    )
 
 
 # ============ Prompts（提示模板） ============
 
-@app.list_prompts()
-async def list_prompts() -> list[Prompt]:
+async def list_prompts(_ctx, _params) -> ListPromptsResult:
     """列出所有可用提示模板"""
     log("收到 list_prompts 请求")
-    return [
-        Prompt(
-            name="getting_started",
-            description="awam-tool-manager 快速入门指南"
-        ),
-        Prompt(
-            name="how_to_search",
-            description="如何搜索和查找工具"
-        ),
-        Prompt(
-            name="how_to_call_capability",
-            description="如何列出并调用工具的能力"
-        ),
-    ]
+    return ListPromptsResult(
+        prompts=[
+            Prompt(name="getting_started", description="awam-tool-manager 快速入门指南"),
+            Prompt(name="how_to_search", description="如何搜索和查找工具"),
+            Prompt(name="how_to_call_capability", description="如何列出并调用工具的能力"),
+        ]
+    )
 
 
-@app.get_prompt()
-async def get_prompt(name: str, arguments: dict | None = None) -> list[PromptMessage]:
+async def get_prompt(_ctx, params: GetPromptRequestParams) -> GetPromptResult:
     """获取提示模板内容"""
+    name = params.name
+    arguments = params.arguments or {}
     log(f"收到 get_prompt 请求: {name}")
-    arguments = arguments or {}
 
     if name == "getting_started":
         text = """# awam-tool-manager 快速入门
@@ -427,12 +438,36 @@ MCP 运行时未启动时 `call_capability` 会自动拉起；需要预热或排
 """
 
     else:
-        fail(f"未知提示模板: {name}", error_type=ErrorType.UNKNOWN_PROMPT, promptName=name)
+        raise MCPError(
+            INVALID_PARAMS,
+            json.dumps(
+                {
+                    "success": False,
+                    "errorType": ErrorType.UNKNOWN_PROMPT,
+                    "error": f"未知提示模板: {name}",
+                    "promptName": name,
+                },
+                ensure_ascii=False,
+            ),
+        )
 
     messages = [PromptMessage(role="user", content=TextContent(type="text", text=text))]
-    if GetPromptResult is None:  # 老版本 SDK 接受裸列表
-        return messages
     return GetPromptResult(description=f"{name} 提示模板", messages=messages)
+
+
+# 创建 MCP Server（v2：handler 通过 on_* 构造参数注册，instructions 按模式
+# 生成——能力清单是「主动告知」的唯一通道）。放在所有 handler 定义之后。
+app = Server(
+    "awam-tool-manager",
+    version=GATEWAY_VERSION,
+    instructions=exposure.build_instructions(EXPOSURE_MODE),
+    on_list_tools=list_tools,
+    on_call_tool=call_tool,
+    on_list_resources=list_resources,
+    on_read_resource=read_resource,
+    on_list_prompts=list_prompts,
+    on_get_prompt=get_prompt,
+)
 
 
 async def _prewarm_backends():

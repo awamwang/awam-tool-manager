@@ -1,17 +1,16 @@
 # awam-tool-manager 依赖
 #
-# mcp 必须锁在 1.x：2.0 起 mcp.server.Server 移除了 list_tools()/call_tool()/
-# read_resource()/list_prompts() 等低层装饰器，handler 签名也变更。
-# 本项目 server.py 依赖 1.x API，安装 2.x 会导致 import 阶段直接
-# AttributeError 而无法启动。迁移到 2.x 需同步重写 server.py 的注册方式。
-#
-# 下限 1.29.0 是实测结论（2026-10-16 在 pyenv 3.12 + mcp 1.29.0 上逐项验证）：
-# structuredContent / outputSchema（types.py 1.29 已定义）、handler 返回
-# CallToolResult 原样透传（lowlevel/server.py 1.29 已 isinstance 分支）、
-# 心跳用的 ClientSession.send_ping()（1.29/1.30 都有，没有 ping()）。
-# 生产环境（toolport daemon 拉起的 pyenv 3.12）现装 1.29.0，故下限不得
-# 高于 1.29；开发 venv 装 1.30.0，两端均满足。
-mcp>=1.29.0,<2.0.0
+# mcp 2.x（ADR 0022：AFM 作为集成方，从各仓源码 in-tree 构建、跨仓统一运行时）。
+# server.py 已迁到 v2 lowlevel：handler 通过 Server(on_*=...) 构造参数注册，
+# 统一签名 async (ctx, params) -> 完整 Result（ListToolsResult / CallToolResult /
+# ReadResourceResult / GetPromptResult），Python 侧字段 snake_case（wire 不变）。
+# v2 移除项与本项目对策：
+#   - SDK 不再自动按 inputSchema 校验入参 → normalize_arguments 补回 enum 校验；
+#   - 协议移除 ping → 心跳改用轻量 list_tools() 探活；
+#   - 业务失败不再由 SDK 自动转 isError → call_tool 显式返回 is_error=True，
+#     对外 wire 与 1.x 完全一致（AFM config-mode 不受影响）。
+# v2 自带的新硬依赖 httpx2 / mcp-types / opentelemetry-api 由 pip 解析，无需列。
+mcp>=2.0.0,<3.0.0
 
 # 工具条目校验（A1）：按 docs/format.md 的规范校验 data/tools/*.json。
 # 可选依赖 —— 未安装时 src/schema.py 会自动降级为「必填 + 类型 + 枚举」的基础校验，
@@ -25,3 +24,8 @@ starlette>=0.27
 uvicorn>=0.31.1
 
 pytest>=7.0.0
+
+# e2e 测试客户端用 httpx。mcp v2 已不再自带 httpx（改用 httpx2），但二者可并存：
+# 只有传给 SDK client 的 http_client/auth 必须是 httpx2 类型，e2e 直连本地 HTTP
+# 端点（/health、/mcp）用 httpx 不受影响。
+httpx>=0.27

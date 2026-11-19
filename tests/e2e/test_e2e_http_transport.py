@@ -13,10 +13,11 @@ import sys
 import tempfile
 
 import httpx
+import httpx2
 import pytest
 
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 
 from .helpers import build_env, load_expected_tool_names, wait_until
 
@@ -30,12 +31,15 @@ def _free_port() -> int:
 
 
 async def _list_tool_names(url: str) -> list[str]:
+    # v2：streamable_http_client 不再收 headers，改用注入 Authorization 的
+    # httpx2.AsyncClient 经 http_client= 传入；且只产出 (read, write) 两条流。
     headers = {"Authorization": f"Bearer {TOKEN}"}
-    async with streamablehttp_client(url, headers=headers) as (read, write, _):
-        async with ClientSession(read, write) as session:
-            await asyncio.wait_for(session.initialize(), timeout=10)
-            result = await asyncio.wait_for(session.list_tools(), timeout=10)
-            return [tool.name for tool in result.tools]
+    async with httpx2.AsyncClient(headers=headers) as http_client:
+        async with streamable_http_client(url, http_client=http_client) as (read, write):
+            async with ClientSession(read, write) as session:
+                await asyncio.wait_for(session.initialize(), timeout=10)
+                result = await asyncio.wait_for(session.list_tools(), timeout=10)
+                return [tool.name for tool in result.tools]
 
 
 async def _health_ready(url: str) -> bool:

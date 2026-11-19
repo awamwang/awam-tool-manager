@@ -315,7 +315,7 @@ async def call_tool(session, name: str, arguments: dict[str, Any]) -> tuple[bool
         payload = json.loads(text)
     except json.JSONDecodeError:
         payload = {"_raw": text}
-    return bool(result.isError), payload
+    return bool(getattr(result, "is_error", False) or getattr(result, "isError", False)), payload
 
 
 async def wait_until(
@@ -354,13 +354,13 @@ def tool_fields(tool) -> dict[str, Any]:
     """
     annotations = None
     if getattr(tool, "annotations", None) is not None:
-        annotations = tool.annotations.model_dump(exclude_none=True)
+        annotations = tool.annotations.model_dump(exclude_none=True, by_alias=True)
     return {
         "name": tool.name,
         "description": tool.description,
-        "inputSchema": tool.inputSchema,
+        "inputSchema": tool.input_schema,
         "annotations": annotations,
-        "outputSchema": tool.outputSchema,
+        "outputSchema": tool.output_schema,
     }
 
 

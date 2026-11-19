@@ -64,6 +64,7 @@
 | `launcher.type` | `string` | - | 适配器类型：`quicker` 走 QuickerStarter 命令行（有 stdout 回传）；`utools` 走 utools:// 协议唤起（fire-and-forget，无回传，结果只在 uTools UI）；`steam` 读安装器自己写的库清单（`libraryfolders.vdf` + `appmanifest_*.acf`）出游戏列表，调用是 `steam.exe -applaunch <appid>`（退出码只代表指令已投递，游戏起没起无从回传）（取值：`quicker` / `utools` / `steam`） |
 | `launcher.command` | `string` | - | 启动器可执行文件路径（如 QuickerStarter.exe；utools 协议调用不需要；steam 省略时按注册表 SteamPath 推 steam.exe） |
 | `launcher.dataDir` | `string` | - | 启动器数据目录（Quicker 的 states 所在目录；uTools 的插件 asar 所在目录，utools 适配器会展开 %APPDATA% 等环境变量；steam 是客户端安装根，省略则回退 `HKCU\Software\Valve\Steam` 的 SteamPath） |
+| `launcher.nameSources` | `array<string>` | - | 补充动作名称/清单的快照数据源（Quicker 专用，按序合并、先到先得，适配器会展开 %USERPROFILE% 等环境变量）：`.csv` 为 Quicker「工具→导出动作列表」文件；目录为维护工具「备份数据」的导出目录（含 `actions/action_<ID>_<名>.json`，也支持其上级根目录）。加密的 quicker.db 读不了、states/日志只覆盖部分动作（名称只剩 ID、搜索漏动作）；快照可补全缺失的动作 ID 与名称，只补空不覆盖 state 缓存。快照会过期（已删动作残留），调用按 QuickerStarter 失败文本如实报错 |
 | `launcher.timeout` | `number` | - | 单次动作调用的最长等待（秒）（缺省 `20`；必须 > 0） |
 | `tags` | `array<string>` | - | 标签分类（参与搜索匹配） |
 | `actions` | `array<string>` | - | 支持的动作（如 `launch` / `search`） |
