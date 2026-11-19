@@ -28,7 +28,7 @@
 
 运行形态：**默认 stdio 模式的 MCP Server**（`python src/server.py`），由 AI 客户端（如 WorkBuddy）拉起。
 同一入口可选 **Streamable HTTP**（`--transport http`），作为单实例常驻服务监听
-`127.0.0.1:8766/mcp`，用于多个宿主共用一份运行时；两种 transport 共用同一套
+`127.0.0.1:18778/mcp`，用于多个宿主共用一份运行时；两种 transport 共用同一套
 工具声明、路由与存储层，见 §5.5。
 
 ---
@@ -521,7 +521,7 @@ toolport 网关会**周期性整池回收**它拉起的 server 进程（2026-10-
 |---|---|
 | MCP 端点 | `POST/GET/DELETE /mcp` |
 | 探活 | `GET /health`，免鉴权 |
-| 监听地址 | 默认 `127.0.0.1:8766`；非回环地址必须显式设 `AWAM_HTTP_ALLOW_REMOTE=1` |
+| 监听地址 | 默认 `127.0.0.1:18778`；非回环地址必须显式设 `AWAM_HTTP_ALLOW_REMOTE=1` |
 | 鉴权 | `Authorization: Bearer <token>`；token 优先 `AWAM_HTTP_TOKEN`，否则运行时目录 `http-token`（首次生成） |
 | 单实例 | 启动前**预绑定端口**，不设 `SO_REUSEADDR`（Windows 上它会允许重复绑定）；第二个实例直接失败 |
 | 暴露模式 | 进程级，一个 HTTP 实例只服务一种 `EXPOSURE_MODE` |
@@ -608,7 +608,7 @@ toolport 网关会**周期性整池回收**它拉起的 server 进程（2026-10-
 ### 7.1 启动流程
 
 ```
-python src/server.py [--transport http] [--host 127.0.0.1] [--port 8766]
+python src/server.py [--transport http] [--host 127.0.0.1] [--port 18778]
   → 解析 transport（CLI > AWAM_TRANSPORT > stdio）；HTTP 模式先解析 host/port/token
   → 计算 DATA_DIR = <项目根>/data（仅工具条目）
   → 计算 RUNTIME_DIR = %LOCALAPPDATA%\.awam-tool-manager（AWAM_RUNTIME_DIR 可覆盖）

@@ -653,7 +653,7 @@ def _parse_args(argv=None):
         "--port",
         type=int,
         default=None,
-        help="HTTP 监听端口（默认读 AWAM_HTTP_PORT，再缺省 8766）",
+        help="HTTP 监听端口（默认读 AWAM_HTTP_PORT，再缺省 18778）",
     )
     parser.add_argument(
         "--print-token",
