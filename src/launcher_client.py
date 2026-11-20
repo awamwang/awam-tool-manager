@@ -205,13 +205,11 @@ class LauncherClient:
         self.store = store
         cfg = tool.get("launcher") or {}
         self.adapter = str(cfg.get("type") or "quicker")
-        self.command = str(cfg.get("command") or "")
-        data_dir = cfg.get("dataDir") or ""
-        if data_dir and self.adapter == "utools":
-            # uTools 的数据目录随用户走，条目里的 dataDir 允许写 %APPDATA%
-            # 等环境变量，这里展开成真实路径；其余适配器（quicker 用绝对
-            # 路径）不展开，行为与接入前逐字一致
-            data_dir = os.path.expandvars(data_dir)
+        # 命令与数据目录里的 %VAR%（%LOCALAPPDATA% 等）按本机解析：可执行/数据
+        # 位置属于本机事实，不硬编码含用户名的绝对路径进仓库。无 % 的绝对路径
+        # expandvars 逐字不变，故对既有 utools/steam/quicker 行为完全等价。
+        self.command = os.path.expandvars(str(cfg.get("command") or ""))
+        data_dir = os.path.expandvars(str(cfg.get("dataDir") or ""))
         self.data_dir = Path(data_dir) if data_dir else None
         # 补充名称/清单的快照数据源（Quicker 专用）。路径允许写
         # %USERPROFILE% 等环境变量——快照位置属于本机事实，不该硬编码进仓库

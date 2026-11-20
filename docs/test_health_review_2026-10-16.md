@@ -4,7 +4,7 @@
 - 验证时间：2026-10-16
 - 被验证仓库：`G:/Projects/19AI/skills/awam-tool-manager`
 - **验证时的仓库提交：`c40d80d`「feat: A14——运行时数据统一迁到 %LOCALAPPDATA%\.awam-tool-manager（168 passed）」**
-- 解释器（生产同款）：`/c/Users/Administrator/.pyenv/pyenv-win/versions/3.12.0/python.exe`（Python 3.12.0）
+- 解释器（生产同款）：`/c/Users/<user>/.pyenv/pyenv-win/versions/3.12.0/python.exe`（Python 3.12.0）
 - 实测环境：`mcp==1.29.0`、`jsonschema==4.26.0`、`pytest==9.1.1`、`anyio==4.14.2`、`pytest-asyncio==1.4.0`
 - 报告定位：**只验证与判定，不改代码**。为证明断言有效性做过 4 处临时改动，均已在同一轮内还原（详见 ④），还原后 `git status --porcelain` 为空。
 - **行号锚定**：本报告所有 `file:line` 引用均以 **`c40d80d`** 为准（该提交重写了 README/SKILL/TASKS/architecture/format/mcp-conformance 等文档；A14 顺带修正了约 16 条手写漂移）。凡涉及更早提交的行号，均另行标注提交号。
@@ -40,7 +40,7 @@
 
 命令：
 ```bash
-PY="/c/Users/Administrator/.pyenv/pyenv-win/versions/3.12.0/python.exe"
+PY="/c/Users/<user>/.pyenv/pyenv-win/versions/3.12.0/python.exe"
 "$PY" -c "import importlib.metadata as m; print('mcp',m.version('mcp')); print('jsonschema',m.version('jsonschema')); print('pytest',m.version('pytest')); print('anyio',m.version('anyio')); print('pytest-asyncio',m.version('pytest-asyncio'))"
 ```
 原始输出：
@@ -470,7 +470,7 @@ grep -l "^def test_|^async def test_" test_*.py   # NONE have test_ functions
 - **判定规则**：比对 annotations 必须施加 `exclude_none=True` 归一化；只有紧凑形态下的键值差异才算真实回归。null 键增减 = mcp 小版本字段集/序列化形态差异，不算回归；**反向**——若有人为让测试绿而给 golden 补 null 键，属把版本差异固化进基线，应打回。
 
 ```bash
-PY="/c/Users/Administrator/.pyenv/pyenv-win/versions/3.12.0/python.exe"
+PY="/c/Users/<user>/.pyenv/pyenv-win/versions/3.12.0/python.exe"
 cd /g/Projects/19AI/skills/awam-tool-manager
 
 # 全量

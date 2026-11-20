@@ -393,7 +393,10 @@ class BackendClient:
         command = connection_config.get("command")
         if not command:
             return None
-        args = [str(a) for a in connection_config.get("args", [])]
+        # %VAR% 按本机解析（如 winget 的 %LOCALAPPDATA%\...\WindowsPackageManagerMCPServer.exe）；
+        # 与 start() 的 spawn 路径保持一致，避免可用性判断把未展开的 % 路径误判为缺失。
+        command = os.path.expandvars(str(command))
+        args = [os.path.expandvars(str(a)) for a in connection_config.get("args", [])]
         # 壳名统一小写并去掉 .exe：cmd.exe 与 cmd 是同一个程序
         shell = Path(command).name.lower()
         if shell.endswith(".exe"):
@@ -869,8 +872,8 @@ class BackendClient:
                 if install_result.get("installed"):
                     self._log("info", "依赖已自动安装，继续启动")
 
-                command = self.connection_config.get("command")
-                args = self.connection_config.get("args", [])
+                command = os.path.expandvars(str(self.connection_config.get("command", "")))
+                args = [os.path.expandvars(str(a)) for a in self.connection_config.get("args", [])]
                 env = self.connection_config.get("env")
 
                 # args 里可能是数字/布尔，拼接前统一转字符串

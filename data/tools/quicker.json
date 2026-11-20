@@ -12,7 +12,7 @@
   "launcher": {
     "type": "quicker",
     "command": "C:\\Program Files\\Quicker\\QuickerStarter.exe",
-    "dataDir": "C:\\Users\\Administrator\\AppData\\Local\\Quicker",
+    "dataDir": "%LOCALAPPDATA%\\Quicker",
     "nameSources": [
       "G:\\Data\\Tools\\Quicker\\QuickerActions.csv",
       "G:\\Data\\Tools\\Quicker\\export"

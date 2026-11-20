@@ -11,7 +11,7 @@
   "tags": ["包管理", "软件安装", "MCP", "系统工具"],
   "connection": {
     "type": "stdio",
-    "command": "C:\\Users\\Administrator\\AppData\\Local\\Microsoft\\WindowsApps\\WindowsPackageManagerMCPServer.exe",
+    "command": "%LOCALAPPDATA%\\Microsoft\\WindowsApps\\WindowsPackageManagerMCPServer.exe",
     "args": []
   },
   "readOnly": false,

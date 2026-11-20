@@ -504,8 +504,12 @@ def test_scan_utools_expands_env_var(tmp_path, monkeypatch):
     assert client.data_dir == tmp_path / "uTools" / "plugins"
 
 
-def test_data_dir_env_not_expanded_for_quicker(tmp_path, monkeypatch):
-    """quicker 用绝对路径，不做环境变量展开（接入 utools 前行为逐字不变）"""
+def test_data_dir_env_expanded_for_all_adapters(tmp_path, monkeypatch):
+    """dataDir 里的 %VAR% 对所有适配器统一展开（不再把含用户名的绝对路径写进仓库）。
+
+    2026-11-20 变更：原先仅 utools 展开、quicker 保持字面；现加载器对所有适配器
+    expandvars，条目因此可写 %LOCALAPPDATA% 等占位，本机解析、跨机可移植。
+    """
     monkeypatch.setenv("APPDATA", str(tmp_path))
     tool = {
         "id": "quicker",
@@ -513,7 +517,7 @@ def test_data_dir_env_not_expanded_for_quicker(tmp_path, monkeypatch):
         "launcher": {"type": "quicker", "dataDir": "%APPDATA%\\Quicker"},
     }
     client = LauncherClient(tool, JsonStore(tmp_path / "data"))
-    assert client.data_dir == Path("%APPDATA%\\Quicker")
+    assert client.data_dir == tmp_path / "Quicker"
 
 
 def test_scan_utools_dedupes_and_warns_on_duplicate_plugin(tmp_path, capsys):
